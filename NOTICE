@@ -1,0 +1,58 @@
+RavenTag
+Copyright 2026 Alessandro Nocentini
+
+This product is licensed under the Apache License, Version 2.0,
+with an additional attribution condition (Section 4(e)).
+
+------------------------------------------------------------------------
+ATTRIBUTION REQUIREMENT (License Section 4(e))
+------------------------------------------------------------------------
+
+1. FORKS AND DERIVATIVE REPOSITORIES
+
+   Any fork or derivative work published on a public code hosting
+   platform (GitHub, GitLab, etc.) must include in its README or
+   top-level documentation a clearly visible notice such as:
+
+       "Based on RavenTag by Alessandro Nocentini
+        https://github.com/ALENOC/RavenTag"
+
+   The RavenTag name and logo must appear alongside this notice.
+
+2. DISTRIBUTED PRODUCTS AND SERVICES
+
+   Any product, service, or application that incorporates or is derived
+   from RavenTag and is made available to end users must display the
+   following notice in its documentation, About screen, or website:
+
+       "Built with RavenTag (https://github.com/ALENOC/RavenTag)"
+
+   The RavenTag logo must also be displayed alongside this notice.
+
+Official logo assets are available at:
+    https://github.com/ALENOC/RavenTag/tree/master/pictures
+
+------------------------------------------------------------------------
+PROTOCOL
+------------------------------------------------------------------------
+
+RavenTag implements the RTP-1 protocol (RavenTag Protocol v1),
+an open standard for linking NTAG 424 DNA NFC chips to Ravencoin
+blockchain assets. Protocol specification:
+    https://github.com/ALENOC/RavenTag/blob/master/docs/protocol.md
+
+------------------------------------------------------------------------
+THIRD-PARTY COMPONENTS
+------------------------------------------------------------------------
+
+This software includes components from the following open source projects:
+
+  - Node.js          (MIT License)        https://nodejs.org
+  - Express          (MIT License)        https://expressjs.com
+  - Next.js          (MIT License)        https://nextjs.org
+  - Tailwind CSS     (MIT License)        https://tailwindcss.com
+  - better-sqlite3   (MIT License)        https://github.com/WiseLibs/better-sqlite3
+  - Bouncy Castle    (MIT License)        https://www.bouncycastle.org
+  - Zod              (MIT License)        https://zod.dev
+  - Lucide React     (ISC License)        https://lucide.dev
+  - Jetpack Compose  (Apache 2.0)         https://developer.android.com/jetpack/compose

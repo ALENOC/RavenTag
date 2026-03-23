@@ -1,0 +1,455 @@
+RavenTag Source License (RTSL-1.0)
+Copyright 2026-present Alessandro Nocentini. All rights reserved.
+
+TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
+
+1. Definitions.
+
+   "Project" means the RavenTag software, protocol specification (RTP-1),
+   and documentation made available under this License, including all
+   source code, binaries, configuration files, and associated materials
+   published at: https://github.com/ALENOC/RavenTag
+
+   "Derivative Project" means any work that is based on, derived from,
+   incorporates, or modifies the Project in whole or in part, including
+   forks, ports, adaptations, plugins, and software that embeds or wraps
+   the Project, regardless of the programming language or platform used.
+
+   "Blockchain Operations" means any interaction with a distributed ledger,
+   including but not limited to: asset issuance, asset transfer, asset
+   revocation or burn, on-chain metadata registration, and any read or
+   write operation performed via RPC or API against a blockchain node.
+
+   "Ravencoin Blockchain" means the Ravencoin mainnet and testnet as
+   defined by the Ravencoin open-source project (https://ravencoin.org),
+   identified by its genesis block hash. In the event of a chain split or
+   fork of the Ravencoin network, "Ravencoin Blockchain" shall refer to
+   the chain that retains the majority of the original development
+   community and hashrate, as determined by the copyright holder.
+
+   "Commercial Use" means any use of the Project or a Derivative Project
+   that is intended for or results in commercial advantage or monetary
+   compensation, including but not limited to: selling products or services
+   that incorporate the Project, offering the Project as a hosted or managed
+   service, or using the Project to generate revenue directly or indirectly.
+
+   "Distribute" means to make the Project or a Derivative Project available to
+   any third party, whether by sale, transfer, hosting, or any other means,
+   in source or binary form.
+
+   "You" (or "Your") means the individual or legal entity exercising the
+   rights granted by this License.
+
+   "Copyright Holder" means Alessandro Nocentini, the original author
+   and sole copyright holder of the Project.
+
+2. Grant of Rights.
+
+   Subject to the terms and conditions of this License, the Copyright
+   Holder grants You a worldwide, non-exclusive, non-sublicensable,
+   royalty-free license to:
+
+   (a) use, copy, and study the Project for personal, educational, and
+       non-commercial purposes;
+
+   (b) create and Distribute Derivative Projects, provided that all
+       conditions in Section 3 are met;
+
+   (c) contribute modifications back to the original repository.
+
+   No rights are granted beyond those explicitly stated in this Section.
+   All rights not expressly granted are reserved by the Copyright Holder.
+
+3. Conditions.
+
+   Any use, reproduction, or distribution of the Project or a Derivative
+   Project, in source or binary form, requires full compliance with all of
+   the following conditions:
+
+   (a) Attribution. You must:
+
+         i.  Retain, in all copies and Derivative Projects, the original
+             copyright notice: "Copyright 2026-present Alessandro Nocentini".
+
+         ii. Include a clearly visible statement that the work is derived
+             from RavenTag, with a link to:
+               https://github.com/ALENOC/RavenTag
+
+         iii. Display the RavenTag name and logo in any public-facing
+              documentation, README, application About screen, or
+              equivalent user-visible location of the Derivative Project.
+
+         iv. Not remove, obscure, or alter any copyright, trademark, or
+             attribution notices contained in the Project.
+
+   (b) Ravencoin Requirement. Any use or Derivative Project that performs
+       Blockchain Operations must use the Ravencoin Blockchain exclusively
+       for all such operations.
+
+       The following are explicitly and unconditionally prohibited:
+
+         i.  Replacing or substituting the Ravencoin Blockchain with any
+             other blockchain, distributed ledger, token protocol, or
+             smart contract platform, including but not limited to
+             Ethereum, Solana, Polygon, Bitcoin, Cardano, Tezos, or any
+             EVM-compatible or non-EVM chain.
+
+         ii. Abstracting, wrapping, or configuring the blockchain layer
+             in a way that permits runtime or compile-time selection of
+             any blockchain other than Ravencoin.
+
+         iii. Distributing or deploying any version of the Project, modified
+              or unmodified, that is configured, documented, or intended
+              to operate on a blockchain other than Ravencoin.
+
+         iv. Removing, bypassing, or replacing the Ravencoin RPC client
+             or any component whose primary function is interaction with
+             the Ravencoin Blockchain.
+
+   (c) Share Alike. Any Derivative Project that is publicly Distributed or
+       deployed to third parties must be released exclusively under this
+       same License (RTSL-1.0). You may not impose additional restrictions
+       on the rights granted by this License, nor may You apply a more
+       permissive license to a Derivative Project.
+
+   (d) Notice of Changes. Any file that You modify must carry a prominent
+       notice at the top of the file stating: (1) that You changed the
+       file, and (2) the date of the change.
+
+   (e) No Misrepresentation. You must not misrepresent the origin of the
+       Project. You must not claim that You are the original author of the
+       Project or any substantial portion of it. You must not use the name
+       "RavenTag" or the name "Alessandro Nocentini" to endorse or promote
+       Derivative Projects without prior written permission.
+
+   (f) Protocol Compatibility. Any Derivative Project that programs NFC
+       chips, issues Ravencoin assets, or performs tag verification must
+       maintain full compatibility with the RTP-1 protocol specification
+       as defined in the Project documentation (docs/protocol.md). Specifically:
+
+         i.  NFC chips programmed by a Derivative Project must remain
+             verifiable by the unmodified RavenTag Verify application
+             without requiring any changes to the app.
+
+         ii. The SUN (Secure Unique NFC) verification URL structure,
+             query parameter names (e, m, asset), and CMAC computation
+             method must not be altered in a way that breaks compatibility
+             with the native verification flow.
+
+         iii. The Ravencoin asset naming hierarchy (root / sub-asset /
+              unique token) and the nfc_pub_id derivation method
+              (SHA-256(uid || BRAND_SALT)) must not be changed in any
+              manner incompatible with the RTP-1 specification.
+
+         iv. You may extend the protocol with additional optional
+             parameters or features, provided that such extensions are
+             strictly additive and do not break the baseline RTP-1
+             verification flow for any compliant verifier.
+
+       The intent of this clause is to ensure that any physical product
+       tagged using a Derivative Project can always be verified by any
+       RTP-1 compliant application, including the native RavenTag Verify
+       app, without requiring the end user to install a proprietary or
+       modified verifier. Modifications that would lock end users into a
+       single Derivative Project's verification app are prohibited.
+
+4. Commercial Use.
+
+   The following Commercial Use is permitted without prior authorization,
+   provided that all conditions in Section 3 are fully met:
+
+   (a) A brand, manufacturer, retailer, or individual that deploys this
+       Project on their own infrastructure exclusively to authenticate their
+       own physical products using NFC chips and the Ravencoin Blockchain.
+       This includes programming NFC chips, issuing Ravencoin assets, and
+       offering tag verification to their own end customers.
+
+   The following Commercial Use requires prior written authorization
+   from the Copyright Holder before any use or deployment:
+
+   (b) Offering the Project, or a Derivative Project, as a hosted, managed, or
+       white-label service to third parties (i.e. RavenTag-as-a-service
+       or NFC-authentication-as-a-service).
+
+   (c) Integrating the Project into a commercial software product, platform,
+       SDK, or API that is sold, licensed, or otherwise provided to
+       third parties.
+
+   (d) Using the Project as a component of a service bureau, systems
+       integration offering, or consulting deliverable for which a fee
+       is charged to a client.
+
+   To obtain a commercial license for cases (b), (c), or (d), contact
+   the Copyright Holder at: legal@raventag.com
+   or visit: https://github.com/ALENOC/RavenTag
+
+   Unauthorized Commercial Use under cases (b), (c), or (d) constitutes
+   a material breach of this License and immediately terminates all rights
+   granted herein, without prejudice to any other remedies available to
+   the Copyright Holder.
+
+5. Blockchain and Wallet Disclaimer.
+
+   (a) Blockchain Risk. The Ravencoin Blockchain is a decentralized,
+       open-source network operated by independent third parties over
+       which the Copyright Holder has no control. The Copyright Holder
+       makes no warranty and assumes no liability for:
+
+         i.  The availability, continuity, stability, or security of the
+             Ravencoin Blockchain or any Ravencoin network node.
+
+         ii. Any loss of assets, tokens, or data resulting from blockchain
+             congestion, forks, protocol changes, node failures, or any
+             other event affecting the Ravencoin network.
+
+         iii. The accuracy, finality, or immutability of any transaction
+              broadcast to the Ravencoin Blockchain using this Project.
+
+         iv. Any regulatory action, legal restriction, or government
+             intervention affecting the Ravencoin Blockchain or the
+             use of Ravencoin assets in any jurisdiction.
+
+         v.  The market value, liquidity, or exchangeability of Ravencoin
+             (RVN) or any asset issued on the Ravencoin Blockchain.
+
+   (b) Wallet and Key Management Risk. This Project includes functionality
+       for generating, storing, and managing cryptographic keys and
+       BIP39/BIP44 HD wallets. You acknowledge and accept that:
+
+         i.  You are solely responsible for the secure backup, storage,
+             and protection of all mnemonic phrases, private keys, and
+             cryptographic secrets generated or managed by this Project.
+
+         ii. Loss of a mnemonic phrase or private key results in
+             permanent and irrecoverable loss of access to any associated
+             Ravencoin assets. The Copyright Holder cannot recover lost
+             keys or assets under any circumstances.
+
+         iii. The Copyright Holder is not liable for any loss of funds,
+              assets, or data resulting from key mismanagement, device
+              failure, malware, unauthorized access, or any other cause.
+
+         iv. This Project is not a custodial service. The Copyright Holder
+             does not hold, store, or have access to Your private keys
+             or funds at any time.
+
+         v.  You are responsible for verifying the correctness of any
+             transaction before broadcasting it to the Ravencoin Blockchain.
+             Blockchain transactions are irreversible once confirmed.
+
+   (c) NFC Hardware Risk. The Copyright Holder makes no warranty regarding
+       the security, compatibility, or longevity of any NFC hardware,
+       including NTAG 424 DNA chips or any other NFC tag used in
+       conjunction with this Project. The Copyright Holder is not liable
+       for any failure, cloning attempt, or physical damage affecting
+       NFC hardware.
+
+   (e) Consumer and Financial Risk. This Project is not a financial service,
+       investment product, payment service, or cryptocurrency exchange.
+       The Copyright Holder is not a financial intermediary, broker,
+       custodian, or advisor of any kind. Specifically:
+
+         i.  This Project does not constitute financial advice, investment
+             advice, or a recommendation to acquire, hold, or transfer
+             Ravencoin (RVN) or any other digital asset.
+
+         ii. Ravencoin (RVN) and all assets issued on the Ravencoin
+             Blockchain are volatile digital assets. Their value may
+             decrease to zero. Any funds used to acquire RVN, pay
+             transaction fees, or issue blockchain assets are used
+             entirely at Your own risk and may not be recoverable.
+
+         iii. The Copyright Holder is not liable for any direct or
+              indirect financial loss, including but not limited to:
+              loss of RVN or issued assets due to market conditions,
+              transaction fees, failed transactions, smart contract
+              errors, or any other cause related to the use of the
+              Ravencoin Blockchain through this Project.
+
+         iv. For the purposes of this License, "You" means the developer,
+             brand, or entity exercising the rights granted herein to
+             deploy, fork, modify, or distribute this Project or any
+             Derivative Project. This Project is intended for such use by
+             businesses, brands, and technically competent individuals
+             acting in a professional capacity. It is not designed or
+             intended for use as source code by consumers as defined
+             under applicable consumer protection law, including but
+             not limited to the Italian Consumer Code (D.Lgs. 206/2005)
+             and EU Directive 2011/83/EU. If You are a consumer seeking
+             to deploy or redistribute the source code, You must not do
+             so. This clause does not apply to end users of a compiled
+             App built on this Project, whose relationship with the App is
+             governed exclusively by the App's Terms of Service.
+
+         v.  Any end user of a product or service built using this Project
+             assumes full responsibility for their own use of the
+             Ravencoin Blockchain. The Copyright Holder has no
+             relationship, contractual or otherwise, with end users
+             of Derivative Projects and bears no liability toward them.
+
+   (f) By using this Project, You expressly acknowledge that You have read,
+       understood, and accepted all risks described in this Section, and
+       that You use the Project entirely at Your own risk. If You do not
+       accept these risks in full, You must not use, deploy, or distribute
+       this Project.
+
+6. No Sublicensing.
+
+   You may not sublicense the Project or any Derivative Project. Any attempt
+   to sublicense the Project is void and automatically terminates Your rights
+   under this License. Recipients of the Project from You receive their rights
+   directly from the Copyright Holder under this License, and are subject
+   to its terms and conditions.
+
+7. No Waiver.
+
+   Failure by the Copyright Holder to enforce any provision of this
+   License at any time shall not be construed as a waiver of that
+   provision or of the right to enforce it in the future. No waiver of
+   any breach shall be deemed a waiver of any subsequent breach.
+
+8. Official Distribution and Disclaimer.
+
+   (a) Authorized Distribution Channels. The only official and authorized
+       distribution channels for the Project in binary form are:
+
+         i.  GitHub Releases at https://github.com/ALENOC/RavenTag/releases
+             (primary official channel).
+
+         ii. Google Play Store (pending approval, for consumer app only).
+
+       Any other distribution channel, including but not limited to third-party
+       app stores, APK download websites, torrent networks, or peer-to-peer
+       file sharing platforms, is not authorized and is not affiliated with
+       the Copyright Holder.
+
+   (b) Cryptographic Signature Verification. All official releases are
+       cryptographically signed. Users who download the Project from GitHub
+       Releases can verify the authenticity of their download by checking
+       the APK signature using the following command:
+
+         apksigner verify --print-certs RavenTag-*.apk
+
+       The certificate fingerprint for official releases is published on
+       the GitHub Releases page. Users are strongly encouraged to verify
+       this fingerprint before installing.
+
+   (c) Disclaimer for Unofficial Builds. NOTWITHSTANDING ANY OTHER PROVISION
+       IN THIS LICENSE:
+
+         i.  The Copyright Holder expressly disclaims all liability for
+             any damages, losses, security incidents, data breaches,
+             financial losses, identity theft, or other harms resulting
+             from the use of the Project or any Derivative Project obtained
+             from any source other than the official channels listed in
+             Section 8(a).
+
+         ii. By downloading, installing, or using the Project from any
+             source other than the official channels, you expressly
+             acknowledge that you are doing so at your own risk and that
+             you assume full and exclusive responsibility for any
+             consequences arising from such download or use.
+
+         iii. The Copyright Holder makes no representations or warranties
+              of any kind, express or implied, regarding any copy of the
+              Project obtained from unofficial sources. Such copies are
+              provided "AS IS" with all faults and without any warranty
+              whatsoever.
+
+         iv. Copies of the Project obtained from unofficial sources are
+             not covered by this License, are not entitled to receive
+             updates or security patches, and are not eligible for any
+             form of support from the Copyright Holder.
+
+   (d) User Responsibility. You are solely responsible for:
+
+         i.  Verifying that you have downloaded the Project from an
+             official channel listed in Section 8(a).
+
+         ii. Understanding the risks associated with downloading software
+             from unofficial sources.
+
+         iii. Verifying the cryptographic signature of any downloaded
+              binary as described in Section 8(b).
+
+9. Limitation of Liability.
+
+   TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, IN NO EVENT SHALL
+   THE COPYRIGHT HOLDER BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+   SPECIAL, CONSEQUENTIAL, OR PUNITIVE DAMAGES ARISING OUT OF OR RELATING
+   TO YOUR USE OF OR INABILITY TO USE THE PROJECT, INCLUDING BUT NOT
+   LIMITED TO LOSS OF DATA, LOSS OF PROFITS, LOSS OF BUSINESS, OR LOSS
+   OF CRYPTOCURRENCY FUNDS.
+
+   YOUR SOLE AND EXCLUSIVE REMEDY FOR DISSATISFACTION WITH THE PROJECT
+   IS TO STOP USING THE PROJECT.
+
+10. No Warranty.
+
+   THE PROJECT IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+   OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, TITLE, AND
+   NON-INFRINGEMENT. THE ENTIRE RISK AS TO THE QUALITY AND PERFORMANCE
+   OF THE PROJECT IS WITH YOU. IN NO EVENT SHALL THE COPYRIGHT HOLDER BE
+   LIABLE FOR ANY CLAIM, DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+   EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING BUT NOT LIMITED TO
+   LOSS OF DATA, LOSS OF PROFITS, OR BUSINESS INTERRUPTION) ARISING
+   FROM THE USE OF OR INABILITY TO USE THE PROJECT, EVEN IF ADVISED OF
+   THE POSSIBILITY OF SUCH DAMAGES.
+
+11. Moral Rights.
+
+   To the extent permitted by applicable law, the Copyright Holder
+   asserts all moral rights in the Project, including the right of
+   attribution and the right of integrity. You must not subject the
+   Project to derogatory treatment that would harm the honor or reputation
+   of the Copyright Holder.
+
+12. Governing Law and Jurisdiction.
+
+    This License shall be governed by and construed in accordance with
+    the laws of Italy, specifically the Italian Copyright Law (Legge
+    22 aprile 1941 n. 633 and subsequent amendments) and the Italian
+    Civil Code, without regard to its conflict of law provisions.
+
+    Any dispute arising out of or in connection with this License shall
+    be subject to the exclusive jurisdiction of the courts of Italy.
+    Notwithstanding the foregoing, the Copyright Holder reserves the
+    right to seek injunctive or other equitable relief in any jurisdiction
+    where the violation occurs or where You are domiciled.
+
+13. Severability.
+
+    If any provision of this License is held invalid, illegal, or
+    unenforceable in any jurisdiction by a court of competent authority,
+    such invalidity, illegality, or unenforceability shall not affect:
+
+    (a) the validity or enforceability of the remaining provisions of
+        this License in that jurisdiction; or
+
+    (b) the validity or enforceability of any provision of this License
+        in any other jurisdiction.
+
+    The invalid or unenforceable provision shall be modified to the
+    minimum extent necessary to make it valid and enforceable, preserving
+    as closely as possible the original intent of the Copyright Holder.
+
+14. Entire Agreement.
+
+    This License constitutes the entire agreement between You and the
+    Copyright Holder with respect to the Project. It supersedes all prior
+    and contemporaneous agreements, representations, and understandings,
+    whether oral or written, relating to the Project. This License may only
+    be amended by a written instrument signed by the Copyright Holder.
+
+15. Language.
+
+    This License is written in English. Any translation is provided for
+    convenience only. In the event of any conflict between the English
+    text and a translation, the English text shall prevail.
+
+END OF TERMS AND CONDITIONS
+
+Copyright 2026-present Alessandro Nocentini
+https://github.com/ALENOC/RavenTag
+legal@raventag.com

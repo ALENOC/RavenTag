@@ -1,0 +1,86 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: raventag-backend
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      DB_PATH: /data/raventag.db
+      RVN_RPC_HOST: ${RVN_RPC_HOST:-localhost}
+      RVN_RPC_PORT: ${RVN_RPC_PORT:-8766}
+      # Secrets loaded from mounted files (./secrets/ in standalone, Docker Swarm secrets in production).
+      ADMIN_KEY_FILE: /run/secrets/admin_key
+      OPERATOR_KEY_FILE: /run/secrets/operator_key
+      BRAND_MASTER_KEY_FILE: /run/secrets/brand_master_key
+      BRAND_SALT_FILE: /run/secrets/brand_salt
+      # Optional: set only if connecting to a local Ravencoin node with auth
+      RVN_RPC_USER: ${RVN_RPC_USER:-}
+      RVN_RPC_PASS: ${RVN_RPC_PASS:-}
+      RVN_PUBLIC_RPC_URL: ${RVN_PUBLIC_RPC_URL:-https://rvn-rpc.publicnode.com}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-https://raventag.com}
+      CACHE_TTL_ASSET: ${CACHE_TTL_ASSET:-300}
+      CACHE_TTL_IPFS: ${CACHE_TTL_IPFS:-3600}
+      IPFS_GATEWAY: ${IPFS_GATEWAY:-https://ipfs.io/ipfs/}
+    secrets:
+      - admin_key
+      - operator_key
+      - brand_master_key
+      - brand_salt
+    volumes:
+      - raventag_data:/data
+    ports:
+      - "127.0.0.1:3001:3001"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # SQLite backup: runs daily, keeps last 7 backups (MED-1: AES-256-CBC encrypted)
+  # To decrypt: openssl enc -d -aes-256-cbc -pbkdf2 -iter 100000 \
+  #   -pass file:/path/to/admin_key -in raventag_TIMESTAMP.db.enc -out raventag.db
+  backup:
+    image: alpine:3.19
+    container_name: raventag-backup
+    restart: unless-stopped
+    volumes:
+      - raventag_data:/data:ro
+      - raventag_backups:/backups
+    secrets:
+      - admin_key
+    command: >
+      sh -c "apk add --no-cache openssl > /dev/null 2>&1;
+        while true; do
+          TIMESTAMP=$$(date +%Y%m%d_%H%M%S);
+          openssl enc -aes-256-cbc -pbkdf2 -iter 100000 \
+            -pass file:/run/secrets/admin_key \
+            -in /data/raventag.db \
+            -out /backups/raventag_$${TIMESTAMP}.db.enc 2>/dev/null \
+            && echo \"[Backup] raventag_$${TIMESTAMP}.db.enc (encrypted)\";
+          ls -t /backups/raventag_*.db.enc 2>/dev/null | tail -n +8 | xargs rm -f;
+          sleep 86400;
+        done"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+# Docker secrets: in compose dev mode, create ./secrets/<name> files with the secret value.
+# In Swarm mode, create secrets with: docker secret create <name> - <<< "value"
+secrets:
+  admin_key:
+    file: ./secrets/admin_key
+  operator_key:
+    file: ./secrets/operator_key
+  brand_master_key:
+    file: ./secrets/brand_master_key
+  brand_salt:
+    file: ./secrets/brand_salt
+
+volumes:
+  raventag_data:
+    driver: local
+  raventag_backups:
+    driver: local
