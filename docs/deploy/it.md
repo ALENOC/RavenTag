@@ -110,6 +110,18 @@ Senza due punti (per `.env`):
 3EA5B9F375631A4E1DE95DE1DA9C2245141E4AD8FA7A63787D6AB98196B4A3BE
 ```
 
+**Configurazione singola o multipla:**
+
+```bash
+# Solo la tua app (singola impronta):
+ANDROID_APP_FINGERPRINT=3EA5B9F375631A4E1DE95DE1DA9C2245141E4AD8FA7A63787D6AB98196B4A3BE
+
+# Tua app + RavenTag Verify (multiple impronte, separate da virgola):
+ANDROID_APP_FINGERPRINT=YOUR_FINGERPRINT,3EA5B9F375631A4E1DE95DE1DA9C2245141E4AD8FA7A63787D6AB98196B4A3BE
+```
+
+Il backend supporta impronte multiple per scenari di co-branding. Entrambe le app potranno gestire gli URL dei tag NFC.
+
 ---
 
 ## Step 6: Configurare le variabili d'ambiente non segrete

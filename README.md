@@ -252,7 +252,9 @@ Set these environment variables on the backend:
 # Direct link to the RavenTag Verify APK (update with each release)
 VERIFY_APK_URL=https://github.com/ALENOC/RavenTag/releases/download/v1.3.8/RavenTag-Verify-v1.3.8.apk
 
-# SHA-256 fingerprint of the release signing certificate (for Android App Links)
+# SHA-256 fingerprint(s) of release signing certificate(s) for Android App Links
+# Single fingerprint: ANDROID_APP_FINGERPRINT=your_fingerprint
+# Multiple fingerprints (comma-separated): ANDROID_APP_FINGERPRINT=brand_fingerprint,raventag_fingerprint
 ANDROID_APP_FINGERPRINT=<YOUR_APP_FINGERPRINT>
 ```
 
@@ -436,8 +438,11 @@ keytool -list -v -keystore android/signing/raventag-release.keystore -alias rave
 Copy the `SHA256:` line from the output and set it in your backend `.env`:
 
 ```bash
-# Example (replace with your actual fingerprint):
+# Single fingerprint (your app only):
 ANDROID_APP_FINGERPRINT=AA:BB:CC:DD:...
+
+# Multiple fingerprints (brand + RavenTag, comma-separated):
+ANDROID_APP_FINGERPRINT=BRAND_FP:AA:BB:CC:DD,3E:A5:B9:F3:75:63:1A:4E:1D:E9:5D:E1:DA:9C:22:45:14:1E:4A:D8:FA:7A:63:78:7D:6A:B9:81:96:B4:A3:BE
 ```
 
 **Release fingerprint:**

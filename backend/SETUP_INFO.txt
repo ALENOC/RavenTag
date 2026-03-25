@@ -14,13 +14,22 @@ brand_master_key   (32 hex chars = 16 bytes = 128 bits AES)
 brand_salt         (32 hex chars = 16 bytes = 128 bits)
 
 ================================================================================
-ANDROID APP LINKS FINGERPRINT
+ANDROID APP LINKS FINGERPRINT(S)
 ================================================================================
 SHA-256 (with colons):
 3E:A5:B9:F3:75:63:1A:4E:1D:E9:5D:E1:DA:9C:22:45:14:1E:4A:D8:FA:7A:63:78:7D:6A:B9:81:96:B4:A3:BE
 
 SHA-256 (without colons - for .env):
 3EA5B9F375631A4E1DE95DE1DA9C2245141E4AD8FA7A63787D6AB98196B4A3BE
+
+SINGLE FINGERPRINT (your app only):
+ANDROID_APP_FINGERPRINT=3EA5B9F375631A4E1DE95DE1DA9C2245141E4AD8FA7A63787D6AB98196B4A3BE
+
+MULTIPLE FINGERPRINTS (brand + RavenTag):
+ANDROID_APP_FINGERPRINT=BRAND_FINGERPRINT,3EA5B9F375631A4E1DE95DE1DA9C2245141E4AD8FA7A63787D6AB98196B4A3BE
+
+The backend supports multiple comma-separated fingerprints for co-branding scenarios.
+Both the brand app and RavenTag Verify app will be able to handle NFC tag URLs.
 
 ================================================================================
 NEXT STEPS

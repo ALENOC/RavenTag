@@ -117,12 +117,19 @@ app.get('/health', (_req, res) => {
 
 // Android App Links verification file.
 // Android OS fetches this to confirm the app is authorized to handle URLs on this domain.
-// Set ANDROID_APP_FINGERPRINT env var to the SHA-256 certificate fingerprint of the release APK.
+// Set ANDROID_APP_FINGERPRINT env var to SHA-256 certificate fingerprint(s) of the release APK(s).
+// Multiple fingerprints (comma-separated) are supported for co-branding (e.g., brand + RavenTag).
 // Generate with: keytool -list -v -keystore your.keystore -alias your_alias
 app.get('/.well-known/assetlinks.json', (_req, res) => {
-  const fingerprint = process.env.ANDROID_APP_FINGERPRINT
-  if (!fingerprint) {
+  const fingerprintsEnv = process.env.ANDROID_APP_FINGERPRINT
+  if (!fingerprintsEnv) {
     res.status(404).json({ error: 'Not configured' })
+    return
+  }
+  // Support single or multiple fingerprints (comma-separated)
+  const fingerprints = fingerprintsEnv.split(',').map(f => f.trim()).filter(Boolean)
+  if (fingerprints.length === 0) {
+    res.status(404).json({ error: 'No valid fingerprints configured' })
     return
   }
   res.json([{
@@ -130,7 +137,7 @@ app.get('/.well-known/assetlinks.json', (_req, res) => {
     target: {
       namespace: 'android_app',
       package_name: 'io.raventag.app',
-      sha256_cert_fingerprints: [fingerprint]
+      sha256_cert_fingerprints: fingerprints
     }
   }])
 })
