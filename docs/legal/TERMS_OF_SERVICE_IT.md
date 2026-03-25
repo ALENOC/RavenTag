@@ -1,7 +1,7 @@
 # RavenTag Verify - Termini di Servizio
 
 **Versione 1.0 - Data di entrata in vigore: 2026-03-21**
-**Copyright 2026 Alessandro Nocentini. Tutti i diritti riservati.**
+**Copyright 2026-present Alessandro Nocentini. Tutti i diritti riservati.**
 
 ---
 
@@ -129,7 +129,7 @@ I risultati di verifica dei tag NFC forniti dall'App si basano su calcoli critto
 Gli unici canali di distribuzione ufficiali e autorizzati per le applicazioni RavenTag Verify e RavenTag Brand Manager sono:
 
 1. **GitHub Releases** all'indirizzo https://github.com/ALENOC/RavenTag/releases (canale ufficiale primario)
-2. **Google Play Store** (in attesa di approvazione, solo per l'app consumer Verify)
+2. **Google Play Store** (solo per l'app consumer Verify)
 
 Qualsiasi altro canale di distribuzione, inclusi ma non limitati a app store di terze parti, siti web di download APK, reti torrent o piattaforme di condivisione file peer-to-peer, **non e' autorizzato** e non e' affiliato allo Sviluppatore.
 
@@ -157,7 +157,7 @@ Scaricare, installare o utilizzare l'App da qualsiasi fonte diversa dai canali u
 
 **Lo Sviluppatore declina espressamente ogni responsabilita'** per eventuali danni, perdite, incidenti di sicurezza, violazioni di dati, perdite finanziarie o altri danni derivanti dall'uso di applicazioni RavenTag ottenute da fonti non ufficiali o non autorizzate.
 
-Solo le applicazioni scaricate dalla pagina ufficiale GitHub Releases (o dal listing ufficiale del Google Play Store, una volta approvato) sono considerate autentiche, supportate e coperte da questi Termini di Servizio.
+Solo le applicazioni scaricate dalla pagina ufficiale GitHub Releases o dal listing ufficiale del Google Play Store sono considerate autentiche, supportate e coperte da questi Termini di Servizio.
 
 Scaricando l'App, riconosci e accetti che:
 - Hai scaricato l'App da un canale ufficiale elencato nella Sezione 7.1.

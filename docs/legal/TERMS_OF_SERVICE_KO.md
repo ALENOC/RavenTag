@@ -1,7 +1,7 @@
 # RavenTag Verify - 서비스 이용약관
 
 **버전 1.0 - 발효일: 2026-03-21**
-**Copyright 2026 Alessandro Nocentini. All rights reserved.**
+**Copyright 2026-present Alessandro Nocentini. All rights reserved.**
 
 ---
 
@@ -157,7 +157,7 @@ apksigner verify --print-certs RavenTag-*.apk
 
 **개발자는 비공식적이거나 승인되지 않은 출처에서 얻은 RavenTag 애플리케이션 사용으로 인해 발생하는 모든 손해, 손실, 보안 사고, 데이터 유출, 재무적 손실 또는 기타 손해에 대해 명시적으로 모든 책임을 부인합니다.**
 
-공식 GitHub Releases 페이지 (또는 승인되면 공식 Google Play Store 리스팅) 에서 다운로드한 애플리케이션만 본 서비스 이용약관에 따라 정품으로 간주되며 지원되고 보호됩니다.
+공식 GitHub Releases 페이지 (또는 공식 Google Play Store 리스팅) 에서 다운로드한 애플리케이션만 본 서비스 이용약관에 따라 정품으로 간주되며 지원되고 보호됩니다.
 
 앱을 다운로드함으로써 귀하는 다음을 인식하고 수락합니다:
 - 제 7.1 조에 나열된 공식 채널에서 앱을 다운로드했습니다.

@@ -1,7 +1,7 @@
 # RavenTag Verify - Conditions d'Utilisation
 
 **Version 1.0 - Date d'entree en vigueur : 2026-03-21**
-**Copyright 2026 Alessandro Nocentini. Tous droits reserves.**
+**Copyright 2026-present Alessandro Nocentini. Tous droits reserves.**
 
 ---
 
@@ -129,7 +129,7 @@ Les resultats de verification des tags NFC fournis par l'App sont bases sur des 
 Les seuls canaux de distribution officiels et autorises pour les applications RavenTag Verify et RavenTag Brand Manager sont :
 
 1. **GitHub Releases** a l'adresse https://github.com/ALENOC/RavenTag/releases (canal officiel principal)
-2. **Google Play Store** (en attente d'approbation, uniquement pour l'application grand public Verify)
+2. **Google Play Store** (uniquement pour l'application grand public Verify)
 
 Tout autre canal de distribution, y compris mais sans s'y limiter les magasins d'applications tiers, les sites web de telechargement APK, les reseaux torrent ou les plateformes de partage de fichiers peer-to-peer, **n'est pas autorise** et n'est pas affilié au Developpeur.
 
@@ -157,7 +157,7 @@ Telecharger, installer ou utiliser l'App depuis toute source autre que les canau
 
 **Le Developpeur decline expressement toute responsabilite** pour tous dommages, pertes, incidents de securite, violations de donnees, pertes financieres ou autres dommages decoulant de l'utilisation d'applications RavenTag obtenues depuis des sources non officielles ou non autorisees.
 
-Seules les applications telechargees depuis la page officielle GitHub Releases (ou depuis le listing officiel du Google Play Store, une fois approuve) sont considerees comme authentiques, prises en charge et couvertes par ces Conditions d'Utilisation.
+Seules les applications telechargees depuis la page officielle GitHub Releases (ou depuis le listing officiel du Google Play Store) sont considerees comme authentiques, prises en charge et couvertes par ces Conditions d'Utilisation.
 
 En telechargeant l'App, vous reconnaissez et acceptez que :
 - Vous avez telecharge l'App depuis un canal officiel liste a la Section 7.1.

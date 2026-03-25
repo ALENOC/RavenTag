@@ -1,7 +1,7 @@
 # RavenTag Verify - Datenschutzerklarung
 
 **Version 1.0 - Datum des Inkrafttretens: 2026-03-21**
-**Copyright 2026 Alessandro Nocentini. Alle Rechte vorbehalten.**
+**Copyright 2026-present Alessandro Nocentini. Alle Rechte vorbehalten.**
 
 ---
 

@@ -1,7 +1,7 @@
 # RavenTag Verify - Terms of Service
 
 **Version 1.0 - Effective date: 2026-03-21**
-**Copyright 2026 Alessandro Nocentini. All rights reserved.**
+**Copyright 2026-present Alessandro Nocentini. All rights reserved.**
 
 ---
 
@@ -129,7 +129,7 @@ NFC tag verification results provided by the App are based on cryptographic comp
 The only official and authorized distribution channels for RavenTag Verify and RavenTag Brand Manager applications are:
 
 1. **GitHub Releases** at https://github.com/ALENOC/RavenTag/releases (primary official channel)
-2. **Google Play Store** (pending approval, only for Verify consumer app)
+2. **Google Play Store** (only for Verify consumer app)
 
 Any other distribution channel, including but not limited to third-party app stores, APK download websites, torrent networks, or peer-to-peer file sharing platforms, is **not authorized** and is not affiliated with the Developer.
 
@@ -155,9 +155,9 @@ Downloading, installing, or using the App from any source other than the officia
 
 ### 7.4 Disclaimer for Unofficial Builds
 
-**The Developer expressly disclaims all liability** for any damages, losses, security incidents, data breaches, financial losses, or other harms resulting from the use of RavenTag applications obtained from unofficial or unauthorized sources. 
+**The Developer expressly disclaims all liability** for any damages, losses, security incidents, data breaches, financial losses, or other harms resulting from the use of RavenTag applications obtained from unofficial or unauthorized sources.
 
-Only applications downloaded from the official GitHub Releases page (or the official Google Play Store listing, once approved) are considered authentic, supported, and covered by these Terms of Service.
+Only applications downloaded from the official GitHub Releases page or the official Google Play Store listing are considered authentic, supported, and covered by these Terms of Service.
 
 By using the App, you acknowledge and agree that:
 - You have downloaded the App from an official channel listed in Section 7.1.

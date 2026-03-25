@@ -1,7 +1,7 @@
 # RavenTag Verify - Privacy Policy
 
 **Version 1.0 - Effective date: 2026-03-21**
-**Copyright 2026 Alessandro Nocentini. All rights reserved.**
+**Copyright 2026-present Alessandro Nocentini. All rights reserved.**
 
 ---
 
@@ -176,7 +176,7 @@ The App is not directed at children under the age of 18. We do not knowingly col
 
 ## 9. International Data Transfers
 
-**Developer-operated demo backend**: The Developer's demo backend server is located within the European Union. If you access a demo App instance from outside the EU, your verification request data (Section 3.2) will be transferred to and processed within the EU, in accordance with GDPR requirements.
+**Developer-operated demo backend**: The Developer's demo backend server is located in the United States or the European Union. If you access a demo App instance from outside these regions, your verification request data (Section 3.2) will be transferred to and processed in the United States or the EU, in accordance with GDPR requirements.
 
 **Brand-operated backend**: In production deployments, the geographic location of the backend server is determined solely by the brand or manufacturer that deployed it. The Developer has no control over, and no knowledge of, the server locations chosen by third-party brands. The applicable international data transfer rules are those of the brand operating that deployment. Please refer to the brand's own privacy policy for details.
 
