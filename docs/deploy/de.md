@@ -100,7 +100,7 @@ Extrahieren Sie nur den Fingerabdruck (Doppelpunkte entfernen, Großbuchstaben):
 <YOUR_COLON_FINGERPRINT> → <YOUR_HEX_FINGERPRINT>
 ```
 
-**Aktueller Fingerabdruck (neuer Keystore 2026-03-25):**
+**SHA-256 Fingerabdruck:**
 ```
 3E:A5:B9:F3:75:63:1A:4E:1D:E9:5D:E1:DA:9C:22:45:14:1E:4A:D8:FA:7A:63:78:7D:6A:B9:81:96:B4:A3:BE
 ```
