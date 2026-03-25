@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Consumer flavor: app name uses brand name from AppConfig -->
+    <string name="app_name">RavenTag Verify</string>
+</resources>

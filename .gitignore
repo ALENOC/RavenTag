@@ -1,0 +1,68 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build outputs
+dist/
+build/
+.next/
+out/
+
+# Docker secrets (never commit secret values)
+secrets/
+
+# Environment files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Android
+android/.gradle/
+android/local.properties
+android/app/build/
+android/build/
+*.apk
+*.aab
+*.keystore
+!debug.keystore
+android/signing/
+
+# TypeScript
+*.tsbuildinfo
+
+# Cache
+.eslintcache
+.cache/
+
+# Generation scripts (local only)
+docs/generate_*.py
+docs/*.pptx
+frontend/
+
+# Play Store submission materials (local only)
+play-store/
+
+# Screenshots and screen recordings (local only)
+screenshots/
+
+# Qwen Code configuration (local only)
+.qwen/
