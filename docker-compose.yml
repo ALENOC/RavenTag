@@ -24,6 +24,8 @@ services:
       CACHE_TTL_ASSET: ${CACHE_TTL_ASSET:-300}
       CACHE_TTL_IPFS: ${CACHE_TTL_IPFS:-3600}
       IPFS_GATEWAY: ${IPFS_GATEWAY:-https://ipfs.io/ipfs/}
+      # RTSL-1.0 LICENSE REQUIREMENT: RavenTag Verify fingerprint MUST be included
+      ANDROID_APP_FINGERPRINT: ${ANDROID_APP_FINGERPRINT:-3EA5B9F375631A4E1DE95DE1DA9C2245141E4AD8FA7A63787D6AB98196B4A3BE}
     secrets:
       - admin_key
       - operator_key
