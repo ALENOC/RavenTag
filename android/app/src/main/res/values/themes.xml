@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.RavenTag" parent="android:Theme.NoTitleBar">
+        <item name="android:statusBarColor">#000000</item>
+        <item name="android:navigationBarColor">#000000</item>
+        <item name="android:windowBackground">#000000</item>
+    </style>
+
+    <!-- Splash screen theme: keeps the window black while the app initializes -->
+    <style name="Theme.RavenTag.Starting" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">#000000</item>
+        <!-- Icona trasparente: su Android 12+ lo splash mostra solo sfondo nero, nessuna icona -->
+        <item name="windowSplashScreenAnimatedIcon">@drawable/splash_icon_empty</item>
+        <item name="postSplashScreenTheme">@style/Theme.RavenTag</item>
+    </style>
+</resources>

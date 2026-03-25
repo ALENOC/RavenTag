@@ -1,0 +1,77 @@
+================================================================================
+RAVENTAG BACKEND SECRETS - SETUP COMPLETE
+================================================================================
+Generated: 2026-03-25
+
+================================================================================
+SECRET FILES (backend/secrets/)
+================================================================================
+All files contain hex-encoded random bytes, no newlines.
+
+admin_key          (48 hex chars = 24 bytes = 192 bits)
+operator_key       (48 hex chars = 24 bytes = 192 bits)
+brand_master_key   (32 hex chars = 16 bytes = 128 bits AES)
+brand_salt         (32 hex chars = 16 bytes = 128 bits)
+
+================================================================================
+ANDROID APP LINKS FINGERPRINT(S) - RTSL-1.0 LICENSE REQUIREMENT
+================================================================================
+SHA-256 (with colons):
+3E:A5:B9:F3:75:63:1A:4E:1D:E9:5D:E1:DA:9C:22:45:14:1E:4A:D8:FA:7A:63:78:7D:6A:B9:81:96:B4:A3:BE
+
+SHA-256 (without colons - for .env):
+3EA5B9F375631A4E1DE95DE1DA9C2245141E4AD8FA7A63787D6AB98196B4A3BE
+
+REQUIRED CONFIGURATION (RTSL-1.0 License):
+The RavenTag Verify fingerprint MUST be included in all deployments.
+
+SINGLE FINGERPRINT (RavenTag Verify only):
+ANDROID_APP_FINGERPRINT=3EA5B9F375631A4E1DE95DE1DA9C2245141E4AD8FA7A63787D6AB98196B4A3BE
+
+MULTIPLE FINGERPRINTS (Brand + RavenTag - REQUIRED):
+ANDROID_APP_FINGERPRINT=BRAND_FINGERPRINT,3EA5B9F375631A4E1DE95DE1DA9C2245141E4AD8FA7A63787D6AB98196B4A3BE
+
+The backend enforces RTSL-1.0 compliance:
+- RavenTag Verify fingerprint MUST be present (license requirement)
+- Additional brand fingerprints are optional (for co-branding)
+- Server will reject configurations missing the RavenTag fingerprint
+
+================================================================================
+NEXT STEPS
+================================================================================
+
+1. Create backend/.env file (DO NOT COMMIT):
+
+cat > .env << 'EOF'
+NODE_ENV=production
+PORT=3001
+DB_PATH=/data/raventag.db
+RVN_PUBLIC_RPC_URL=https://rvn-rpc.publicnode.com
+ALLOWED_ORIGINS=io.raventag.app,io.raventag.app.brand
+IPFS_GATEWAY=https://ipfs.io/ipfs/
+ANDROID_APP_FINGERPRINT=3EA5B9F375631A4E1DE95DE1DA9C2245141E4AD8FA7A63787D6AB98196B4A3BE
+EOF
+
+2. Start the backend:
+
+docker compose up -d backend
+
+3. Verify Android App Links:
+
+curl https://api.yourdomain.com/.well-known/assetlinks.json
+
+Should return JSON with your fingerprint.
+
+================================================================================
+SECURITY NOTES
+================================================================================
+✅ All secrets generated with openssl rand (cryptographically secure)
+✅ File permissions set to 600 (owner read/write only)
+✅ Secrets directory is git-ignored
+✅ Never commit .env or secrets/ to version control
+
+⚠️  Backup secrets/ to secure offline storage
+⚠️  Rotate secrets if deploying to new server
+⚠️  Use Docker secrets in production (already configured in docker-compose.yml)
+
+================================================================================
