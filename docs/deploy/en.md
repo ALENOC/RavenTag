@@ -113,12 +113,14 @@ Without colons (for `.env`):
 **Single or Multiple Fingerprints:**
 
 ```bash
-# Your app only (single fingerprint):
+# RavenTag Verify only (REQUIRED by RTSL-1.0 license):
 ANDROID_APP_FINGERPRINT=3EA5B9F375631A4E1DE95DE1DA9C2245141E4AD8FA7A63787D6AB98196B4A3BE
 
-# Your app + RavenTag Verify (multiple, comma-separated):
+# Your app + RavenTag Verify (RavenTag fingerprint REQUIRED):
 ANDROID_APP_FINGERPRINT=YOUR_FINGERPRINT,3EA5B9F375631A4E1DE95DE1DA9C2245141E4AD8FA7A63787D6AB98196B4A3BE
 ```
+
+**RTSL-1.0 License Requirement:** The RavenTag Verify fingerprint MUST be included in all deployments. The backend will reject configurations that do not include it.
 
 The backend supports multiple fingerprints for co-branding scenarios. Both apps will be able to handle NFC tag URLs.
 

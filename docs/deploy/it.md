@@ -113,12 +113,14 @@ Senza due punti (per `.env`):
 **Configurazione singola o multipla:**
 
 ```bash
-# Solo la tua app (singola impronta):
+# Solo RavenTag Verify (OBBLIGATORIO per licenza RTSL-1.0):
 ANDROID_APP_FINGERPRINT=3EA5B9F375631A4E1DE95DE1DA9C2245141E4AD8FA7A63787D6AB98196B4A3BE
 
-# Tua app + RavenTag Verify (multiple impronte, separate da virgola):
+# Tua app + RavenTag Verify (impronta RavenTag OBBLIGATORIA):
 ANDROID_APP_FINGERPRINT=YOUR_FINGERPRINT,3EA5B9F375631A4E1DE95DE1DA9C2245141E4AD8FA7A63787D6AB98196B4A3BE
 ```
+
+**RTSL-1.0 License Requirement:** L'impronta di RavenTag Verify DEVE essere sempre inclusa nel backend. Il server rifiuterà configurazioni che non la includono.
 
 Il backend supporta impronte multiple per scenari di co-branding. Entrambe le app potranno gestire gli URL dei tag NFC.
 

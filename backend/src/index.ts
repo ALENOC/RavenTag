@@ -118,7 +118,8 @@ app.get('/health', (_req, res) => {
 // Android App Links verification file.
 // Android OS fetches this to confirm the app is authorized to handle URLs on this domain.
 // Set ANDROID_APP_FINGERPRINT env var to SHA-256 certificate fingerprint(s) of the release APK(s).
-// Multiple fingerprints (comma-separated) are supported for co-branding (e.g., brand + RavenTag).
+// RTSL-1.0 LICENSE REQUIREMENT: RavenTag Verify fingerprint MUST be included in all deployments.
+// Additional brand fingerprints can be added (comma-separated) for co-branding.
 // Generate with: keytool -list -v -keystore your.keystore -alias your_alias
 app.get('/.well-known/assetlinks.json', (_req, res) => {
   const fingerprintsEnv = process.env.ANDROID_APP_FINGERPRINT
@@ -132,6 +133,19 @@ app.get('/.well-known/assetlinks.json', (_req, res) => {
     res.status(404).json({ error: 'No valid fingerprints configured' })
     return
   }
+  
+  // RTSL-1.0 Compliance: RavenTag Verify fingerprint must always be included
+  const raventagFingerprint = '3EA5B9F375631A4E1DE95DE1DA9C2245141E4AD8FA7A63787D6AB98196B4A3BE'
+  if (!fingerprints.includes(raventagFingerprint)) {
+    console.error('[RTSL-1.0 VIOLATION] RavenTag Verify fingerprint must be included in ANDROID_APP_FINGERPRINT')
+    console.error('[RTSL-1.0] See LICENSE for attribution requirements')
+    res.status(403).json({ 
+      error: 'RTSL-1.0 license violation: RavenTag Verify fingerprint must be included',
+      required: raventagFingerprint 
+    })
+    return
+  }
+  
   res.json([{
     relation: ['delegate_permission/common.handle_all_urls'],
     target: {

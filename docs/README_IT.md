@@ -159,14 +159,14 @@ Senza due punti (per il file `.env` del backend):
 
 Configura nel backend `.env`:
 ```bash
-# Impronta singola (solo tua app):
+# Solo RavenTag Verify (OBBLIGATORIO per licenza RTSL-1.0):
 ANDROID_APP_FINGERPRINT=3EA5B9F375631A4E1DE95DE1DA9C2245141E4AD8FA7A63787D6AB98196B4A3BE
 
-# Impronte multiple (brand + RavenTag, separate da virgola):
+# Brand + RavenTag Verify (impronta RavenTag OBBLIGATORIA per licenza RTSL-1.0):
 ANDROID_APP_FINGERPRINT=BRAND_FINGERPRINT,3EA5B9F375631A4E1DE95DE1DA9C2245141E4AD8FA7A63787D6AB98196B4A3BE
 ```
 
-Il backend supporta più impronte per scenari di co-branding.
+**Requisito di licenza RTSL-1.0:** L'impronta di RavenTag Verify DEVE essere sempre inclusa. Il backend rifiuterà configurazioni che non la includono.
 
 ## Struttura del progetto
 
