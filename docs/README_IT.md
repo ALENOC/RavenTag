@@ -139,6 +139,29 @@ L'URL del tag apre il browser del telefono. Il browser mostra una pagina di inst
 **App aperta su un'altra schermata:**
 Il foreground dispatch NFC e' attivo solo sulla scheda Scan. Sulle altre schermate il tap viene ignorato dall'app.
 
+## Android App Links - Configurazione
+
+Per configurare Android App Links, devi ottenere l'impronta del certificato di signing:
+
+```bash
+keytool -list -v -keystore android/signing/raventag-release.keystore -alias raventag | grep SHA256
+```
+
+**Impronta attuale (2026-03-25):**
+```
+3E:A5:B9:F3:75:63:1A:4E:1D:E9:5D:E1:DA:9C:22:45:14:1E:4A:D8:FA:7A:63:78:7D:6A:B9:81:96:B4:A3:BE
+```
+
+Senza due punti (per il file `.env` del backend):
+```
+3EA5B9F375631A4E1DE95DE1DA9C2245141E4AD8FA7A63787D6AB98196B4A3BE
+```
+
+Configura nel backend `.env`:
+```bash
+ANDROID_APP_FINGERPRINT=3EA5B9F375631A4E1DE95DE1DA9C2245141E4AD8FA7A63787D6AB98196B4A3BE
+```
+
 ## Struttura del progetto
 
 ```

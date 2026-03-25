@@ -100,6 +100,16 @@ keytool -list -v -keystore android/signing/raventag-release.keystore -alias rave
 <YOUR_COLON_FINGERPRINT> → <YOUR_HEX_FINGERPRINT>
 ```
 
+**Текущий отпечаток (новый ключ 2026-03-25):**
+```
+3E:A5:B9:F3:75:63:1A:4E:1D:E9:5D:E1:DA:9C:22:45:14:1E:4A:D8:FA:7A:63:78:7D:6A:B9:81:96:B4:A3:BE
+```
+
+Без двоеточий (для `.env`):
+```
+3EA5B9F375631A4E1DE95DE1DA9C2245141E4AD8FA7A63787D6AB98196B4A3BE
+```
+
 ---
 
 ## Шаг 6: Настройка несекретных переменных окружения

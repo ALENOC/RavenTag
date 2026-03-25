@@ -4,7 +4,7 @@ RAVENTAG BACKEND SECRETS - SETUP COMPLETE
 Generated: 2026-03-25
 
 ================================================================================
-SECRET FILES CREATED (backend/secrets/)
+SECRET FILES (backend/secrets/)
 ================================================================================
 All files contain hex-encoded random bytes, no newlines.
 
