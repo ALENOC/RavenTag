@@ -3,6 +3,3 @@ contact_links:
   - name: 📖 Documentation
     url: https://github.com/ALENOC/RavenTag/tree/main/docs
     about: Check if your question is answered in the docs
-  - name: 💬 Discussions
-    url: https://github.com/ALENOC/RavenTag/discussions
-    about: Ask questions and discuss ideas (if enabled)

@@ -145,9 +145,9 @@ When opening a PR, please include:
 
 ## Security
 
-**For security issues, DO NOT create a public Issue.**
+**For security issues, please use the [Security Issue Template](.github/ISSUE_TEMPLATE/security_issue.md) and clearly mark your issue as [SECURITY].**
 
-Contact the maintainer directly via the email provided in the repository profile or use the [Security Issue Template](.github/ISSUE_TEMPLATE/security_issue.md) for guidance.
+Provide all relevant details in the issue description. The maintainer will review and address security concerns promptly.
 
 ---
 
