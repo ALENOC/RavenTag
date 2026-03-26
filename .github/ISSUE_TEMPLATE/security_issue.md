@@ -6,7 +6,7 @@ labels: security
 assignees: ALENOC
 ---
 
-**⚠️ IMPORTANT: If this is a critical security issue, please DO NOT create a public issue. Contact the maintainer directly via the email provided in the repository.**
+**⚠️ IMPORTANT: For critical security issues, please clearly mark the issue as [SECURITY] and provide all relevant details privately in the issue description. Do not disclose the vulnerability publicly until it's resolved.**
 
 **Describe the security issue**
 A clear and concise description of the vulnerability.
