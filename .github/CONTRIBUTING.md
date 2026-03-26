@@ -147,9 +147,7 @@ When opening a PR, please include:
 
 **For security issues, DO NOT create a public Issue.**
 
-Contact the maintainer directly:
-- Email: alessandro.nocentini@yahoo.it
-- Use the [Security Issue Template](.github/ISSUE_TEMPLATE/security_issue.md) for guidance
+Contact the maintainer directly via the email provided in the repository profile or use the [Security Issue Template](.github/ISSUE_TEMPLATE/security_issue.md) for guidance.
 
 ---
 

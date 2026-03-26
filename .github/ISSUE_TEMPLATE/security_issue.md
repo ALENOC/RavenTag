@@ -6,7 +6,7 @@ labels: security
 assignees: ALENOC
 ---
 
-**⚠️ IMPORTANT: If this is a critical security issue, please contact the maintainer directly at: alessandro.nocentini@yahoo.it**
+**⚠️ IMPORTANT: If this is a critical security issue, please DO NOT create a public issue. Contact the maintainer directly via the email provided in the repository.**
 
 **Describe the security issue**
 A clear and concise description of the vulnerability.
