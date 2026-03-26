@@ -152,7 +152,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var errorMessage by mutableStateOf<String?>(null)
 
     /** Backend base URL used for revocation checks and tag verification calls. */
-    var currentVerifyUrl: String = BuildConfig.API_BASE_URL
+    var currentVerifyUrl by mutableStateOf(BuildConfig.API_BASE_URL)
 
     // ── Wallet state ──────────────────────────────────────────────────────────
 
@@ -1490,15 +1490,50 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      *   locally. Performs local AES-CMAC verification, counter-replay check, and
      *   (if [expectedAsset] is set) an on-chain asset + revocation check.
      *
-     * @param e     Encrypted UID field from the SUN URL parameter "e" (hex)
-     * @param m     Truncated SUN MAC from URL parameter "m" (8 hex chars = 4 bytes)
-     * @param asset Ravencoin asset name from URL parameter "asset", or null
+     * @param e       Encrypted UID field from the SUN URL parameter "e" (hex)
+     * @param m       Truncated SUN MAC from URL parameter "m" (8 hex chars = 4 bytes)
+     * @param asset   Ravencoin asset name from URL parameter "asset", or null
+     * @param rawUrl  Complete NDEF URL from which parameters were extracted (for health check)
      */
-    fun onSunParamsReceived(e: String, m: String, asset: String?) {
+    fun onSunParamsReceived(e: String, m: String, asset: String?, rawUrl: String) {
         viewModelScope.launch {
             verifyStep = VerifyStep.VERIFYING_SUN
             verifyResult = null
             scanState = ScanState.IDLE
+
+            // ── Health check and dynamic backend configuration ──────────────────────
+            // Extract the base URL from the scanned tag's NDEF URL and check its health.
+            // If the tag specifies a different backend that is healthy, we switch to it.
+            val tagBaseUrl = try {
+                val uri = android.net.Uri.parse(rawUrl)
+                if (uri.scheme != null && uri.host != null) {
+                    "${uri.scheme}://${uri.host}${if (uri.port != -1 && uri.port != 80 && uri.port != 443) ":${uri.port}" else ""}"
+                } else currentVerifyUrl
+            } catch (_: Exception) { currentVerifyUrl }
+
+            val healthy = withContext(Dispatchers.IO) {
+                io.raventag.app.wallet.AssetManager(apiBaseUrl = tagBaseUrl).checkHealth()
+            }
+
+            if (!healthy) {
+                // Server non risponde: inform the user without declaring the tag fake.
+                verifyStep = VerifyStep.ERROR
+                verifyResult = VerifyResult(
+                    authentic = false,
+                    error = "Il server backend non risponde ($tagBaseUrl). Impossibile verificare l'autenticità del tag in questo momento."
+                )
+                return@launch
+            }
+
+            // If healthy and different from current, update and save configuration
+            if (tagBaseUrl != currentVerifyUrl) {
+                currentVerifyUrl = tagBaseUrl
+                getApplication<Application>().getSharedPreferences("raventag_prefs", android.content.Context.MODE_PRIVATE)
+                    .edit().putString("verify_url", tagBaseUrl).apply()
+                serverStatus = ServerStatus.ONLINE
+                Log.i("NFC", "Switched backend to $tagBaseUrl based on scanned tag")
+            }
+            // ────────────────────────────────────────────────────────────────────────
 
             // Standard flow: asset is in the URL, backend derives keys and verifies everything.
             if (asset != null) {
@@ -1815,8 +1850,6 @@ class MainActivity : FragmentActivity() {
             LaunchedEffect(walletRole) { viewModel.walletRole = walletRole }
             var savedPinataJwt by remember { mutableStateOf(securePrefs.getString("pinata_jwt", "") ?: "") }
             var savedKuboNodeUrl by remember { mutableStateOf(securePrefs.getString("kubo_node_url", "") ?: "") }
-            var verifyUrl by remember { mutableStateOf(savedVerifyUrl) }
-
             // Localised strings resolved from the saved language code
             val strings: AppStrings = remember(langCode) { appStringsFor(langCode) }
 
@@ -1933,7 +1966,7 @@ class MainActivity : FragmentActivity() {
                                     }
                                     RavenTagApp(
                                         viewModel = viewModel,
-                                        verifyUrl = verifyUrl,
+                                        verifyUrl = viewModel.currentVerifyUrl,
                                         onLangChange = { newLang ->
                                             prefs.edit().putString("language", newLang).apply()
                                             langCode = newLang
@@ -1942,7 +1975,6 @@ class MainActivity : FragmentActivity() {
                                             // Only accept HTTPS URLs to prevent cleartext interception
                                             if (url.startsWith("https://")) {
                                                 prefs.edit().putString("verify_url", url).apply()
-                                                verifyUrl = url
                                                 viewModel.currentVerifyUrl = url
                                                 // Reset status so next tab visit re-checks connectivity
                                                 viewModel.serverStatus = MainViewModel.ServerStatus.UNKNOWN
@@ -2154,7 +2186,7 @@ class MainActivity : FragmentActivity() {
                 intent.dataString?.let { url -> NfcReader.parseSunUrl(url) }
             } else null
         } ?: return
-        viewModel.onSunParamsReceived(sunParams.e, sunParams.m, sunParams.asset)
+        viewModel.onSunParamsReceived(sunParams.e, sunParams.m, sunParams.asset, sunParams.rawUrl)
     }
 }
 
@@ -2336,7 +2368,7 @@ fun RavenTagApp(
     // Full-screen form for selecting an asset and starting a standalone write.
     if (viewModel.showProgramTagForm) {
         ProgramTagScreen(
-            verifyUrl = verifyUrl,
+            verifyUrl = viewModel.currentVerifyUrl,
             // Use admin key for admin role, operator key otherwise
             savedAdminKey = if (walletRole == "admin") savedAdminKey else savedOperatorKey,
             ownedAssets = viewModel.ownedAssets ?: emptyList(),
@@ -2523,7 +2555,7 @@ fun RavenTagApp(
                             scope.launch {
                                 viewModel.controlKeyValidating = true
                                 viewModel.controlKeyError = null
-                                val role = viewModel.validateControlKey(verifyUrl, controlKey)
+                                val role = viewModel.validateControlKey(viewModel.currentVerifyUrl, controlKey)
                                 viewModel.controlKeyValidating = false
                                 if (role == null) {
                                     viewModel.controlKeyError = s.walletControlKeyInvalid
@@ -2541,7 +2573,7 @@ fun RavenTagApp(
                             scope.launch {
                                 viewModel.controlKeyValidating = true
                                 viewModel.controlKeyError = null
-                                val role = viewModel.validateControlKey(verifyUrl, controlKey)
+                                val role = viewModel.validateControlKey(viewModel.currentVerifyUrl, controlKey)
                                 viewModel.controlKeyValidating = false
                                 if (role == null) {
                                     viewModel.controlKeyError = s.walletControlKeyInvalid
@@ -2591,7 +2623,7 @@ fun RavenTagApp(
                 // Auto-check server and key statuses when landing on Brand tab
                 LaunchedEffect(Unit) {
                     if (viewModel.serverStatus == MainViewModel.ServerStatus.UNKNOWN)
-                        viewModel.checkServerStatus(verifyUrl)
+                        viewModel.checkServerStatus(viewModel.currentVerifyUrl)
                 }
                 LaunchedEffect(viewModel.serverStatus) {
                     if (viewModel.serverStatus == MainViewModel.ServerStatus.ONLINE) {
@@ -2619,7 +2651,7 @@ fun RavenTagApp(
             AppTab.SETTINGS -> {
                 LaunchedEffect(Unit) {
                     if (viewModel.serverStatus == MainViewModel.ServerStatus.UNKNOWN) {
-                        viewModel.checkServerStatus(verifyUrl)
+                        viewModel.checkServerStatus(viewModel.currentVerifyUrl)
                     }
                 }
                 // Auto-check admin key whenever server becomes Online (brand app only)
@@ -2639,7 +2671,7 @@ fun RavenTagApp(
                         stringsZh -> "zh"; stringsJa -> "ja"; stringsKo -> "ko"; stringsRu -> "ru"
                         else -> "en"
                     },
-                    currentVerifyUrl = verifyUrl,
+                    currentVerifyUrl = viewModel.currentVerifyUrl,
                     currentInitialMasterKey = savedInitialMasterKey,
                     currentPinataJwt = savedPinataJwt,
                     currentKuboNodeUrl = savedKuboNodeUrl,
