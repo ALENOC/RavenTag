@@ -1,0 +1,125 @@
+<en-US>
+🎉 Initial release of RavenTag Verify!
+
+• Scan NTAG 424 DNA NFC chips
+• Verify authenticity on Ravencoin blockchain
+• Built-in Ravencoin wallet
+• Collect digital assets and ownership tokens
+• No account required
+
+Visit raventag.com for participating brands.
+
+Version 1.0.3
+</en-US>
+
+<de-DE>
+🎉 Erstveröffentlichung von RavenTag Verify!
+
+• NTAG 424 DNA NFC-Chips scannen
+• Authentizität auf Ravencoin-Blockchain prüfen
+• Integriertes Ravencoin-Wallet
+• Digitale Assets sammeln
+• Kein Konto erforderlich
+
+Besuchen Sie raventag.com für teilnehmende Marken.
+
+Version 1.0.3
+</de-DE>
+
+<es-ES>
+🎉 ¡Versión inicial de RavenTag Verify!
+
+• Escanea chips NFC NTAG 424 DNA
+• Verifica autenticidad en blockchain Ravencoin
+• Billetera Ravencoin integrada
+• Colecciona activos digitales
+• Sin cuenta requerida
+
+Visita raventag.com para marcas participantes.
+
+Versión 1.0.3
+</es-ES>
+
+<fr-FR>
+🎉 Version initiale de RavenTag Verify !
+
+• Scannez puces NFC NTAG 424 DNA
+• Vérifiez authenticité sur blockchain Ravencoin
+• Portefeuille Ravencoin intégré
+• Collectez actifs numériques
+• Aucun compte requis
+
+Visitez raventag.com pour marques participantes.
+
+Version 1.0.3
+</fr-FR>
+
+<it-IT>
+🎉 Versione iniziale di RavenTag Verify!
+
+• Scansiona chip NFC NTAG 424 DNA
+• Verifica autenticità su blockchain Ravencoin
+• Wallet Ravencoin integrato
+• Colleziona asset digitali
+• Nessun account richiesto
+
+Visita raventag.com per brand partecipanti.
+
+Versione 1.0.3
+</it-IT>
+
+<ja-JP>
+🎉 RavenTag Verify 初回リリース！
+
+• NTAG 424 DNA NFC チップをスキャン
+• Ravencoin ブロックチェーンで真偽検証
+• Ravencoin ウォレット内蔵
+• デジタル資産を収集
+• アカウント不要
+
+参加ブランドは raventag.com をご覧ください。
+
+バージョン 1.0.3
+</ja-JP>
+
+<ko-KR>
+🎉 RavenTag Verify 초기 릴리스!
+
+• NTAG 424 DNA NFC 칩 스캔
+• Ravencoin 블록체인에서 진위성 검증
+• Ravencoin 지갑 내장
+• 디지털 자산 수집
+• 계정 불필요
+
+참여 브랜드는 raventag.com 을 방문하세요.
+
+버전 1.0.3
+</ko-KR>
+
+<ru-RU>
+🎉 Первый выпуск RavenTag Verify!
+
+• Сканирование NFC-чипов NTAG 424 DNA
+• Проверка в блокчейне Ravencoin
+• Встроенный Ravencoin кошелек
+• Сбор цифровых активов
+• Регистрация не требуется
+
+Посетите raventag.com для списка брендов.
+
+Версия 1.0.3
+</ru-RU>
+
+<zh-CN>
+🎉 RavenTag Verify 初始版本！
+
+• 扫描 NTAG 424 DNA NFC 芯片
+• 在 Ravencoin 区块链上验证
+• 内置 Ravencoin 钱包
+• 收集数字资产
+• 无需账户
+
+访问 raventag.com 查看参与品牌。
+
+版本 1.0.3
+</zh-CN>
