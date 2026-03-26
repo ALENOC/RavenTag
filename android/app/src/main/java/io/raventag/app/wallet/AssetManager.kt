@@ -186,6 +186,34 @@ class AssetManager(
         .build()
 
     /**
+     * Check whether the backend server is reachable by hitting /health or /api/health.
+     * Returns true if the server is up and responding with a 2xx status code.
+     */
+    fun checkHealth(): Boolean {
+        return try {
+            // Try /health (new standardized endpoint) then /api/health (legacy)
+            val endpoints = listOf("/health", "/api/health")
+            var success = false
+            for (path in endpoints) {
+                val request = Request.Builder()
+                    .url("${apiBaseUrl.trimEnd('/')}$path")
+                    .get()
+                    .build()
+                http.newCall(request).execute().use { response ->
+                    if (response.isSuccessful) {
+                        success = true
+                    }
+                }
+                if (success) break
+            }
+            success
+        } catch (e: Exception) {
+            Log.e("AssetManager", "Health check failed for $apiBaseUrl: ${e.message}")
+            false
+        }
+    }
+
+    /**
      * Execute an authenticated HTTP request and parse the JSON response.
      *
      * Sends the X-Admin-Key header for operator authentication. Throws IOException
