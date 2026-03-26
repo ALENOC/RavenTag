@@ -1,0 +1,420 @@
+================================================================================
+RAVENTAG VERIFY - APP STORE DESCRIPTIONS
+================================================================================
+
+SHORT DESCRIPTION (80 characters max)
+================================================================================
+
+🇮🇹 Italiano:
+Verifica prodotti con NFC e blockchain. Wallet Ravencoin integrato.
+
+🇬🇧 English:
+Verify products with NFC and blockchain. Built-in Ravencoin wallet.
+
+🇫 Français:
+Vérifiez produits avec NFC et blockchain. Portefeuille Ravencoin intégré.
+
+🇩🇪 Deutsch:
+Produkte mit NFC und Blockchain prüfen. Ravencoin-Wallet integriert.
+
+🇪 Español:
+Verifica productos con NFC y blockchain. Billetera Ravencoin integrada.
+
+🇨🇳 中文 (Simplified Chinese):
+使用 NFC 和区块链验证产品。内置 Ravencoin 钱包。
+
+🇯🇵 日本語 (Japanese):
+NFC とブロックチェーンで製品を検証。Ravencoin ウォレット内蔵。
+
+🇰 한국어 (Korean):
+NFC 와 블록체인으로 제품 검증. Ravencoin 지갑 내장.
+
+🇷 Русский (Russian):
+Проверка продуктов NFC и блокчейн. Встроенный Ravencoin кошелек.
+
+
+================================================================================
+FULL DESCRIPTION (4000 characters max)
+================================================================================
+
+--------------------------------------------------------------------------------
+🇮 ITALIANO
+--------------------------------------------------------------------------------
+
+RavenTag Verify è l'app per consumatori che verifica l'autenticità di prodotti di lusso usando tecnologia NFC e blockchain.
+
+COME FUNZIONA:
+1. Avvicina il tuo smartphone al chip NFC del prodotto
+2. L'app legge il chip crittografato NTAG 424 DNA
+3. Verifica automaticamente sulla blockchain Ravencoin
+4. Ricevi conferma istantanea dell'autenticità
+
+COSA PUOI VERIFICARE:
+- Borse e accessori di lusso
+- Orologi di marca
+- Scarpe e abbigliamento firmato
+- Vini pregiati e spirits
+- Oggetti da collezione
+- Elettronica di consumo
+
+WALLET RAVENCOIN INTEGRATO:
+L'app include un wallet Ravencoin sicuro dove puoi:
+- Collezionare asset digitali unici
+- Detenere token di proprietà dei prodotti verificati
+- Gestire i tuoi asset blockchain in totale sicurezza
+
+BRAND PARTECIPANTI:
+La lista dei produttori che adottano RavenTag è in continua crescita. Consulta il sito raventag.com per l'elenco aggiornato dei brand partecipanti.
+
+SICUREZZA GARANTITA:
+Il chip NFC non può essere clonato. I dati sono verificati sulla blockchain Ravencoin, immutabili e pubblici. Nessuna autorità centrale, nessuna raccolta dati.
+
+CARATTERISTICHE:
+- Verifica istantanea con un tap
+- Wallet Ravencoin integrato
+- Interfaccia semplice e intuitiva
+- Storico delle verifiche
+- Nessun account richiesto
+- Open-source e trasparente
+
+Scarica RavenTag Verify e scopri se il tuo prodotto è autentico in pochi secondi.
+
+--------------------------------------------------------------------------------
+🇬🇧 ENGLISH
+--------------------------------------------------------------------------------
+
+RavenTag Verify is the consumer app that verifies authenticity of luxury goods using NFC technology and blockchain.
+
+HOW IT WORKS:
+1. Tap your smartphone to the product's NFC chip
+2. App reads the encrypted NTAG 424 DNA chip
+3. Automatically verifies on Ravencoin blockchain
+4. Get instant authenticity confirmation
+
+WHAT YOU CAN VERIFY:
+- Luxury handbags and accessories
+- Designer watches
+- Branded shoes and apparel
+- Fine wines and spirits
+- Collectible items
+- Consumer electronics
+
+BUILT-IN RAVENCOIN WALLET:
+The app includes a secure Ravencoin wallet where you can:
+- Collect unique digital assets
+- Hold ownership tokens of verified products
+- Manage your blockchain assets securely
+
+PARTICIPATING BRANDS:
+The list of manufacturers adopting RavenTag is continuously growing. Visit raventag.com for the updated list of participating brands.
+
+GUARANTEED SECURITY:
+NFC chip cannot be cloned. Data is verified on Ravencoin blockchain - immutable and public. No central authority, no data collection.
+
+FEATURES:
+- Instant verification with one tap
+- Built-in Ravencoin wallet
+- Simple, intuitive interface
+- Verification history
+- No account required
+- Open-source and transparent
+
+Download RavenTag Verify and discover if your product is authentic in seconds.
+
+--------------------------------------------------------------------------------
+🇫🇷 FRANÇAIS
+--------------------------------------------------------------------------------
+
+RavenTag Verify est l'application consommateur qui vérifie l'authenticité des produits de luxe utilisant la technologie NFC et la blockchain.
+
+COMMENT ÇA MARCHE:
+1. Approchez votre smartphone de la puce NFC du produit
+2. L'application lit la puce cryptée NTAG 424 DNA
+3. Vérification automatique sur la blockchain Ravencoin
+4. Confirmation instantanée de l'authenticité
+
+CE QUE VOUS POUVEZ VÉRIFIER:
+- Sacs à main et accessoires de luxe
+- Montres de marque
+- Chaussures et vêtements de créateurs
+- Vins fins et spiritueux
+- Objets de collection
+- Électronique grand public
+
+PORTEFEUILLE RAVENCOIN INTÉGRÉ:
+L'application inclut un portefeuille Ravencoin sécurisé où vous pouvez:
+- Collecter des actifs numériques uniques
+- Détenir des tokens de propriété des produits vérifiés
+- Gérer vos actifs blockchain en toute sécurité
+
+MARQUES PARTICIPANTES:
+La liste des fabricants adoptant RavenTag est en constante croissance. Consultez raventag.com pour la liste mise à jour des marques participantes.
+
+SÉCURITÉ GARANTIE:
+La puce NFC ne peut pas être clonée. Les données sont vérifiées sur la blockchain Ravencoin - immuables et publiques. Aucune autorité centrale, aucune collecte de données.
+
+FONCTIONNALITÉS:
+- Vérification instantanée en un tap
+- Portefeuille Ravencoin intégré
+- Interface simple et intuitive
+- Historique des vérifications
+- Aucun compte requis
+- Open-source et transparent
+
+Téléchargez RavenTag Verify et découvrez si votre produit est authentique en quelques secondes.
+
+--------------------------------------------------------------------------------
+🇩 DEUTSCH
+--------------------------------------------------------------------------------
+
+RavenTag Verify ist die Consumer-App, die die Echtheit von Luxusgütern mit NFC-Technologie und Blockchain verifiziert.
+
+SO FUNKTIONIERT'S:
+1. Smartphone an den NFC-Chip des Produkts halten
+2. App liest den verschlüsselten NTAG 424 DNA Chip
+3. Automatische Verifizierung auf Ravencoin-Blockchain
+4. Sofortige Echtheitsbestätigung erhalten
+
+WAS SIE VERIFIZIEREN KÖNNEN:
+- Luxus-Handtaschen und Accessoires
+- Markenuhren
+- Designer-Schuhe und Kleidung
+- Edle Weine und Spirituosen
+- Sammlerstücke
+- Unterhaltungselektronik
+
+INTEGRIERTES RAVENCOIN-WALLET:
+Die App enthält ein sicheres Ravencoin-Wallet, in dem Sie:
+- Einzigartige digitale Assets sammeln können
+- Eigentumstoken verifizierter Produkte besitzen können
+- Ihre Blockchain-Assets sicher verwalten können
+
+TEILNEHMENDE MARKEN:
+Die Liste der Hersteller, die RavenTag einführen, wächst kontinuierlich. Besuchen Sie raventag.com für die aktualisierte Liste der teilnehmenden Marken.
+
+GARANTIERTE SICHERHEIT:
+NFC-Chip kann nicht kloniert werden. Daten werden auf der Ravencoin-Blockchain verifiziert - unveränderlich und öffentlich. Keine zentrale Behörde, keine Datenerfassung.
+
+FUNKTIONEN:
+- Sofortige Verifizierung mit einem Tap
+- Integriertes Ravencoin-Wallet
+- Einfache, intuitive Benutzeroberfläche
+- Verifizierungsverlauf
+- Kein Konto erforderlich
+- Open-Source und transparent
+
+Laden Sie RavenTag Verify herunter und entdecken Sie, ob Ihr Produkt echt ist - in Sekunden.
+
+--------------------------------------------------------------------------------
+🇪 ESPAÑOL
+--------------------------------------------------------------------------------
+
+RavenTag Verify es la app para consumidores que verifica la autenticidad de productos de lujo usando tecnología NFC y blockchain.
+
+CÓMO FUNCIONA:
+1. Acerca tu smartphone al chip NFC del producto
+2. La app lee el chip cifrado NTAG 424 DNA
+3. Verificación automática en la blockchain de Ravencoin
+4. Confirmación instantánea de autenticidad
+
+QUÉ PUEDES VERIFICAR:
+- Bolsos y accesorios de lujo
+- Relojes de marca
+- Zapatos y ropa de diseñador
+- Vinos finos y licores
+- Artículos de colección
+- Electrónica de consumo
+
+BILLETERA RAVENCOIN INTEGRADA:
+La app incluye una billetera Ravencoin segura donde puedes:
+- Coleccionar activos digitales únicos
+- Poseer tokens de propiedad de productos verificados
+- Gestionar tus activos blockchain de forma segura
+
+MARCAS PARTICIPANTES:
+La lista de fabricantes que adoptan RavenTag está en continuo crecimiento. Consulta raventag.com para la lista actualizada de marcas participantes.
+
+SEGURIDAD GARANTIZADA:
+El chip NFC no puede ser clonado. Los datos se verifican en la blockchain de Ravencoin - inmutables y públicos. Sin autoridad central, sin recopilación de datos.
+
+CARACTERÍSTICAS:
+- Verificación instantánea con un toque
+- Billetera Ravencoin integrada
+- Interfaz simple e intuitiva
+- Historial de verificaciones
+- No se requiere cuenta
+- Open-source y transparente
+
+Descarga RavenTag Verify y descubre si tu producto es auténtico en segundos.
+
+--------------------------------------------------------------------------------
+🇨🇳 中文 (SIMPLIFIED CHINESE)
+--------------------------------------------------------------------------------
+
+RavenTag Verify 是消费者应用，使用 NFC 技术和区块链验证奢侈品的真伪。
+
+使用方法:
+1. 将智能手机靠近产品的 NFC 芯片
+2. 应用读取加密的 NTAG 424 DNA 芯片
+3. 在 Ravencoin 区块链上自动验证
+4. 即时获得真伪确认
+
+可以验证的物品:
+- 奢侈品手袋和配饰
+- 名牌手表
+- 设计师鞋履和服装
+- 高级葡萄酒和烈酒
+- 收藏品
+- 消费电子产品
+
+内置 RAVENCOIN 钱包:
+应用包含安全的 Ravencoin 钱包，您可以:
+- 收集独特的数字资产
+- 持有已验证产品的所有权代币
+- 安全管理您的区块链资产
+
+参与品牌:
+采用 RavenTag 的制造商名单不断增长。访问 raventag.com 查看参与品牌的最新列表。
+
+安全保障:
+NFC 芯片无法被克隆。数据在 Ravencoin 区块链上验证 - 不可篡改且公开。无需中央机构，不收集数据。
+
+功能特点:
+- 一键即时验证
+- 内置 Ravencoin 钱包
+- 简单直观的界面
+- 验证历史记录
+- 无需注册账户
+- 开源透明
+
+下载 RavenTag Verify，几秒钟内即可确认您的产品是否为正品。
+
+--------------------------------------------------------------------------------
+🇯🇵 日本語 (JAPANESE)
+--------------------------------------------------------------------------------
+
+RavenTag Verify は、NFC 技術とブロックチェーンを使用して高級品の真偽を検証する消費者向けアプリです。
+
+使い方:
+1. スマートフォンを製品の NFC チップにかざす
+2. アプリが暗号化された NTAG 424 DNA チップを読み取る
+3. Ravencoin ブロックチェーンで自動検証
+4. 瞬時に真偽確認の結果を取得
+
+検証可能なアイテム:
+- 高級ハンドバッグ・アクセサリー
+- ブランド時計
+- デザイナーズシューズ・アパレル
+- 高級ワイン・スピリッツ
+- コレクターズアイテム
+- 家電製品
+
+内蔵 RAVENCOIN ウォレット:
+アプリには安全な Ravencoin ウォレットが含まれています:
+- 固有のデジタル資産を収集
+- 検証済み製品の所有権トークンを保有
+- ブロックチェーン資産を安全に管理
+
+参加ブランド:
+RavenTag を採用するメーカーのリストは拡大を続けています。raventag.com で参加ブランドの最新リストをご覧ください。
+
+保証されたセキュリティ:
+NFC チップはクローン不可。データは Ravencoin ブロックチェーンで検証され、不変で公開されています。中央機関不要、データ収集なし。
+
+機能:
+- ワンタップで即時検証
+- 内蔵 Ravencoin ウォレット
+- シンプルで直感的なインターフェース
+- 検証履歴
+- アカウント不要
+- オープンソースで透明性
+
+RavenTag Verify をダウンロードして、数秒で製品の真偽を確認しましょう。
+
+--------------------------------------------------------------------------------
+🇰🇷 한국어 (KOREAN)
+--------------------------------------------------------------------------------
+
+RavenTag Verify 는 NFC 기술과 블록체인을 사용하여 명품의 진위성을 검증하는 소비자용 앱입니다.
+
+사용 방법:
+1. 스마트폰을 제품의 NFC 칩에 대기
+2. 앱이 암호화된 NTAG 424 DNA 칩 읽기
+3. Ravencoin 블록체인에서 자동 검증
+4. 즉시 진위 확인 결과 받기
+
+검증 가능한 아이템:
+- 명품 핸드백 및 액세서리
+- 브랜드 시계
+- 디자이너 신발 및 의류
+- 고급 와인 및 주류
+- 수집품
+- 가전제품
+
+내장 RAVENCOIN 지갑:
+앱에는 안전한 Ravencoin 지갑이 포함되어 있습니다:
+- 고유 디지털 자산 수집
+- 검증된 제품의 소유권 토큰 보유
+- 블록체인 자산을 안전하게 관리
+
+참여 브랜드:
+RavenTag 를 채택하는 제조업체 목록은 지속적으로 성장하고 있습니다. raventag.com 에서 참여 브랜드의 업데이트된 목록을 확인하세요.
+
+보안 보장:
+NFC 칩은 복제 불가. 데이터는 Ravencoin 블록체인에서 검증되며 불변하고 공개됩니다. 중앙 권한 불필요, 데이터 수집 없음.
+
+기능:
+- 한 번의 탭으로 즉시 검증
+- 내장 Ravencoin 지갑
+- 간단하고 직관적인 인터페이스
+- 검증 기록
+- 계정 불필요
+- 오픈소스로 투명성
+
+RavenTag Verify 를 다운로드하고 몇 초 만에 제품의 진위성을 확인하세요.
+
+--------------------------------------------------------------------------------
+🇷 РУССКИЙ (RUSSIAN)
+--------------------------------------------------------------------------------
+
+RavenTag Verify — это приложение для потребителей, которое проверяет подлинность предметов роскоши с помощью NFC-технологии и блокчейна.
+
+КАК ЭТО РАБОТАЕТ:
+1. Поднесите смартфон к NFC-чипу продукта
+2. Приложение считывает зашифрованный чип NTAG 424 DNA
+3. Автоматическая проверка в блокчейне Ravencoin
+4. Мгновенное подтверждение подлинности
+
+ЧТО МОЖНО ПРОВЕРИТЬ:
+- Люксовые сумки и аксессуары
+- Фирменные часы
+- Дизайнерская обувь и одежда
+- Элитные вина и спиртные напитки
+- Коллекционные предметы
+- Бытовая электроника
+
+ВСТРОЕННЫЙ RAVENCOIN КОШЕЛЕК:
+Приложение включает безопасный Ravencoin кошелек, где вы можете:
+- Коллекционировать уникальные цифровые активы
+- Владеть токенами собственности проверенных продуктов
+- Управлять своими блокчейн-активами безопасно
+
+УЧАСТВУЮЩИЕ БРЕНДЫ:
+Список производителей, принимающих RavenTag, постоянно растет. Посетите raventag.com для обновления списка участвующих брендов.
+
+ГАРАНТИРОВАННАЯ БЕЗОПАСНОСТЬ:
+NFC-чип невозможно клонировать. Данные проверяются в блокчейне Ravencoin — неизменяемы и публичны. Никаких центральных органов, никакого сбора данных.
+
+ФУНКЦИИ:
+- Мгновенная проверка одним касанием
+- Встроенный Ravencoin кошелек
+- Простой и интуитивный интерфейс
+- История проверок
+- Регистрация не требуется
+- Открытый исходный код и прозрачность
+
+Скачайте RavenTag Verify и узнайте, является ли ваш продукт подлинным, за считанные секунды.
+
+================================================================================
+END OF FILE
+================================================================================

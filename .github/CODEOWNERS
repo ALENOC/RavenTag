@@ -1,0 +1,5 @@
+CODEOWNERS file for RavenTag repository.
+This ensures only the maintainer can approve and merge changes.
+
+# All files in the repository require maintainer approval
+* @ALENOC
