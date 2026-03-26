@@ -7,24 +7,6 @@ import com.google.gson.Gson
  *
  * All UI text is defined as mutable [String] properties on this class. A separate instance is
  * created for each supported language and provided to the composition tree via [LocalStrings].
- *
- * Adding a new language:
- *   1. Declare a new `val stringsXx = AppStrings().apply { ... }` block at the bottom of this
- *      file, filling in every property.
- *   2. Add the corresponding [AppLanguage] entry to the [LANGUAGES] list in OnboardingScreen.kt.
- *   3. Add a mapping entry in [appStringsFor] below.
- *
- * The [cloneStrings] helper uses Gson round-trip serialization to deep-copy an [AppStrings]
- * instance. This is used to produce per-language overrides from a base English template when
- * only partial translations are available (currently unused, kept for extensibility).
- *
- * All string fields default to empty string so the class can be instantiated before any
- * translations are applied. A missing translation will simply render as a blank label.
- *
- * String template conventions:
- *   - `%1`, `%2`, ... are positional placeholders replaced at runtime via [String.replace].
- *   - Ellipsis characters (…) are acceptable in UI strings.
- *   - Em dashes are not used anywhere (house style).
  */
 class AppStrings {
     // Onboarding
@@ -77,6 +59,7 @@ class AppStrings {
     var verifyAuthentic: String = ""
     var verifyNotAuthentic: String = ""
     var verifyRevoked: String = ""
+    var verifyUnableToVerify: String = ""
     var verifyCounterReplay: String = ""
     var verifyNfcSig: String = ""
     var verifyBlockchain: String = ""
@@ -126,6 +109,7 @@ class AppStrings {
     var electrumOffline: String = ""
     var electrumChecking: String = ""
     var walletRvnPrice: String = ""
+    var serverNotResponding: String = ""
     var settingsServerOnline: String = ""
     var settingsServerOffline: String = ""
     var settingsServerChecking: String = ""
@@ -260,8 +244,8 @@ class AppStrings {
     var walletSendSuccess: String = ""
     var walletSendFailed: String = ""
     var walletTransferFailed: String = ""
-    var walletSendResult: String = "" // "Sent %1 RVN (fee: %2 RVN) · tx: %3..."
-    var walletTransferResult: String = "" // "Transferred %1 · tx: %2..."
+    var walletSendResult: String = ""
+    var walletTransferResult: String = ""
     var walletSendWarning: String = ""
     var walletSendFeeUnavailable: String = ""
     var walletSendDialogTitle: String = ""
@@ -399,23 +383,8 @@ class AppStrings {
     var walletLoadMore: String = ""
 }
 
-/**
- * Deep-copies an [AppStrings] instance using Gson serialization.
- *
- * Useful when a language needs to inherit most strings from English and override only a subset.
- * The copy is independent: mutating the returned instance does not affect [base].
- *
- * Currently unused but kept for future partial-translation support.
- */
 private fun cloneStrings(base: AppStrings): AppStrings =
     Gson().fromJson(Gson().toJson(base), AppStrings::class.java)
-
-/**
- * Returns the [AppStrings] instance for the given BCP-47 [langCode].
- *
- * Falls back to English ([stringsEn]) for any unrecognised language code.
- * Called from [MainActivity] on startup and from [OnboardingScreen] on language selection.
- */
 
 /** English (default) strings. */
 val stringsEn = AppStrings().apply {
@@ -452,6 +421,7 @@ val stringsEn = AppStrings().apply {
     howStep3 = "The result is confirmed on the blockchain"
     verifyingTitle = "Verifying…"
     verifyAuthentic = "Authentic"; verifyNotAuthentic = "Not Authentic"; verifyRevoked = "Revoked"
+    verifyUnableToVerify = "Unable to Verify"
     verifyCounterReplay = "Counter replay detected: possible cloning attempt."
     verifyNfcSig = "Verifying NFC signature"; verifyBlockchain = "Checking Ravencoin blockchain"
     verifyAssetInfo = "Product Details"
@@ -477,6 +447,7 @@ val stringsEn = AppStrings().apply {
     walletAssetsNotVerifiable = "Unable to load assets. Check your connection and tap refresh to retry."
     electrumOnline = "ElectrumX · Online"; electrumOffline = "ElectrumX · Offline"; electrumChecking = "ElectrumX · Checking…"
     walletRvnPrice = "RVN/USDT"
+    serverNotResponding = "The backend server is not responding (%1). Unable to verify tag authenticity at this moment."
     settingsServerOnline = "Server · Online"; settingsServerOffline = "Server · Offline"; settingsServerChecking = "Server · Checking…"
     settingsAdminKeyValid = "Key verified"; settingsAdminKeyInvalid = "Key invalid"; settingsAdminKeyChecking = "Verifying…"
     settingsAdminKeyLocked = "Save the server URL first"
@@ -526,7 +497,6 @@ val stringsEn = AppStrings().apply {
     regChipTagUid = "Tag UID"; regChipUidHint = "14 hex characters = 7 bytes, e.g. 04A1B2C3D4E5F6"; regChipUidError = "Must be exactly 14 hex characters (7 bytes). Current:"
     regChipBtn = "Register Chip"
     transferTitle = "Transfer Token"; transferSubtitle = "Send asset to buyer's wallet · ~0.01 RVN fee"
-    fieldAssetName = "Asset Name"; assetNameHint = "Unique tokens typically have quantity 1"
     fieldRecipient = "Recipient Address"; fieldRecipientHint = "Buyer's Ravencoin wallet address"
     fieldQtyLabel = "Quantity"; fieldQtyHint = "Unique tokens typically have quantity 1"
     btnTransfer = "Transfer Token"
@@ -649,7 +619,7 @@ val stringsIt = AppStrings().apply {
     onboardingBadgeConsumer = "Open Source · Ravencoin"
     onboardingTitleConsumer = "Verifica l'autenticita' del tuo prodotto"
     onboardingDescConsumer = "Avvicina il telefono al chip NFC integrato dal brand nel prodotto per confermare istantaneamente che sia originale."
-    featureNtagConsumer = "Impossibile da falsificare"
+    featureNtagConsumer = "Impossible da falsificare"
     featureNtagDescConsumer = "Il chip integrato nel prodotto genera una firma unica a ogni scansione. Non puo' essere clonato o replicato."
     featureSovConsumer = "Nessun intermediario"
     featureSovDescConsumer = "Ogni brand gestisce la propria autenticazione. Nessuna autorita' centrale e nessun intermediario."
@@ -665,12 +635,13 @@ val stringsIt = AppStrings().apply {
     howStep3 = "Il risultato viene confermato sulla blockchain"
     verifyingTitle = "Verifica in corso…"
     verifyAuthentic = "Autentico"; verifyNotAuthentic = "Non autentico"; verifyRevoked = "Revocato"
+    verifyUnableToVerify = "Impossibile verificare"
     verifyCounterReplay = "Replay del contatore rilevato: possibile tentativo di clonazione."
     verifyNfcSig = "Verifica firma NFC"; verifyBlockchain = "Controllo blockchain Ravencoin"
     verifyAssetInfo = "Dettagli prodotto"
     verifyAsset = "Prodotto"; verifyDescription = "Descrizione"; verifyWebsite = "Sito web"
     verifySecDetails = "Dettagli verifica"
-    verifyTagUid = "UID tag"; verifyScanCount = "Numero scansioni"; verifyNfcPubId = "ID pubblico NFC"; verifyCrypto = "Cripto"
+    verifyTagUid = "Tag UID"; verifyScanCount = "Numero scansioni"; verifyNfcPubId = "ID pubblico NFC"; verifyCrypto = "Cripto"
     verifyRevokedBy = "SEGNALATO DAL BRAND"; verifyScanAgain = "Scansiona un altro prodotto"
     walletTitle = "Portafoglio Brand"; walletSubtitle = "Gestione asset Ravencoin"
     walletNoWallet = "Nessun portafoglio"; walletNoWalletDesc = "Genera un nuovo portafoglio o ripristina uno esistente per gestire gli asset Ravencoin."
@@ -690,6 +661,7 @@ val stringsIt = AppStrings().apply {
     walletAssetsNotVerifiable = "Impossibile caricare gli asset. Controlla la connessione e premi aggiorna per riprovare."
     electrumOnline = "ElectrumX · Online"; electrumOffline = "ElectrumX · Offline"; electrumChecking = "ElectrumX · Verifica…"
     walletRvnPrice = "RVN/USDT"
+    serverNotResponding = "Il server backend non risponde (%1). Impossibile verificare l'autenticità del tag in questo momento."
     settingsServerOnline = "Server · Online"; settingsServerOffline = "Server · Offline"; settingsServerChecking = "Server · Verifica…"
     settingsAdminKeyValid = "Chiave verificata"; settingsAdminKeyInvalid = "Chiave non valida"; settingsAdminKeyChecking = "Verifica in corso…"
     settingsAdminKeyLocked = "Salva prima l'URL del server"
@@ -717,7 +689,7 @@ val stringsIt = AppStrings().apply {
     brandIssueSub = "Emetti sub-asset"; brandIssueSubDesc = "Crea linea di prodotto (es. FASHIONX/BAG01) o variante"
     brandRegChip = "Registra chip NFC"; brandRegChipDesc = "Collega l'UID di un chip NTAG 424 DNA a un asset esistente. Necessario prima che la verifica funzioni."
     brandTransfer = "Trasferisci token"; brandTransferDesc = "Invia asset al wallet dell'acquirente come prova d'acquisto (~0.01 RVN commissione)."
-    brandRevoke = "Revoca asset"; brandRevokeDesc = "Segna un asset radice, sub-asset o token unico come contraffatto o compromesso. Tutte le scansioni future mostreranno REVOCATO."
+    brandRevoke = "Revoca asset"; brandRevokeDesc = "Segna un asset radice, sub-asset o token unico come contraffatto o compromesso. Tutte le scansioni future mostreranno REVOKATO."
     brandRevocationWorks = "Come funziona la revoca"
     brandDetect = "Rilevamento"; brandDetectDesc = "Il brand identifica un prodotto contraffatto con tag NFC clonato o compromesso."
     brandRevokeStep = "Revoca"; brandRevokeStepDesc = "Il brand chiama revoca: asset marcato nel backend come revocato."
@@ -877,6 +849,7 @@ val stringsFr = AppStrings().apply {
     howStep3 = "Le résultat est confirmé sur la blockchain"
     verifyingTitle = "Vérification…"
     verifyAuthentic = "Authentique"; verifyNotAuthentic = "Non authentique"; verifyRevoked = "Révoqué"
+    verifyUnableToVerify = "Impossible à vérifier"
     verifyCounterReplay = "Replay du compteur détecté : tentative de clonage possible."
     verifyNfcSig = "Vérification signature NFC"; verifyBlockchain = "Contrôle blockchain Ravencoin"
     verifyAssetInfo = "Détails du produit"
@@ -902,6 +875,7 @@ val stringsFr = AppStrings().apply {
     walletAssetsNotVerifiable = "Impossible de charger les actifs. Vérifiez votre connexion et appuyez sur actualiser pour réessayer."
     electrumOnline = "ElectrumX · En ligne"; electrumOffline = "ElectrumX · Hors ligne"; electrumChecking = "ElectrumX · Vérification…"
     walletRvnPrice = "RVN/USDT"
+    serverNotResponding = "Le serveur backend ne répond pas (%1). Impossible de vérifier l'authenticité du tag pour le moment."
     settingsServerOnline = "Serveur · En ligne"; settingsServerOffline = "Serveur · Hors ligne"; settingsServerChecking = "Serveur · Vérification…"
     settingsAdminKeyValid = "Clé vérifiée"; settingsAdminKeyInvalid = "Clé invalide"; settingsAdminKeyChecking = "Vérification…"
     settingsAdminKeyLocked = "Enregistrez d'abord l'URL du serveur"
@@ -964,12 +938,12 @@ val stringsFr = AppStrings().apply {
     walletReceiveTitle = "Recevoir RVN"; walletReceiveDesc = "Scannez ce QR ou copiez l'adresse ci-dessous pour recevoir Ravencoin."
     walletCopyDone = "Adresse copiée !"
     walletSendTitle = "Envoyer RVN"; walletSendAmountLabel = "Montant (RVN)"; walletSendAddrLabel = "Adresse du destinataire"
-    walletSendConfirm = "Envoyer"; walletSendSuccess = "Envoyé avec succès !"; walletSendFailed = "Envoi échoué"; walletTransferFailed = "Transfert échoué"; walletSendResult = "Envoyé %1 RVN (frais : %2 RVN) · tx : %3..."; walletTransferResult = "Transféré %1 · tx : %2..."; walletSendWarning = "Cette action est irréversible. Vérifiez l'adresse attentivement."
+    walletSendConfirm = "Envoyer"; walletSendSuccess = "Envoyé avec succès !"; walletSendFailed = "Envoi échoué"; walletTransferFailed = "Transfert échoué"; walletSendResult = "Envoyé %1 RVN (frais : %2 RVN) · tx : %3..."; walletTransferResult = "Transferred %1 · tx: %2..."; walletSendWarning = "Cette action est irréversible. Vérifiez l'adresse attentivement."
     walletSendFeeUnavailable = "Taux de frais réseau indisponible. Tous les nœuds sont inaccessibles, réessayez plus tard."
     walletSendDialogTitle = "Confirmer l'envoi"; walletSendDialogMsg = "Envoyer %1 RVN à %2 ?"
     walletFilterAll = "Tous"
     brandProgramTag = "Programmer tag NFC"; brandProgramTagDesc = "Écrire les clés AES et l'URL SUN sur une puce NTAG 424 DNA. Enregistrement automatique sur le backend."
-    brandProgramTagAssetHint = "Nom complet de l'actif, ex. FASHIONX/SAC01#SN0001"
+    brandProgramTagAssetHint = "Full asset name, e.g. FASHIONX/SAC01#SN0001"
     brandProgramTagStart = "Démarrer la programmation"
     brandNoWalletMsg = "Aucun portefeuille Ravencoin trouvé. Créez ou ajoutez un portefeuille dans l'onglet Portefeuille pour continuer."
     brandGoToWallet = "Aller au portefeuille"
@@ -1032,8 +1006,8 @@ val stringsFr = AppStrings().apply {
     fieldSerial = "Numéro de série"; fieldSerialHint = "Tag alphanumérique, ex. SN0001"
     btnIssueUnique = "Émettre jeton unique"
     adminKey = "Clé API admin"; adminKeyHint = "Enregistrée dans les paramètres. Utilisée pour authentifier les opérations backend. Les clés AES des puces ne sont jamais stockées."
-    initialMasterKeyLabel = "Clé maître initiale"; initialMasterKeyHint = "Clé AES hexadécimale optionnelle de 32 caractères pour les tags NTAG 424 DNA vierges ou préconfigurés par le fournisseur. Laisser vide pour la valeur par défaut 00000000000000000000000000000000."
-    assetNameHint = "Lettres majuscules et chiffres, max 32 caractères"; back = "Retour"; retry = "Réessayer"; scanQr = "Scanner le QR"
+    initialMasterKeyLabel = "Initial Master Key"; initialMasterKeyHint = "Clé AES hexadécimale optionnelle de 32 caractères pour les tags NTAG 424 DNA vierges ou préconfigurés par le fournisseur. Laisser vide pour la valeur par défaut 00000000000000000000000000000000."
+    assetNameHint = "Lettres majuscules et chiffres, max 32 caractères"; back = "Retour"; retry = "Réessayer"
     navAssets = "Assets"
     assetsTitle = "Mes assets"; assetsSubtitle = "Tokens dans votre portefeuille"
     assetsNoWallet = "Aucun portefeuille trouvé. Créez ou restaurez un portefeuille dans l'onglet Portefeuille."
@@ -1067,7 +1041,7 @@ val stringsDe = AppStrings().apply {
     onboardingLegalRisk = "Mit dem Fortfahren bestätigen Sie auch die finanziellen Risiken im Zusammenhang mit der Nutzung des Ravencoin-Wallets."
     featureNtag = "NTAG 424 DNA"; featureNtagDesc = "Hardware AES-128-Chip, unklonbar, manipulationssicher. Jeder Scan erzeugt eine eindeutige MAC-Signatur."
     featureSov = "Marken-souverän"; featureSovDesc = "Die Marke kontrolliert ihre eigenen AES-Schlüssel auf ihrem eigenen Server. Kein Drittvertrauen erforderlich."
-    featureRvn = "Blockchain-verifiziert"; featureRvnDesc = "Jedes authentifizierte Produkt wird in der Ravencoin-Blockchain erfasst. Oeffentlich und dauerhaft."
+    featureRvn = "Blockchain-verifiziert"; featureRvnDesc = "Jedes authentifiziertes Produkt wird in der Ravencoin-Blockchain erfasst. Oeffentlich und dauerhaft."
     featureRevoke = "Immer aktuell"; featureRevokeDesc = "Marken koennen verlorene oder gestohlene Produkte in Sekunden melden. Sie sehen immer den aktuellsten Status."
     onboardingBadgeConsumer = "Open Source · Ravencoin"
     onboardingTitleConsumer = "Echtheit Ihres Produkts pruefen"
@@ -1085,9 +1059,10 @@ val stringsDe = AppStrings().apply {
     howItWorks = "Wie es funktioniert"
     howStep1 = "Halten Sie Ihr Telefon an den NFC-Chip am Produkt"
     howStep2 = "Die einzigartige Signatur des Chips wird verifiziert"
-    howStep3 = "Das Ergebnis wird in der Blockchain bestaetigt"
+    howStep3 = "The result is confirmed on the blockchain"
     verifyingTitle = "Wird verifiziert…"
     verifyAuthentic = "Authentisch"; verifyNotAuthentic = "Nicht authentisch"; verifyRevoked = "Gesperrt"
+    verifyUnableToVerify = "Verifizierung nicht möglich"
     verifyCounterReplay = "Zaehler-Replay erkannt: moeglicher Klonversuch."
     verifyNfcSig = "NFC-Signatur verifizieren"; verifyBlockchain = "Ravencoin-Blockchain prüfen"
     verifyAssetInfo = "Produktdetails"
@@ -1113,6 +1088,7 @@ val stringsDe = AppStrings().apply {
     walletAssetsNotVerifiable = "Assets konnten nicht geladen werden. Verbindung prüfen und aktualisieren zum Wiederholen."
     electrumOnline = "ElectrumX · Online"; electrumOffline = "ElectrumX · Offline"; electrumChecking = "ElectrumX · Prüfung…"
     walletRvnPrice = "RVN/USDT"
+    serverNotResponding = "Der Backend-Server antwortet nicht (%1). Die Echtheit des Tags kann derzeit nicht überprüft werden."
     settingsServerOnline = "Server · Online"; settingsServerOffline = "Server · Offline"; settingsServerChecking = "Server · Prüfung…"
     settingsAdminKeyValid = "Schlüssel geprüft"; settingsAdminKeyInvalid = "Schlüssel ungültig"; settingsAdminKeyChecking = "Prüfung…"
     settingsAdminKeyLocked = "Server-URL zuerst speichern"
@@ -1299,6 +1275,7 @@ val stringsEs = AppStrings().apply {
     howStep3 = "El resultado se confirma en la blockchain"
     verifyingTitle = "Verificando…"
     verifyAuthentic = "Auténtico"; verifyNotAuthentic = "No auténtico"; verifyRevoked = "Revocado"
+    verifyUnableToVerify = "Imposible verificar"
     verifyCounterReplay = "Repeticion de contador detectada: posible intento de clonacion."
     verifyNfcSig = "Verificando firma NFC"; verifyBlockchain = "Comprobando blockchain Ravencoin"
     verifyAssetInfo = "Detalles del producto"
@@ -1324,7 +1301,9 @@ val stringsEs = AppStrings().apply {
     walletAssetsNotVerifiable = "No se pueden cargar los activos. Verifica tu conexión y pulsa actualizar para reintentar."
     electrumOnline = "ElectrumX · En línea"; electrumOffline = "ElectrumX · Sin conexión"; electrumChecking = "ElectrumX · Verificando…"
     walletRvnPrice = "RVN/USDT"
+    serverNotResponding = "El servidor backend no responde (%1). No se puede verificar la autenticidad del tag en este momento."
     settingsServerOnline = "Servidor · En línea"; settingsServerOffline = "Servidor · Sin conexión"; settingsServerChecking = "Servidor · Verificando…"
+
     settingsAdminKeyValid = "Clave verificada"; settingsAdminKeyInvalid = "Clave inválida"; settingsAdminKeyChecking = "Verificando…"
     settingsAdminKeyLocked = "Guarda primero la URL del servidor"
     settingsAdminKeyWrongType = "Esta es una clave de operador, no una clave admin"
@@ -1351,7 +1330,7 @@ val stringsEs = AppStrings().apply {
     brandIssueSub = "Emitir subactivo"; brandIssueSubDesc = "Crear línea de producto (ej. FASHIONX/BOLSO01)"
     brandRegChip = "Registrar chip NFC"; brandRegChipDesc = "Vincular UID de chip NTAG 424 DNA a un activo existente."
     brandTransfer = "Transferir token"; brandTransferDesc = "Enviar activo al wallet del comprador (~0,01 RVN comisión)."
-    brandRevoke = "Revocar activo"; brandRevokeDesc = "Marca un activo raíz, subactivo o token único como falsificado o comprometido. Todos los escaneos futuros mostrarán REVOCADO."
+    brandRevoke = "Revocar activo"; brandRevokeDesc = "Marca un activo raíz, subactivo o token único como falsificado o comprometido. Todos los escaneos futuros mostrarán REVOKADO."
     brandRevocationWorks = "Cómo funciona la revocación"
     brandDetect = "Detección"; brandDetectDesc = "La marca identifica un producto falsificado con tag NFC clonado."
     brandRevokeStep = "Revocación"; brandRevokeStepDesc = "La marca llama a revocar: activo marcado en backend."
@@ -1430,7 +1409,7 @@ val stringsEs = AppStrings().apply {
     imagePickDone = "Imagen subida a IPFS"; imagePickError = "Error de subida, verifica el nodo IPFS"
     imageForAsset = "Imagen del activo (opcional)"; imageForAssetHint = "Logo / foto del producto / foto del número de serie. Almacenada permanentemente en IPFS."
     pinataJwtLabel = "Pinata JWT (subida IPFS)"
-    pinataJwtHint = "Pega tu token JWT de Pinata. Las imagenes y metadatos se suben directamente a Pinata, sin nodo Kubo."
+    pinataJwtHint = "Pega tu token JWT de Pinata. Las imagenes y metadatados se suben directamente a Pinata, sin nodo Kubo."
     pinataJwtValid = "Token verificado"; pinataJwtInvalid = "Token no válido"; pinataJwtChecking = "Verificando..."
     kuboNodeLabel = "URL nodo Kubo (API IPFS)"
     kuboNodeHint = "Pega la URL HTTP API del nodo Kubo. Ejemplos: http://10.0.2.2:5001 o https://ipfs.example.com/api/v0"
@@ -1501,6 +1480,7 @@ val stringsZh = cloneStrings(stringsEn).apply {
     nfcDisabled = "NFC 已关闭"; nfcDisabledDesc = "请在系统设置中启用 NFC 后再扫描标签"
     howItWorks = "工作原理"; howStep1 = "将手机靠近产品上的 NFC 芯片"; howStep2 = "芯片的唯一签名被验证"; howStep3 = "结果在区块链上得到确认"
     verifyingTitle = "验证中…"; verifyAuthentic = "真实"; verifyNotAuthentic = "非真实"; verifyRevoked = "已撤销"
+    verifyUnableToVerify = "无法验证"
     verifyCounterReplay = "检测到计数器重放：可能存在克隆攻击。"
     verifyNfcSig = "正在验证 NFC 签名"; verifyBlockchain = "正在检查 Ravencoin 区块链"
     verifyAssetInfo = "产品详情"; verifyAsset = "产品"; verifyDescription = "描述"; verifyWebsite = "网站"
@@ -1516,6 +1496,7 @@ val stringsZh = cloneStrings(stringsEn).apply {
     walletDeleteTitle = "删除钱包"; walletDeleteMsg = "这将从应用中永久删除你的钱包。请确认你已经保存了恢复短语。此操作无法撤销。"; walletDeleteBtn = "删除"; walletCancelBtn = "取消"
     walletMyAssets = "我的资产"; walletAssetsLoading = "正在加载资产…"; walletNoAssets = "此地址下未找到资产。"; walletAssetsNotVerifiable = "无法加载资产。请检查网络后点击刷新重试。"
     electrumOnline = "ElectrumX · 在线"; electrumOffline = "ElectrumX · 离线"; electrumChecking = "ElectrumX · 检查中…"; walletRvnPrice = "RVN/USDT"
+    serverNotResponding = "后端服务器未响应 (%1)。目前无法验证标签的真实性。"
     settingsServerOnline = "服务器 · 在线"; settingsServerOffline = "服务器 · 离线"; settingsServerChecking = "服务器 · 检查中…"
     settingsAdminKeyValid = "密钥已验证"; settingsAdminKeyInvalid = "密钥无效"; settingsAdminKeyChecking = "验证中…"; settingsAdminKeyLocked = "请先保存服务器 URL"; settingsAdminKeyWrongType = "这是操作员密钥，不是管理员密钥"
     operatorKey = "操作员密钥"; operatorKeyHint = "可选：用于 NFC 标签编程、发行唯一代币和代币转移的受限密钥，由管理员设置。"
@@ -1537,7 +1518,7 @@ val stringsZh = cloneStrings(stringsEn).apply {
     back = "返回"; retry = "重试"; scanQr = "扫描二维码"
     writeTitle = "写入 NFC 标签"
 ; writeStep1Title = "轻触标签"; writeStep1Hint = "将手机贴近 NFC 芯片以读取 UID。"; writeStep1Label = "第 1 步，共 3 步"; writeIssuingTitle = "正在 Ravencoin 上发行"; writeIssuingHint = "正在上传元数据到 IPFS 并创建子资产…"; writeStep3Title = "再次轻触标签"; writeStep3Hint = "将手机再次贴近同一标签以写入 AES 密钥和 SUN URL。"; writeStep3Label = "第 3 步，共 3 步"; writeSuccessTitle = "标签已写入！"; writeSuccessHint = "NFC 芯片已成功配置。\n请安全保存下方密钥，它们不会存储在其他地方。"; writeSaveKeys = "请将这些密钥保存在安全保险库中。没有它们，你将无法撤销标签或验证读取。"; writeErrorTitle = "错误"; writeCloseBtn = "关闭"
-    walletReceiveBtn = "接收"; walletSendBtn = "发送"; walletReceiveTitle = "接收 RVN"; walletReceiveDesc = "扫描二维码或复制下方地址以接收 Ravencoin。"; walletCopyDone = "地址已复制！"; walletSendTitle = "发送 RVN"; walletSendAmountLabel = "数量 (RVN)"; walletSendAddrLabel = "接收地址"; walletSendConfirm = "发送"; walletSendSuccess = "发送成功！"; walletSendWarning = "此操作无法撤销。请仔细确认地址。"; walletSendFeeUnavailable = "无法获取网络费率。所有节点不可达，请稍后再试。"; walletSendDialogTitle = "确认发送"; walletSendDialogMsg = "向 %2 发送 %1 RVN？"
+    walletReceiveBtn = "接收"; walletSendBtn = "发送"; walletReceiveTitle = "接收 RVN"; walletReceiveDesc = "扫描二维码或复制下方地址以接收 Ravencoin。"; walletCopyDone = "地址已复制！"; walletSendTitle = "发送 RVN"; walletSendAmountLabel = "数量 (RVN)"; walletSendAddrLabel = "接收地址"; walletSendConfirm = "发送"; walletSendSuccess = "发送成功！"; walletSendWarning = "此操作无法撤销。请仔细确认地址。"; walletSendFeeUnavailable = "无法获取 network 费率。所有节点不可达，请稍后再试。"; walletSendDialogTitle = "确认发送"; walletSendDialogMsg = "向 %2 发送 %1 RVN？"
     walletFilterAll = "全部"; brandProgramTag = "写入 NFC 标签"; brandProgramTagDesc = "将 AES 密钥和 SUN URL 写入 NTAG 424 DNA 芯片，并自动在后端注册芯片。"; brandProgramTagAssetHint = "完整资产名称，例如 FASHIONX/BAG01#SN0001"; brandProgramTagStart = "开始写入标签"; brandNoWalletMsg = "未找到 Ravencoin 钱包。请先在钱包标签页创建或添加钱包。"; brandGoToWallet = "前往钱包"
     settingsDonateBtn = "向 RavenTag 捐赠 RVN"; settingsDonateTitle = "捐赠 RavenTag"; settingsDonateDesc = "支持 RavenTag 开源协议的持续开发。"; settingsDonateMsg = "RavenTag 是一个免费、开源的 NFC 认证协议，面向各种规模的品牌。如果你觉得它有用，欢迎考虑捐赠少量 RVN，以支持持续开发、文档编写和新功能。每一笔捐赠都意义重大。感谢你支持开源！"
     brandNoFundsTitle = "余额不足"; brandNoFundsMsg = "钱包中没有 RVN。请先充值后再发行资产。你仍然可以继续查看表单。"; brandNoFundsContinue = "仍然继续"
@@ -1577,10 +1558,11 @@ val stringsJa = cloneStrings(stringsEn).apply {
     scanSubtitle = "製品の正規性を確認する"; scanTapping = "製品に端末をかざしてください"; scanTapHint = "製品に内蔵された NFC チップにスマートフォンをかざしてください"; scanIdle = "スキャンを開始"
     nfcNotSupported = "NFC 非対応"; nfcNotSupportedDesc = "この端末には NFC ハードウェアがありません"; nfcDisabled = "NFC が無効です"; nfcDisabledDesc = "タグをスキャンするにはシステム設定で NFC を有効にしてください"
     howItWorks = "仕組み"; howStep1 = "製品の NFC チップにスマートフォンをかざします"; howStep2 = "チップの固有署名が検証されます"; howStep3 = "結果がブロックチェーンで確認されます"
-    verifyingTitle = "検証中…"; verifyAuthentic = "正規品"; verifyNotAuthentic = "非正規"; verifyRevoked = "失効済み"; verifyCounterReplay = "カウンターの再利用を検出しました。クローンの可能性があります。"; verifyNfcSig = "NFC 署名を検証中"; verifyBlockchain = "Ravencoin ブロックチェーンを確認中"; verifyAssetInfo = "製品情報"; verifyAsset = "製品"; verifyDescription = "説明"; verifyWebsite = "Web サイト"; verifySecDetails = "認証詳細"; verifyTagUid = "タグ UID"; verifyScanCount = "スキャン回数"; verifyNfcPubId = "NFC 公開 ID"; verifyCrypto = "暗号"; verifyRevokedBy = "ブランドが報告済み"; verifyScanAgain = "別の製品をスキャン"
+    verifyingTitle = "検証中…"; verifyAuthentic = "正規品"; verifyNotAuthentic = "非正規"; verifyRevoked = "失効済み"; verifyUnableToVerify = "確認できません"; verifyCounterReplay = "カウンターの再利用を検出しました。クローンの可能性があります。"; verifyNfcSig = "NFC 署名を検証中"; verifyBlockchain = "Ravencoin ブロックチェーンを確認中"; verifyAssetInfo = "製品情報"; verifyAsset = "製品"; verifyDescription = "説明"; verifyWebsite = "Web サイト"; verifySecDetails = "認証詳細"; verifyTagUid = "タグ UID"; verifyScanCount = "スキャン回数"; verifyNfcPubId = "NFC 公開 ID"; verifyCrypto = "暗号"; verifyRevokedBy = "ブランドが報告済み"; verifyScanAgain = "別の製品をスキャン"
     walletTitle = "ブランドウォレット"; walletSubtitle = "Ravencoin 資産管理"; walletNoWallet = "ウォレットがありません"; walletNoWalletDesc = "Ravencoin 資産を管理するには、新しいウォレットを作成するか既存ウォレットを復元してください。"; walletGenerate = "新規ウォレット作成"; walletRestore = "ニーモニックから復元"; walletMnemonicPlaceholder = "12語のニーモニックを入力…"; walletRestoreBtn = "ウォレットを復元"; mnemonicSpaceError = "スペースは使えません。各入力欄に 1 単語ずつ入力してください"; walletBalance = "Ravencoin 残高"; walletLoading = "読み込み中…"; walletReceiveAddr = "受取アドレス"; walletRecoveryPhrase = "リカバリーフレーズ"; walletNeverShare = "リカバリーフレーズは絶対に共有しないでください。これを知る人は資産にアクセスできます。"; walletTapReveal = "目のアイコンをタップしてリカバリーフレーズを表示します。"
     walletAssetOps = "資産操作"; walletIssueRoot = "ルート資産を発行"; walletIssueRootDesc = "新しい親資産を作成 (500 RVN 必要)"; walletIssueSub = "サブ資産を発行"; walletIssueSubDesc = "PARENT/CHILD 資産を作成"; walletRevoke = "資産を失効"; walletRevokeDesc = "資産を偽造品としてマーク（バックエンド失効）"; walletDeleteTitle = "ウォレット削除"; walletDeleteMsg = "この操作でアプリからウォレットが完全に削除されます。リカバリーフレーズを保存済みであることを確認してください。元に戻せません。"; walletDeleteBtn = "削除"; walletCancelBtn = "キャンセル"
     walletMyAssets = "保有アセット"; walletAssetsLoading = "資産を読み込み中…"; walletNoAssets = "このアドレスには資産がありません。"; walletAssetsNotVerifiable = "資産を読み込めませんでした。接続を確認し、再読込してください。"; electrumOnline = "ElectrumX · オンライン"; electrumOffline = "ElectrumX · オフライン"; electrumChecking = "ElectrumX · 確認中…"; walletRvnPrice = "RVN/USDT"
+    serverNotResponding = "バックエンドサーバーが応答していません (%1)。現時点ではタグの真正性を確認できません。"
     settingsServerOnline = "サーバー · オンライン"; settingsServerOffline = "サーバー · オフライン"; settingsServerChecking = "サーバー · 確認中…"; settingsAdminKeyValid = "キー確認済み"; settingsAdminKeyInvalid = "キー無効"; settingsAdminKeyChecking = "確認中…"; settingsAdminKeyLocked = "先にサーバー URL を保存してください"; settingsAdminKeyWrongType = "これは管理者キーではなくオペレーターキーです"; operatorKey = "オペレーターキー"; operatorKeyHint = "任意: NFC タグ書き込み、ユニークトークン発行、トークン転送に使用できる制限付きキー。管理者が設定します。"; settingsOperatorKeyValid = "キー確認済み"; settingsOperatorKeyInvalid = "キー無効"; settingsOperatorKeyChecking = "確認中…"; settingsOperatorKeyLocked = "先にサーバー URL を保存してください"; settingsOperatorKeyWrongType = "これはオペレーターキーではなく管理者キーです"
     brandOwnershipTransfer = "所有権の移転"; brandTransferRoot = "ルート資産を移転"; brandTransferRootDesc = "ブランド所有権を別のウォレットへ移します。子トークンは引き続き有効です。"; brandTransferSub = "サブ資産を移転"; brandTransferSubDesc = "製品ラインの所有権を別ウォレットへ移します。ユニークトークンは引き続き有効です。"; transferRootTitle = "ルート資産を移転"; transferRootSubtitle = "手数料 約 0.01 RVN"; transferSubTitle = "サブ資産を移転"; transferSubSubtitle = "手数料 約 0.01 RVN"; transferOwnershipWarning = "警告: この資産を移転すると、すべての子トークンの管理権と新規発行権を永久に手放します。この操作は取り消せません。"; walletAssetRoot = "ルート"; walletAssetSub = "サブ資産"; walletAssetUnique = "ユニーク"
     brandTitle = "ブランドダッシュボード"; brandSubtitle = "資産と認証タグを管理"; brandProtocolDesc = "すべての操作には管理者 API キーと資金のある Ravencoin ノードが必要です。費用: ルート資産 500 RVN · サブ資産 100 RVN · ユニークトークン 5 RVN。"; brandAssetOps = "資産操作"; brandAntiCf = "偽造防止"; brandIssueRoot = "ルート資産を発行"; brandIssueRootDesc = "新しいブランド親資産を作成 (例: FASHIONX)"; brandIssueSub = "サブ資産を発行"; brandIssueSubDesc = "製品ライン (例: FASHIONX/BAG01) またはバリアントを作成"; brandRegChip = "NFC チップを登録"; brandRegChipDesc = "NTAG 424 DNA チップ UID を既存資産にリンクします。検証前に必要です。"; brandTransfer = "トークンを転送"; brandTransferDesc = "購入証明として資産を購入者ウォレットに送信します (手数料 約 0.01 RVN)。"; brandRevoke = "資産を失効"; brandRevokeDesc = "ルート資産、サブ資産、またはユニークトークンを偽造または侵害としてマークします。今後のスキャンはすべて失効済みと表示されます。"; brandRevocationWorks = "失効の仕組み"; brandDetect = "検出"; brandDetectDesc = "ブランドがクローンまたは侵害された NFC タグの偽造品を検出します。"; brandRevokeStep = "失効"; brandRevokeStepDesc = "ブランドが revoke を実行すると、資産はバックエンドで失効としてマークされます。"; brandConsumer = "消費者チェック"; brandConsumerDesc = "消費者がタグをスキャンすると、アプリはブロックチェーンと失効リストの両方を確認します。失効済み = 非正規。"
@@ -1591,8 +1573,8 @@ val stringsJa = cloneStrings(stringsEn).apply {
     writeTitle = "NFC タグを書き込む"; writeStep1Title = "タグをかざす"; writeStep1Hint = "UID を読み取るためにスマートフォンを NFC チップに近づけてください。"; writeStep1Label = "ステップ 1 / 3"; writeIssuingTitle = "Ravencoin 上で発行中"; writeIssuingHint = "IPFS にメタデータをアップロードし、サブ資産を作成しています…"; writeStep3Title = "もう一度タグをかざす"; writeStep3Hint = "同じタグに AES 鍵と SUN URL を書き込むため、もう一度スマートフォンを近づけてください。"; writeStep3Label = "ステップ 3 / 3"; writeSuccessTitle = "タグの書き込み完了！"; writeSuccessHint = "NFC チップの設定が完了しました。\n以下の鍵は安全に保存してください。他の場所には保存されません。"; writeSaveKeys = "これらの鍵を安全な保管庫に保存してください。失うとタグの失効や検証ができなくなります。"; writeErrorTitle = "エラー"; writeCloseBtn = "閉じる"
     walletReceiveBtn = "受取"; walletSendBtn = "送信"; walletReceiveTitle = "RVN を受け取る"; walletReceiveDesc = "この QR コードをスキャンするか、下のアドレスをコピーして Ravencoin を受け取ってください。"; walletCopyDone = "アドレスをコピーしました！"; walletSendTitle = "RVN を送信"; walletSendAmountLabel = "数量 (RVN)"; walletSendAddrLabel = "送付先アドレス"; walletSendConfirm = "送信"; walletSendSuccess = "送信に成功しました！"; walletSendWarning = "この操作は取り消せません。アドレスを十分確認してください。"; walletSendFeeUnavailable = "ネットワーク手数料率を取得できません。全ノードに接続できないため、後でもう一度試してください。"; walletSendDialogTitle = "送信確認"; walletSendDialogMsg = "%2 に %1 RVN を送信しますか？"
     walletFilterAll = "すべて"; brandProgramTag = "NFC タグを書き込む"; brandProgramTagDesc = "AES 鍵と SUN URL を NTAG 424 DNA チップに書き込みます。バックエンドにも自動登録されます。"; brandProgramTagAssetHint = "完全な資産名。例: FASHIONX/BAG01#SN0001"; brandProgramTagStart = "タグ書き込み開始"; brandNoWalletMsg = "Ravencoin ウォレットが見つかりません。続行するにはウォレットタブで作成または追加してください。"; brandGoToWallet = "ウォレットへ移動"
-    settingsDonateBtn = "RavenTag に RVN を寄付"; settingsDonateTitle = "RavenTag に寄付"; settingsDonateDesc = "RavenTag オープンソースプロトコルの開発を支援します。"; settingsDonateMsg = "RavenTag はあらゆる規模のブランド向けに作られた、無料でオープンソースの NFC 認証プロトコルです。役立つと感じたら、継続的な開発、ドキュメント整備、新機能追加を支えるために少額の RVN 寄付をご検討ください。どんな金額でも大きな助けになります。オープンソースへの支援に感謝します。"; brandNoFundsTitle = "残高不足"; brandNoFundsMsg = "ウォレットに RVN がありません。資産発行には入金が必要です。フォームの表示は継続できます。"; brandNoFundsContinue = "このまま続行"
-    navSettings = "設定"; settingsTitle = "設定"; settingsBrandName = "ブランド名"; settingsBrandNameHint = "アプリに表示されるブランド名 (例: Fashionx)"; settingsVerifyUrl = "検証サーバー URL"; settingsVerifyUrlHint = "商品を発行したブランドのバックエンド URL。スキャンとチップ書き込みに使用されます。"; settingsVerifyUrlConsumer = "ブランドサーバー URL"; settingsVerifyUrlHintConsumer = "確認したい製品のブランドが提供する URL を入力してください。製品パッケージまたはブランドのウェブサイトで確認できます。"; settingsSave = "保存"; settingsSaved = "保存しました！"; settingsAbout = "情報"; settingsVersion = "バージョン"; settingsRequireAuth = "起動時に認証を要求"; settingsRequireAuthDesc = "アプリ起動時に PIN または生体認証を要求します (ウォレットが必要)"; settingsRequireAuthRisk = "無効にすると安全性が低下します。端末にアクセスできる人なら誰でもアプリを開けます。"; settingsNoLockScreen = "ロック画面が設定されていません。認証はスキップされます。ウォレット保護のため、端末設定で PIN または指紋を設定してください。"; settingsAllowScreenshots = "スクリーンショットを許可"; settingsAllowScreenshotsDesc = "画面キャプチャ保護 (FLAG_SECURE) を無効にします。ウォレット鍵とニーモニックがサムネイルや録画に表示される可能性があります。"; settingsAllowScreenshotsWarning = "スクリーンショットが有効です: ウォレット鍵とニーモニックは画面キャプチャから保護されません。"; settingsAllowScreenshotsDialogTitle = "セキュリティ警告"; settingsAllowScreenshotsDialogBody = "スクリーンショットを許可すると FLAG_SECURE 保護が解除されます。ウォレット鍵や復元フレーズが画面録画、サムネイル、近くのカメラに記録される可能性があります。\n\n信頼できる個人端末でのみ有効にしてください。"; settingsAllowScreenshotsConfirm = "理解しました。スクリーンショットを有効にします"; settingsNotifications = "通知を有効にする"; settingsNotificationsDesc = "RVN またはアセットを受信したときに通知します。"; authTitle = "RavenTag"; authSubtitle = "ウォレットにアクセスするには認証してください"
+    settingsDonateBtn = "RavenTag に RVN を寄付"; settingsDonateTitle = "RavenTag に寄付"; settingsDonateDesc = "RavenTag オープンソースプロトコルの開発を支援します。"; settingsDonateMsg = "RavenTag はあらゆる規模のブランド向けに作られた、無料でオープンソースの NFC 認証プロトコルです。役立つと感じたら、継続的な開発、ドキュメント整備、新機能追加を支えるために少額ের RVN 寄付をご検討ください。どんな金額でも大きな助けになります。オープンソースへの支援に感謝します。"; brandNoFundsTitle = "残高不足"; brandNoFundsMsg = "ウォレットに RVN がありません。資産発行には入金が必要です。フォームの表示は継続できます。"; brandNoFundsContinue = "このまま続行"
+    navSettings = "設定"; settingsTitle = "設定"; settingsBrandName = "ブランド名"; settingsBrandNameHint = "アプリに表示されるブランド名 (例: Fashionx)"; settingsVerifyUrl = "検証サーバー URL"; settingsVerifyUrlHint = "商品を発行したブランド host のバックエンド URL。スキャンとチップ書き込みに使用されます。"; settingsVerifyUrlConsumer = "ブランドサーバー URL"; settingsVerifyUrlHintConsumer = "確認したい製品のブランドが提供する URL を入力してください。製品パッケージまたはブランドのウェブサイトで確認できます。"; settingsSave = "保存"; settingsSaved = "保存しました！"; settingsAbout = "情報"; settingsVersion = "バージョン"; settingsRequireAuth = "起動時に認証を要求"; settingsRequireAuthDesc = "アプリ起動時に PIN または生体認証を要求します (ウォレットが必要)"; settingsRequireAuthRisk = "無効にすると安全性が低下します。端末にアクセスできる人なら誰でもアプリを開けます。"; settingsNoLockScreen = "ロック画面が設定されていません。認証はスキップされます。ウォレット保護のため、端末設定で PIN または指紋を設定してください。"; settingsAllowScreenshots = "スクリーンショットを許可"; settingsAllowScreenshotsDesc = "画面キャプチャ保護 (FLAG_SECURE) を無効にします。ウォレット鍵とニーモニックがサムネイルや録画に表示される可能性があります。"; settingsAllowScreenshotsWarning = "スクリーンショットが有効です: ウォレット鍵とニーモニックは画面キャプチャから保護されません。"; settingsAllowScreenshotsDialogTitle = "セキュリティ警告"; settingsAllowScreenshotsDialogBody = "スクリーンショットを許可すると FLAG_SECURE 保護が解除されます。ウォレット鍵や復元フレーズが画面録画、サムネイル、近くのカメラに記録される可能性があります。\n\n信頼できる個人端末でのみ有効にしてください。"; settingsAllowScreenshotsConfirm = "理解しました。スクリーンショットを有効にします"; settingsNotifications = "通知を有効にする"; settingsNotificationsDesc = "RVN またはアセットを受信したときに通知します。"; authTitle = "RavenTag"; authSubtitle = "ウォレットにアクセスするには認証してください"
     // QR Scanner
     qrScannerTitle = "QR コードをスキャン"
     qrScannerHint = "Ravencoin 住所の QR コードにカメラを向けてください"
@@ -1605,7 +1587,7 @@ val stringsJa = cloneStrings(stringsEn).apply {
     walletControlKeyDesc = "バックエンドのデプロイ時に設定される管理者またはオペレーターキーです。役割と権限を決定します。"
     walletControlKeyInvalid = "キーが認識されません。有効な管理者またはオペレーターキーを入力してください。"
     walletRoleAdmin = "管理者"; walletRoleOperator = "オペレーター"
-    onboardingBadgeConsumer = "オープンソース · Ravencoin"; onboardingTitleConsumer = "製品の正規性を確認する"; onboardingDescConsumer = "メーカーが製品に埋め込んだ NFC チップにスマートフォンをかざして、本物かどうかをすぐに確認しましょう。"; featureNtagConsumer = "偽造不可能"; featureNtagDescConsumer = "製品に内蔵されたチップはスキャンのたびに固有の署名を生成します。複製することはできません。"; featureSovConsumer = "仲介者なし"; featureSovDescConsumer = "各ブランドが独自の認証基盤を管理します。中央機関も仲介者もありません。"
+    onboardingBadgeConsumer = "オープンソース · Ravencoin"; onboardingTitleConsumer = "製品の正規性を確認する"; onboardingDescConsumer = "メーカーが製品 in 埋め込んだ NFC チップにスマートフォンをかざして、本物かどうかをすぐに確認しましょう。"; featureNtagConsumer = "偽造不可能"; featureNtagDescConsumer = "製品に内蔵されたチップはスキャンのたびに固有の署名を生成します。複製することはできません。"; featureSovConsumer = "仲介者なし"; featureSovDescConsumer = "各ブランドが独自の認証基盤を管理します。中央機関も仲介者もありません。"
 }
 
 /**
@@ -1624,9 +1606,10 @@ val stringsKo = cloneStrings(stringsEn).apply {
     scanSubtitle = "제품의 정품 여부를 확인하세요"; scanTapping = "휴대폰을 제품에 가까이 대세요"; scanTapHint = "제품에 내장된 NFC 칩에 스마트폰을 가져다 대세요"; scanIdle = "스캔 시작"
     nfcNotSupported = "NFC 미지원"; nfcNotSupportedDesc = "이 기기에는 NFC 하드웨어가 없습니다"; nfcDisabled = "NFC 비활성화됨"; nfcDisabledDesc = "태그를 스캔하려면 시스템 설정에서 NFC를 활성화하세요"
     howItWorks = "작동 방식"; howStep1 = "제품의 NFC 칩에 스마트폰을 가져다 댑니다"; howStep2 = "칩의 고유 서명이 검증됩니다"; howStep3 = "결과가 블록체인에서 확인됩니다"
-    verifyingTitle = "검증 중…"; verifyAuthentic = "정품"; verifyNotAuthentic = "비정품"; verifyRevoked = "폐기됨"; verifyCounterReplay = "카운터 재사용이 감지되었습니다. 복제 시도일 수 있습니다."; verifyNfcSig = "NFC 서명 검증 중"; verifyBlockchain = "Ravencoin 블록체인 확인 중"; verifyAssetInfo = "제품 정보"; verifyAsset = "제품"; verifyDescription = "설명"; verifyWebsite = "웹사이트"; verifySecDetails = "인증 세부 정보"; verifyTagUid = "태그 UID"; verifyScanCount = "스캔 횟수"; verifyNfcPubId = "NFC 공개 ID"; verifyCrypto = "암호"; verifyRevokedBy = "브랜드에서 신고됨"; verifyScanAgain = "다른 제품 스캔"
+    verifyingTitle = "검증 중…"; verifyAuthentic = "정품"; verifyNotAuthentic = "비정품"; verifyRevoked = "폐기됨"; verifyUnableToVerify = "확인할 수 없음"; verifyCounterReplay = "카운터 재사용이 감지되었습니다. 복제 시도일 수 있습니다."; verifyNfcSig = "NFC 서명 검증 중"; verifyBlockchain = "Ravencoin 블록체인 확인 중"; verifyAssetInfo = "제품 정보"; verifyAsset = "제품"; verifyDescription = "설명"; verifyWebsite = "웹사이트"; verifySecDetails = "인증 세부 정보"; verifyTagUid = "태그 UID"; verifyScanCount = "스캔 횟수"; verifyNfcPubId = "NFC 공개 ID"; verifyCrypto = "암호"; verifyRevokedBy = "브랜드에서 신고됨"; verifyScanAgain = "다른 제품 스캔"
     walletTitle = "브랜드 지갑"; walletSubtitle = "Ravencoin 자산 관리"; walletNoWallet = "지갑 없음"; walletNoWalletDesc = "Ravencoin 자산을 관리하려면 새 지갑을 생성하거나 기존 지갑을 복구하세요."; walletGenerate = "새 지갑 생성"; walletRestore = "니모닉으로 복구"; walletMnemonicPlaceholder = "12단어 니모닉 입력…"; walletRestoreBtn = "지갑 복구"; mnemonicSpaceError = "공백은 허용되지 않습니다. 각 칸에 한 단어씩 입력하세요"; walletBalance = "Ravencoin 잔액"; walletLoading = "로딩 중…"; walletReceiveAddr = "수신 주소"; walletRecoveryPhrase = "복구 구문"; walletNeverShare = "복구 구문은 절대 공유하지 마세요. 이를 가진 사람은 자금에 접근할 수 있습니다."; walletTapReveal = "눈 아이콘을 눌러 복구 구문을 표시합니다."
     walletAssetOps = "자산 작업"; walletIssueRoot = "루트 자산 발행"; walletIssueRootDesc = "새 부모 자산 생성 (500 RVN 필요)"; walletIssueSub = "서브 자산 발행"; walletIssueSubDesc = "PARENT/CHILD 자산 생성"; walletRevoke = "자산 폐기"; walletRevokeDesc = "자산을 위조로 표시 (백엔드 폐기)"; walletDeleteTitle = "지갑 삭제"; walletDeleteMsg = "이 작업은 앱에서 지갑을 영구히 삭제합니다. 복구 구문을 저장했는지 확인하세요. 되돌릴 수 없습니다."; walletDeleteBtn = "삭제"; walletCancelBtn = "취소"; walletMyAssets = "내 자산"; walletAssetsLoading = "자산 로딩 중…"; walletNoAssets = "이 주소에 자산이 없습니다."; walletAssetsNotVerifiable = "자산을 불러올 수 없습니다. 연결을 확인하고 새로고침하세요."; electrumOnline = "ElectrumX · 온라인"; electrumOffline = "ElectrumX · 오프라인"; electrumChecking = "ElectrumX · 확인 중…"; walletRvnPrice = "RVN/USDT"
+    serverNotResponding = "백엔드 서버가 응답하지 않습니다 (%1). 현재 태그의 정품 여부를 확인할 수 없습니다."
     settingsServerOnline = "서버 · 온라인"; settingsServerOffline = "서버 · 오프라인"; settingsServerChecking = "서버 · 확인 중…"; settingsAdminKeyValid = "키 확인됨"; settingsAdminKeyInvalid = "키가 유효하지 않음"; settingsAdminKeyChecking = "확인 중…"; settingsAdminKeyLocked = "먼저 서버 URL을 저장하세요"; settingsAdminKeyWrongType = "이 키는 관리자 키가 아니라 운영자 키입니다"; operatorKey = "운영자 키"; operatorKeyHint = "선택 사항: NFC 태그 프로그래밍, 고유 토큰 발행, 토큰 전송이 가능한 제한 키입니다. 관리자가 설정합니다."; settingsOperatorKeyValid = "키 확인됨"; settingsOperatorKeyInvalid = "키가 유효하지 않음"; settingsOperatorKeyChecking = "확인 중…"; settingsOperatorKeyLocked = "먼저 서버 URL을 저장하세요"; settingsOperatorKeyWrongType = "이 키는 운영자 키가 아니라 관리자 키입니다"
     brandOwnershipTransfer = "소유권 이전"; brandTransferRoot = "루트 자산 이전"; brandTransferRootDesc = "브랜드 소유권을 다른 지갑으로 이전합니다. 모든 하위 토큰은 계속 유효합니다."; brandTransferSub = "서브 자산 이전"; brandTransferSubDesc = "제품 라인 소유권을 다른 지갑으로 이전합니다. 모든 고유 토큰은 계속 유효합니다."; transferRootTitle = "루트 자산 이전"; transferRootSubtitle = "수수료 약 0.01 RVN"; transferSubTitle = "서브 자산 이전"; transferSubSubtitle = "수수료 약 0.01 RVN"; transferOwnershipWarning = "경고: 이 자산을 이전하면 모든 하위 토큰의 제어권과 새 발행 권한을 영구히 넘기게 됩니다. 이 작업은 되돌릴 수 없습니다."; walletAssetRoot = "루트"; walletAssetSub = "서브 자산"; walletAssetUnique = "고유"
     brandTitle = "브랜드 대시보드"; brandSubtitle = "자산과 인증 태그 관리"; brandProtocolDesc = "모든 작업에는 관리자 API 키와 자금이 있는 Ravencoin 노드가 필요합니다. 비용: 루트 자산 500 RVN · 서브 자산 100 RVN · 고유 토큰 5 RVN."; brandAssetOps = "자산 작업"; brandAntiCf = "위조 방지"; brandIssueRoot = "루트 자산 발행"; brandIssueRootDesc = "새 브랜드 부모 자산 생성 (예: FASHIONX)"; brandIssueSub = "서브 자산 발행"; brandIssueSubDesc = "제품 라인 (예: FASHIONX/BAG01) 또는 변형 생성"; brandRegChip = "NFC 칩 등록"; brandRegChipDesc = "NTAG 424 DNA 칩 UID를 기존 자산에 연결합니다. 검증 전에 필요합니다."; brandTransfer = "토큰 전송"; brandTransferDesc = "구매 증명으로 자산을 구매자 지갑으로 보냅니다 (수수료 약 0.01 RVN)."; brandRevoke = "자산 폐기"; brandRevokeDesc = "루트 자산, 서브 자산 또는 고유 토큰을 위조 또는 손상으로 표시합니다. 이후 모든 스캔은 폐기됨으로 표시됩니다."; brandRevocationWorks = "폐기 방식"; brandDetect = "탐지"; brandDetectDesc = "브랜드가 복제되거나 손상된 NFC 태그가 달린 위조 제품을 식별합니다."; brandRevokeStep = "폐기"; brandRevokeStepDesc = "브랜드가 폐기를 호출하면 자산이 백엔드에 폐기됨으로 표시됩니다."; brandConsumer = "소비자 확인"; brandConsumerDesc = "소비자가 태그를 스캔하면 앱은 블록체인과 폐기 목록을 모두 확인합니다. 폐기됨 = 비정품."
@@ -1669,9 +1652,10 @@ val stringsRu = cloneStrings(stringsEn).apply {
     scanSubtitle = "Проверьте подлинность вашего товара"; scanTapping = "Поднесите телефон к товару"; scanTapHint = "Поднесите телефон к NFC-чипу, встроенному в товар"; scanIdle = "Нажмите, чтобы начать сканирование"
     nfcNotSupported = "NFC не поддерживается"; nfcNotSupportedDesc = "На этом устройстве нет NFC-модуля"; nfcDisabled = "NFC отключен"; nfcDisabledDesc = "Включите NFC в настройках системы, чтобы сканировать теги"
     howItWorks = "Как это работает"; howStep1 = "Поднесите телефон к NFC-чипу на товаре"; howStep2 = "Уникальная подпись чипа проверяется"; howStep3 = "Результат подтверждается в блокчейне"
-    verifyingTitle = "Проверка…"; verifyAuthentic = "Подлинный"; verifyNotAuthentic = "Неподлинный"; verifyRevoked = "Отозван"; verifyCounterReplay = "Обнаружено повторное использование счетчика: возможна попытка клонирования."; verifyNfcSig = "Проверка NFC-подписи"; verifyBlockchain = "Проверка блокчейна Ravencoin"; verifyAssetInfo = "Информация о товаре"; verifyAsset = "Товар"; verifyDescription = "Описание"; verifyWebsite = "Сайт"; verifySecDetails = "Детали проверки"; verifyTagUid = "UID тега"; verifyScanCount = "Количество сканирований"; verifyNfcPubId = "Публичный NFC ID"; verifyCrypto = "Криптография"; verifyRevokedBy = "СООБЩЕНО БРЕНДОМ"; verifyScanAgain = "Сканировать другой товар"
+    verifyingTitle = "Проверка…"; verifyAuthentic = "Подлинный"; verifyNotAuthentic = "Неподлинный"; verifyRevoked = "Отозван"; verifyUnableToVerify = "Невозможно проверить"; verifyCounterReplay = "Обнаружено повторное использование счетчика: возможна попытка клонирования."; verifyNfcSig = "Проверка NFC-подписи"; verifyBlockchain = "Проверка блокчейна Ravencoin"; verifyAssetInfo = "Информация о товаре"; verifyAsset = "Товар"; verifyDescription = "Описание"; verifyWebsite = "Сайт"; verifySecDetails = "Детали проверки"; verifyTagUid = "UID тега"; verifyScanCount = "Количество сканирований"; verifyNfcPubId = "Публичный NFC ID"; verifyCrypto = "Криптография"; verifyRevokedBy = "СООБЩЕНО БРЕНДОМ"; verifyScanAgain = "Сканировать другой товар"
     walletTitle = "Кошелек бренда"; walletSubtitle = "Управление активами Ravencoin"; walletNoWallet = "Кошелек не найден"; walletNoWalletDesc = "Создайте новый кошелек или восстановите существующий, чтобы управлять активами Ravencoin."; walletGenerate = "Создать новый кошелек"; walletRestore = "Восстановить по мнемонике"; walletMnemonicPlaceholder = "Введите мнемонику из 12 слов…"; walletRestoreBtn = "Восстановить кошелек"; mnemonicSpaceError = "Пробелы не разрешены, вводите по одному слову в каждое поле"; walletBalance = "Баланс Ravencoin"; walletLoading = "Загрузка…"; walletReceiveAddr = "Адрес получения"; walletRecoveryPhrase = "Фраза восстановления"; walletNeverShare = "Никогда не делитесь фразой восстановления. Любой, у кого она есть, может получить доступ к вашим средствам."; walletTapReveal = "Нажмите на значок глаза, чтобы показать фразу восстановления."
     walletAssetOps = "Операции с активами"; walletIssueRoot = "Выпустить root-актив"; walletIssueRootDesc = "Создать новый родительский актив (требуется 500 RVN)"; walletIssueSub = "Выпустить sub-актив"; walletIssueSubDesc = "Создать актив PARENT/CHILD"; walletRevoke = "Отозвать актив"; walletRevokeDesc = "Пометить актив как поддельный (отзыв через бэкенд)"; walletDeleteTitle = "Удалить кошелек"; walletDeleteMsg = "Это навсегда удалит кошелек из приложения. Убедитесь, что вы сохранили фразу восстановления. Действие нельзя отменить."; walletDeleteBtn = "Удалить"; walletCancelBtn = "Отмена"; walletMyAssets = "Мои активы"; walletAssetsLoading = "Загрузка активов…"; walletNoAssets = "Для этого адреса активы не найдены."; walletAssetsNotVerifiable = "Не удалось загрузить активы. Проверьте соединение и нажмите обновить."; electrumOnline = "ElectrumX · Онлайн"; electrumOffline = "ElectrumX · Офлайн"; electrumChecking = "ElectrumX · Проверка…"; walletRvnPrice = "RVN/USDT"
+    serverNotResponding = "Сервер бэкенда не отвечает (%1). В данный момент невозможно проверить подлинность тега."
     settingsServerOnline = "Сервер · Онлайн"; settingsServerOffline = "Сервер · Офлайн"; settingsServerChecking = "Сервер · Проверка…"; settingsAdminKeyValid = "Ключ подтвержден"; settingsAdminKeyInvalid = "Ключ недействителен"; settingsAdminKeyChecking = "Проверка…"; settingsAdminKeyLocked = "Сначала сохраните URL сервера"; settingsAdminKeyWrongType = "Это ключ оператора, а не администратора"; operatorKey = "Ключ оператора"; operatorKeyHint = "Необязательно: ограниченный ключ для записи NFC-тегов, выпуска уникальных токенов и перевода токенов. Выдается администратором."; settingsOperatorKeyValid = "Ключ подтвержден"; settingsOperatorKeyInvalid = "Ключ недействителен"; settingsOperatorKeyChecking = "Проверка…"; settingsOperatorKeyLocked = "Сначала сохраните URL сервера"; settingsOperatorKeyWrongType = "Это ключ администратора, а не оператора"
     brandOwnershipTransfer = "Передача владения"; brandTransferRoot = "Передать root-актив"; brandTransferRootDesc = "Передать владение брендом другому кошельку. Все дочерние токены останутся действительными."; brandTransferSub = "Передать sub-актив"; brandTransferSubDesc = "Передать владение продуктовой линией другому кошельку. Все уникальные токены останутся действительными."; transferRootTitle = "Передача root-актива"; transferRootSubtitle = "Комиссия ~0.01 RVN"; transferSubTitle = "Передача sub-актива"; transferSubSubtitle = "Комиссия ~0.01 RVN"; transferOwnershipWarning = "Внимание: передавая этот актив, вы навсегда передаете контроль над всеми дочерними токенами и возможность выпускать новые. Это действие нельзя отменить."; walletAssetRoot = "Root"; walletAssetSub = "Sub-Asset"; walletAssetUnique = "Unique"
     brandTitle = "Панель бренда"; brandSubtitle = "Управление активами и тегами аутентификации"; brandProtocolDesc = "Все операции требуют админ-ключ API и профинансированного узла Ravencoin. Стоимость: root-актив 500 RVN · sub-актив 100 RVN · уникальный токен 5 RVN."; brandAssetOps = "Операции с активами"; brandAntiCf = "Антиконтрафакт"; brandIssueRoot = "Выпустить root-актив"; brandIssueRootDesc = "Создать новый родительский актив бренда (например, FASHIONX)"; brandIssueSub = "Выпустить sub-актив"; brandIssueSubDesc = "Создать линейку товара (например, FASHIONX/BAG01) или вариант"; brandRegChip = "Зарегистрировать NFC-чип"; brandRegChipDesc = "Связать UID чипа NTAG 424 DNA с существующим активом. Требуется до начала проверки."; brandTransfer = "Передать токен"; brandTransferDesc = "Отправить актив в кошелек покупателя как подтверждение владения (~0.01 RVN комиссия)."; brandRevoke = "Отозвать актив"; brandRevokeDesc = "Пометить root-актив, sub-актив или уникальный токен как поддельный или скомпрометированный. Все будущие сканы будут показывать ОТОЗВАНО."; brandRevocationWorks = "Как работает отзыв"; brandDetect = "Обнаружение"; brandDetectDesc = "Бренд выявляет поддельный товар с клонированным или скомпрометированным NFC-тегом."; brandRevokeStep = "Отзыв"; brandRevokeStepDesc = "Бренд вызывает revoke: актив помечается в бэкенде как отозванный."; brandConsumer = "Проверка покупателем"; brandConsumerDesc = "Покупатель сканирует тег: приложение проверяет и блокчейн, и список отзывов. Отозван = НЕ подлинный."
@@ -1683,14 +1667,16 @@ val stringsRu = cloneStrings(stringsEn).apply {
     walletReceiveBtn = "Получить"; walletSendBtn = "Отправить"; walletReceiveTitle = "Получить RVN"; walletReceiveDesc = "Сканируйте этот QR-код или скопируйте адрес ниже, чтобы получить Ravencoin."; walletCopyDone = "Адрес скопирован!"; walletSendTitle = "Отправить RVN"; walletSendAmountLabel = "Сумма (RVN)"; walletSendAddrLabel = "Адрес получателя"; walletSendConfirm = "Отправить"; walletSendSuccess = "Успешно отправлено!"; walletSendWarning = "Это действие нельзя отменить. Внимательно проверьте адрес."; walletSendFeeUnavailable = "Ставка сетевой комиссии недоступна. Все узлы недоступны, попробуйте позже."; walletSendDialogTitle = "Подтвердить отправку"; walletSendDialogMsg = "Отправить %1 RVN на %2?"
     walletFilterAll = "Все"; brandProgramTag = "Записать NFC-тег"; brandProgramTagDesc = "Записать AES-ключи и SUN URL в чип NTAG 424 DNA. Чип автоматически регистрируется в бэкенде."; brandProgramTagAssetHint = "Полное имя актива, например FASHIONX/BAG01#SN0001"; brandProgramTagStart = "Начать запись тега"; brandNoWalletMsg = "Кошелек Ravencoin не найден. Создайте или добавьте кошелек во вкладке Wallet, чтобы продолжить."; brandGoToWallet = "Перейти в кошелек"
     settingsDonateBtn = "Пожертвовать RVN RavenTag"; settingsDonateTitle = "Пожертвование RavenTag"; settingsDonateDesc = "Поддержите развитие открытого протокола RavenTag."; settingsDonateMsg = "RavenTag — бесплатный open-source протокол NFC-аутентификации, созданный для брендов любого масштаба. Если он вам полезен, рассмотрите небольшое пожертвование в RVN, чтобы поддержать дальнейшую разработку, документацию и новые функции. Любой вклад, даже небольшой, действительно важен. Спасибо за поддержку open-source!"; brandNoFundsTitle = "Недостаточный баланс"; brandNoFundsMsg = "В кошельке нет RVN. Пополните кошелек, чтобы выпускать активы. Вы все равно можете продолжить просмотр формы."; brandNoFundsContinue = "Продолжить в любом случае"
-    navSettings = "Настройки"; settingsTitle = "Настройки"; settingsBrandName = "Название бренда"; settingsBrandNameHint = "Название вашего бренда, отображаемое в приложении (например, Fashionx)"; settingsVerifyUrl = "URL сервера проверки"; settingsVerifyUrlHint = "URL бэкенда бренда, выпустившего продукт. Используется для сканирования и программирования чипов."; settingsVerifyUrlConsumer = "URL сервера бренда"; settingsVerifyUrlHintConsumer = "Введи URL, предоставленный брендом товара, который хочешь проверить. Его можно найти на упаковке или сайте бренда."; settingsSave = "Сохранить"; settingsSaved = "Сохранено!"; settingsAbout = "О приложении"; settingsVersion = "Версия"; settingsRequireAuth = "Требовать аутентификацию при запуске"; settingsRequireAuthDesc = "Запрашивать PIN или биометрию при открытии приложения (требуется активный кошелек)"; settingsRequireAuthRisk = "Отключение снижает безопасность. Любой, у кого есть доступ к устройству, сможет открыть приложение."; settingsNoLockScreen = "На устройстве не настроена блокировка экрана. Аутентификация будет пропущена. Настройте PIN или отпечаток пальца в системе для защиты кошелька."; settingsAllowScreenshots = "Разрешить скриншоты"; settingsAllowScreenshotsDesc = "Отключить защиту от захвата экрана (FLAG_SECURE). Ключи кошелька и мнемоника могут попадать в миниатюры и записи экрана."; settingsAllowScreenshotsWarning = "Скриншоты включены: ключи кошелька и мнемоника НЕ защищены от захвата экрана."; settingsAllowScreenshotsDialogTitle = "Предупреждение безопасности"; settingsAllowScreenshotsDialogBody = "Разрешение скриншотов отключает защиту FLAG_SECURE. Ключи кошелька и фраза восстановления могут быть захвачены средствами записи экрана, миниатюрами и ближайшими камерами.\n\nВключайте только на доверенных личных устройствах."; settingsAllowScreenshotsConfirm = "Понимаю, включить скриншоты"; settingsNotifications = "Включить уведомления"; settingsNotificationsDesc = "Показывать уведомление при получении RVN или активов."; authTitle = "RavenTag"; authSubtitle = "Аутентифицируйтесь для доступа к кошельку"
+    navSettings = "Настройки"; settingsTitle = "Настройки"; settingsBrandName = "Название бренда"; settingsBrandNameHint = "Название вашего бренда, отображаемое в приложении (например, Fashionx)"; settingsVerifyUrl = "URL сервера проверки"; settingsVerifyUrlHint = "URL бэкенда бренда, выпустившего продукт. Используется для сканирования и программирования чипов."; settingsVerifyUrlConsumer = "URL сервера бренда"; settingsVerifyUrlHintConsumer = "Введи URL, предоставленный брендом товара, который хочешь проверить. Его можно найти на упаковке или сайте бренда."; settingsSave = "Сохранить"; settingsSaved = "Сохранено!"; settingsAbout = "О приложении"; settingsVersion = "Версия"; settingsRequireAuth = "Требовать аутентификацию при запуске"; settingsRequireAuthDesc = "Запрашивать PIN или биометрию при открытии приложения (требуется активный кошелек)"; settingsRequireAuthRisk = "Отключение снижает безопасность. Любой, у кого есть доступ к устройству, сможет открыть приложение."; settingsNoLockScreen = "На устройстве не настроена блокировка экрана. Аутентификация будет пропущена. Настройте PIN или отпечаток пальца в системе для защиты кошелька."; settingsAllowScreenshots = "Разрешить скриншоты"; settingsAllowScreenshotsDesc = "Отключить защиту от захвата экрана (FLAG_SECURE). Ключи кошелька и мнемоника могут попадать в миниатюры и записи экрана."; settingsAllowScreenshotsWarning = "Скриншоты включены: ключи кошелька и мнемоника НЕ защищены от захвата экрана."; settingsAllowScreenshotsDialogTitle = "Предупреждение безопасности"; settingsAllowScreenshotsDialogBody = "Разрешение скриншотов отключает защиту FLAG_SECURE. Ключи кошелька и фраза восстановления могут быть захвачены средствами записи экрана, миниатюрами и ближайшими камерами.\n\nВключайте только на доверенных личных устройствах."; settingsAllowScreenshotsConfirm = "Понимаю, включить скриншоты"; settingsNotifications = "Включить уведомления"; settingsNotificationsDesc = "Показывать уведомление при получении RVN или активов."; authTitle = "RavenTag"; authSubtitle = "请认证以访问你的钱包"
     // QR Scanner
     qrScannerTitle = "Сканировать QR-код"
     qrScannerHint = "Наведите камеру на QR-код адреса Ravencoin"
     qrScannerPermissionDenied = "Для сканирования QR-кодов требуется разрешение на использование камеры."
     imagePickTitle = "Добавить изображение"; imagePickCamera = "Камера"; imagePickGallery = "Галерея"; imagePickRemove = "Удалить изображение"; imagePickUploading = "Загрузка в IPFS…"; imagePickDone = "Изображение загружено в IPFS"; imagePickError = "Ошибка загрузки, проверьте узел IPFS"; imageForAsset = "Изображение актива (необязательно)"; imageForAssetHint = "Логотип / фото товара / фото серийного номера. Сохраняется в IPFS навсегда."; pinataJwtLabel = "Pinata JWT (загрузка в IPFS)"; pinataJwtHint = "Вставьте свой Pinata JWT. Изображения и метаданные загружаются напрямую в Pinata без Kubo-узла."; pinataJwtValid = "Токен подтвержден"; pinataJwtInvalid = "Токен недействителен"; pinataJwtChecking = "Проверка…"; kuboNodeLabel = "URL узла Kubo (IPFS API)"; kuboNodeHint = "Вставьте URL HTTP API узла Kubo. Примеры: http://10.0.2.2:5001 или https://ipfs.example.com/api/v0"; kuboNodeValid = "Узел подтвержден"; kuboNodeInvalid = "Узел недоступен"; kuboNodeChecking = "Проверка…"
     backupTitle = "Сохраните фразу восстановления"; backupSubtitle = "Ваш кошелек создан. Перед продолжением запишите эти 12 слов."; backupWarning1 = "⚠  После закрытия этого экрана фраза больше НЕ будет показана."; backupWarning2 = "Любой, у кого есть эти слова, может получить доступ к вашим средствам. Храните их офлайн и втайне."; backupWarning3 = "Если вы потеряете эту фразу и устройство, ваши средства будут утрачены навсегда."; backupCopyAll = "Скопировать все 12 слов"; backupCopied = "Скопировано в буфер обмена, вставьте в менеджер паролей или запишите на бумаге"; backupConfirmCheck = "Я записал фразу восстановления в безопасном месте"; backupConfirmBtn = "Я сохранил, продолжить"
-    brandUnrevoke = "Восстановить отозванный актив"; brandUnrevokeDesc = "Восстановить ранее отозванный root-актив, sub-актив или уникальный токен. Отзыв через бэкенд обратим."; issueUnrevokeTitle = "Восстановить отозванный актив"; issueUnrevokeSub = "Обратимо, только бэкенд"; btnUnrevoke = "Восстановить актив"; unrevokeSuccess = "Актив восстановлен, теперь он снова ПОДЛИННЫЙ."; unrevokeNote = "Восстанавливает статус актива в бэкенде как ПОДЛИННЫЙ. Запись об отзыве удаляется немедленно."; brandIssueUnique = "Выпустить уникальный токен"; brandIssueUniqueDesc = "Сериализовать отдельный товар (например, BAG01#SN0001). 5 RVN за токен."; issueUniqueTitle = "Выпустить уникальный токен"; issueUniqueSub = "SUB#SERIAL · 5 RVN за токен"; fieldSubAsset = "Sub-актив"; fieldSubAssetHint = "например, FASHIONX/BAG01 → результат: FASHIONX/BAG01#SN0001"; fieldSerial = "Серийный номер"; fieldSerialHint = "Буквенно-цифровой тег, например SN0001"; btnIssueUnique = "Выпустить уникальный токен"; adminKey = "Админ API ключ"; adminKeyHint = "Сохраняется в настройках приложения. Используется для аутентификации операций бэкенда. AES-ключи чипов не сохраняются."; initialMasterKeyLabel = "Начальный мастер-ключ"; initialMasterKeyHint = "Необязательный 32-символьный AES-ключ в hex для новых или предварительно настроенных поставщиком NTAG 424 DNA. Оставьте пустым для значения по умолчанию 00000000000000000000000000000000."; assetNameHint = "Заглавные буквы и цифры, максимум 32 символа"; back = "Назад"; retry = "Повторить"; navAssets = "Активы"; assetsTitle = "Мои активы"; assetsSubtitle = "Токены в вашем кошельке"; assetsNoWallet = "Кошелек не найден. Создайте или восстановите кошелек во вкладке Wallet."; assetsNoAssets = "В этом кошельке активы не найдены."; assetsTransferBtn = "Перевести"; assetsLowRvnWarning = "Внимание: недостаточно RVN для комиссии (~0.01 RVN требуется). Перевод может завершиться ошибкой."; assetsTransferTitle = "Перевести актив"; assetsTransferSubtitle = "Прямой перевод в блокчейне, комиссия ~0.01 RVN"; walletTxHistory = "История транзакций"; walletTxReceived = "Получено"; walletTxSent = "Отправлено"; walletTxUnconfirmed = "Не подтверждено"; walletTxPending = "В ожидании"; walletTxConfirmed = "Подтверждено"; walletNoTxHistory = "Транзакций пока нет"; walletTxConfs = "подтверждений"; walletLoadMore = "Загрузить ещё"; issueRootSuccess = "Актив %1 выпущен (tx: %2)"; issueSubSuccess = "Sub-актив %1 выпущен (tx: %2)"; issueUniqueSuccess = "Токен %1 выпущен (tx: %2)"; issueFailed = "Выпуск не удался"; walletShowOwnerTokens = "Показать токены владельца"
+    brandUnrevoke = "Восстановить отозванный актив"; brandUnrevokeDesc = "Восстановить ранее отозванный root-актив, sub-актив или уникальный токен. Отзыв через бэкенд обратим."; issueUnrevokeTitle = "Восстановить отозванный актив"; issueUnrevokeSub = "Обратимо, только бэкенд"; btnUnrevoke = "Восстановить актив"; unrevokeSuccess = "Актив восстановлен, теперь он снова ПОДЛИННЫЙ."; unrevokeNote = "Восстанавливает статус актива в бэкенде как ПОДЛИННЫЙ. Запись об отзыве удаляется немедленно."; brandIssueUnique = "Выпустить уникальный токен"; brandIssueUniqueDesc = "Сериализовать отдельный товар (например, BAG01#SN0001). 5 RVN за токен."; issueUniqueTitle = "Выпустить уникальный токен"; issueUniqueSub = "SUB#SERIAL · 5 RVN за токен"; fieldSubAsset = "Sub-актив"; fieldSubAssetHint = "например, FASHIONX/BAG01 → результат: FASHIONX/BAG01#SN0001"; fieldSerial = "Серийный номер"; fieldSerialHint = "Буквенно-цифровой тег, например SN0001"; btnIssueUnique = "Выпустить уникальный токен"; adminKey = "Админ API ключ"; adminKeyHint = "Сохраняется в настройках приложения. Используется для аутентификации операций бэкенда. AES-ключи чипов не сохраняются."; initialMasterKeyLabel = "Начальный мастер-ключ"; initialMasterKeyHint = "Необязательный 32-символьный AES-ключ в hex для новых или предварительно настроенных поставщиком NTAG 424 DNA. Оставьте пустым для значения по умолчанию 00000000000000000000000000000000."; assetNameHint = "Заглавные буквы и цифры, максимум 32 символа"; back = "Назад"; retry = "Повторить"; navAssets = "Активы"; assetsTitle = "Мои активы"; assetsSubtitle = "Токены в вашем кошельке"; assetsNoWallet = "Кошелек не найден. Создайте или восстановите кошелек во вкладке Wallet."; assetsNoAssets = "В этом кошельке активы не найдены."; assetsTransferBtn = "Перевести"; assetsLowRvnWarning = "Внимание: недостаточно RVN для комиссии (~0.01 RVN требуется). Перевод может завершиться ошибкой."; assetsTransferTitle = "Перевести актив"; assetsTransferSubtitle = "Прямой перевод в блокчейне, комиссия ~0.01 RVN"
+    walletTxHistory = "История транзакций"; walletTxReceived = "Получено"; walletTxSent = "Отправлено"; walletTxUnconfirmed = "Не подтверждена"; walletTxPending = "В ожидании"; walletTxConfirmed = "Подтверждена"; walletNoTxHistory = "Нет транзакций"; walletTxConfs = "подтверждений"; walletLoadMore = "Загрузить еще"
+    issueRootSuccess = "Актив %1 выпущен (tx: %2)"; issueSubSuccess = "Sub-актив %1 выпущен (tx: %2)"; issueUniqueSuccess = "Токен %1 выпущен (tx: %2)"; issueFailed = "Выпуск не удался"
     walletControlKey = "Ключ управления"; walletControlKeyHint = "Ключ администратора или оператора"
     walletControlKeyDesc = "Ключ администратора или оператора, заданный при развертывании бэкенда. Определяет вашу роль и права доступа."
     walletControlKeyInvalid = "Ключ не распознан. Введите действующий ключ администратора или оператора."
