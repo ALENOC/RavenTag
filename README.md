@@ -474,33 +474,45 @@ The response should contain your package name (`io.raventag.app`) and certificat
 ```
 RavenTag/
 ├── .github/
-│   ├── ISSUE_TEMPLATE/
+│   ├── ISSUE_TEMPLATE/     bug_report.md, feature_request.md,
+│   │                       security_issue.md, config.yml
 │   ├── CODEOWNERS
 │   ├── CONTRIBUTING.md
 │   └── PULL_REQUEST_TEMPLATE.md
 ├── android/
-│   ├── app/src/
-│   │   ├── brand/          Brand Manager app flavor
-│   │   ├── consumer/       Consumer Verify app flavor (white-label)
-│   │   └── main/
-│   │       ├── java/io/raventag/app/
-│   │       │   ├── ipfs/           IPFS integration (Pinata)
-│   │       │   ├── network/        HTTP client and API calls
-│   │       │   ├── nfc/            NfcReader.kt, Ntag424Configurator.kt,
-│   │       │   │                   SunVerifier.kt, NfcCounterCache.kt
-│   │       │   ├── ravencoin/      RpcClient.kt (ElectrumX client)
-│   │       │   ├── ui/
-│   │       │   │   ├── screens/    ScanScreen.kt, VerifyScreen.kt,
-│   │       │   │   │               IssueAssetScreen.kt, BrandDashboardScreen.kt,
-│   │       │   │   │               OnboardingScreen.kt, ProgramTagScreen.kt,
-│   │       │   │   │               WalletScreen.kt, SendRvnScreen.kt, etc.
-│   │       │   │   └── theme/      Compose theme configuration
-│   │       │   ├── wallet/         WalletManager.kt (BIP44/BIP39),
-│   │       │   │                   AssetManager.kt, RavencoinTxBuilder.kt
-│   │       │   └── worker/         Background workers
-│   │       └── AndroidManifest.xml
-│   ├── gradle/
-│   ├── signing/            Release signing configuration
+│   ├── app/
+│   │   ├── src/
+│   │   │   ├── androidTest/    WalletManagerTest.kt
+│   │   │   ├── brand/          Brand Manager flavor (AppConfig.kt)
+│   │   │   ├── consumer/       Consumer Verify flavor (AppConfig.kt, strings.xml)
+│   │   │   └── main/
+│   │   │       ├── java/io/raventag/app/
+│   │   │       │   ├── ipfs/           IpfsResolver.kt, KuboUploader.kt,
+│   │   │       │   │                   PinataUploader.kt
+│   │   │       │   ├── network/        NetworkModule.kt
+│   │   │       │   ├── nfc/            NfcReader.kt, Ntag424Configurator.kt,
+│   │   │       │   │                   SunVerifier.kt, NfcCounterCache.kt
+│   │   │       │   ├── ravencoin/      RpcClient.kt
+│   │   │       │   ├── ui/
+│   │   │       │   │   ├── screens/    ScanScreen.kt, VerifyScreen.kt,
+│   │   │       │   │   │               IssueAssetScreen.kt, BrandDashboardScreen.kt,
+│   │   │       │   │   │               OnboardingScreen.kt, ProgramTagScreen.kt,
+│   │   │       │   │   │               WalletScreen.kt, SendRvnScreen.kt,
+│   │   │       │   │   │               TransferScreen.kt, ReceiveScreen.kt,
+│   │   │       │   │   │               SettingsScreen.kt, SplashScreen.kt,
+│   │   │       │   │   │               RegisterChipScreen.kt, WriteTagScreen.kt,
+│   │   │       │   │   │               MnemonicBackupScreen.kt, QrScannerScreen.kt,
+│   │   │       │   │   │               ImagePickerButton.kt, QrUtils.kt
+│   │   │       │   │   └── theme/      Theme.kt, AppStrings.kt, LocalStrings.kt
+│   │   │       │   ├── wallet/         WalletManager.kt (BIP44/BIP39),
+│   │   │       │   │                   AssetManager.kt, RavencoinTxBuilder.kt,
+│   │   │       │   │                   RavencoinPublicNode.kt,
+│   │   │       │   │                   RvnHashrateFetcher.kt, RvnPriceFetcher.kt
+│   │   │       │   └── worker/         WalletPollingWorker.kt,
+│   │   │       │                       NotificationHelper.kt
+│   │   │       └── AndroidManifest.xml
+│   │   ├── build.gradle.kts
+│   │   └── proguard-rules.pro
 │   ├── build.gradle.kts
 │   ├── gradle.properties
 │   ├── gradlew
@@ -519,14 +531,18 @@ RavenTag/
 │   ├── index.ts            Express server entry point
 │   ├── Dockerfile
 │   ├── package.json
-│   └── tsconfig.json
+│   ├── tsconfig.json
+│   └── SETUP_INFO.txt
 ├── docs/
-│   ├── deploy/             Deployment documentation
+│   ├── deploy/             Deployment guides (en, it, de, fr, es, zh, ja, ko, ru)
 │   ├── legal/
-│   │   ├── TERMS_OF_SERVICE.md
-│   │   └── PRIVACY_POLICY.md
+│   │   ├── TERMS_OF_SERVICE.md       (9 languages)
+│   │   └── PRIVACY_POLICY.md         (9 languages)
 │   ├── protocol.md         RTP-1 protocol specification
 │   ├── architecture.md     System architecture
+│   ├── functional-report.md
+│   ├── app_store_descriptions.txt
+│   ├── release_notes.txt
 │   ├── README_IT.md        Italian translation
 │   ├── README_FR.md        French translation
 │   ├── README_DE.md        German translation
