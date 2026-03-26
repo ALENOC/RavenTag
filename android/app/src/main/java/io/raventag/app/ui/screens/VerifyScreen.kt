@@ -62,6 +62,7 @@ fun VerifyScreen(
                 VerifyStep.DONE, VerifyStep.ERROR -> when {
                     result?.revoked == true -> s.verifyRevoked
                     result?.authentic == true -> s.verifyAuthentic
+                    result?.error != null -> s.verifyUnableToVerify
                     else -> s.verifyNotAuthentic
                 }
                 else -> s.verifyingTitle
@@ -174,6 +175,7 @@ private fun AuthenticityBanner(result: VerifyResult, s: AppStrings) {
                 text = when {
                     result.revoked -> s.verifyRevoked.uppercase()
                     result.authentic -> s.verifyAuthentic.uppercase()
+                    result.error != null -> s.verifyUnableToVerify.uppercase()
                     else -> s.verifyNotAuthentic.uppercase()
                 },
                 style = MaterialTheme.typography.titleLarge,
