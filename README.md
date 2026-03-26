@@ -473,46 +473,72 @@ The response should contain your package name (`io.raventag.app`) and certificat
 
 ```
 RavenTag/
+├── .github/
+│   ├── ISSUE_TEMPLATE/
+│   ├── CODEOWNERS
+│   ├── CONTRIBUTING.md
+│   └── PULL_REQUEST_TEMPLATE.md
+├── android/
+│   ├── app/src/
+│   │   ├── brand/          Brand Manager app flavor
+│   │   ├── consumer/       Consumer Verify app flavor (white-label)
+│   │   └── main/
+│   │       ├── java/io/raventag/app/
+│   │       │   ├── ipfs/           IPFS integration (Pinata)
+│   │       │   ├── network/        HTTP client and API calls
+│   │       │   ├── nfc/            NfcReader.kt, Ntag424Configurator.kt,
+│   │       │   │                   SunVerifier.kt, NfcCounterCache.kt
+│   │       │   ├── ravencoin/      RpcClient.kt (ElectrumX client)
+│   │       │   ├── ui/
+│   │       │   │   ├── screens/    ScanScreen.kt, VerifyScreen.kt,
+│   │       │   │   │               IssueAssetScreen.kt, BrandDashboardScreen.kt,
+│   │       │   │   │               OnboardingScreen.kt, ProgramTagScreen.kt,
+│   │       │   │   │               WalletScreen.kt, SendRvnScreen.kt, etc.
+│   │       │   │   └── theme/      Compose theme configuration
+│   │       │   ├── wallet/         WalletManager.kt (BIP44/BIP39),
+│   │       │   │                   AssetManager.kt, RavencoinTxBuilder.kt
+│   │       │   └── worker/         Background workers
+│   │       └── AndroidManifest.xml
+│   ├── gradle/
+│   ├── signing/            Release signing configuration
+│   ├── build.gradle.kts
+│   ├── gradle.properties
+│   ├── gradlew
+│   └── settings.gradle.kts
 ├── backend/
 │   ├── public/             logo.svg (served inline on browser install page)
-│   └── src/
-│       ├── routes/         brand.ts, verify.ts, assets.ts, admin.ts, registry.ts
-│       ├── services/       ntag424.ts (SUN decrypt + MAC verify), ravencoin.ts (RPC client)
-│       ├── middleware/     auth.ts (admin/operator), cache.ts (SQLite + revocation)
-│       └── utils/          crypto.ts (AES-CMAC, SHA-256, deriveTagKeys)
-├── frontend/
-│   └── src/
-│       ├── app/            Next.js 14 App Router pages
-│       ├── components/     ClientLayout.tsx, LanguageSelector.tsx
-│       └── lib/i18n/       translations.ts (EN, IT, FR, DE, ES)
-├── android/
-│   └── app/src/
-│       ├── brand/          Brand Manager app flavor
-│       ├── consumer/       Consumer Verify app flavor (white-label)
-│       └── main/
-│           ├── nfc/        SunVerifier.kt, NfcReader.kt, Ntag424Configurator.kt
-│           ├── ravencoin/  RpcClient.kt
-│           ├── wallet/     WalletManager.kt (BIP44/BIP39), AssetManager.kt
-│           └── ui/screens/ ScanScreen.kt, VerifyScreen.kt, WalletScreen.kt,
-│                           IssueAssetScreen.kt, BrandDashboardScreen.kt,
-│                           OnboardingScreen.kt (language + legal acceptance)
+│   ├── src/
+│   │   ├── routes/         brand.ts, verify.ts, assets.ts, admin.ts, registry.ts
+│   │   ├── services/       ntag424.ts (SUN decrypt + MAC verify),
+│   │   │                   ravencoin.ts (RPC client),
+│   │   │                   electrumx.ts, ipfs.ts
+│   │   ├── middleware/     auth.ts (admin/operator), cache.ts,
+│   │   │                   logger.ts, migrations.ts
+│   │   └── utils/          crypto.ts (AES-CMAC, SHA-256, deriveTagKeys),
+│   │                       validation.ts
+│   ├── index.ts            Express server entry point
+│   ├── Dockerfile
+│   ├── package.json
+│   └── tsconfig.json
 ├── docs/
-│   ├── protocol.md
-│   ├── architecture.md
+│   ├── deploy/             Deployment documentation
 │   ├── legal/
 │   │   ├── TERMS_OF_SERVICE.md
 │   │   └── PRIVACY_POLICY.md
-│   ├── README_IT.md
-│   ├── README_FR.md
-│   ├── README_DE.md
-│   ├── README_ES.md
-│   ├── README_ZH.md
-│   ├── README_JA.md
-│   ├── README_KO.md
-│   └── README_RU.md
-├── pictures/               Logo assets
-├── docker-compose.yml
-└── LICENSE                 RavenTag Source License (RTSL-1.0)
+│   ├── protocol.md         RTP-1 protocol specification
+│   ├── architecture.md     System architecture
+│   ├── README_IT.md        Italian translation
+│   ├── README_FR.md        French translation
+│   ├── README_DE.md        German translation
+│   ├── README_ES.md        Spanish translation
+│   ├── README_ZH.md        Chinese translation
+│   ├── README_JA.md        Japanese translation
+│   ├── README_KO.md        Korean translation
+│   └── README_RU.md        Russian translation
+├── pictures/               Logo assets (RavenTag_Logo.jpg)
+├── docker-compose.yml      Docker Compose configuration
+├── LICENSE                 RavenTag Source License (RTSL-1.0)
+└── NOTICE                  Notice file
 ```
 
 ---
