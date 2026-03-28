@@ -20,9 +20,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.LocalContext
 import coil.compose.SubcomposeAsyncImage
 import io.raventag.app.BuildConfig
 import io.raventag.app.ipfs.IpfsResolver
+import io.raventag.app.network.NetworkModule
 import io.raventag.app.ravencoin.RaventagMetadata
 import io.raventag.app.ui.theme.*
 
@@ -213,6 +216,8 @@ private fun AssetInfoCard(result: VerifyResult, s: AppStrings) {
 
     val imageUrl = meta.image?.let { IpfsResolver.primaryUrl(it) }
     val description = meta.description ?: meta.brandInfo?.description
+    val context = LocalContext.current
+    val imageLoader = remember(context) { NetworkModule.getImageLoader(context) }
 
     Card(
         colors = CardDefaults.cardColors(containerColor = RavenCard),
@@ -229,6 +234,7 @@ private fun AssetInfoCard(result: VerifyResult, s: AppStrings) {
             if (imageUrl != null) {
                 SubcomposeAsyncImage(
                     model = imageUrl,
+                    imageLoader = imageLoader,
                     contentDescription = "Token image",
                     contentScale = ContentScale.Crop,
                     modifier = Modifier
