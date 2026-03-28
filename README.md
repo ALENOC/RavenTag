@@ -200,7 +200,7 @@ Both apps are open source, available in 9 languages (EN, IT, FR, DE, ES, ZH, JA,
 
 ### RavenTag Verify (consumer app for end users)
 
-Download: [RavenTag-Verify-v1.0.0.apk](https://github.com/ALENOC/RavenTag/releases/latest)
+Download: [RavenTag-Verify-v1.0.5.apk](https://github.com/ALENOC/RavenTag/releases/latest)
 
 | Capability | Details |
 |---|---|
@@ -214,7 +214,7 @@ Build: `./gradlew assembleConsumerRelease`
 
 ### RavenTag Brand Manager (operator and brand team app)
 
-Download: [RavenTag-Brand-v1.0.0.apk](https://github.com/ALENOC/RavenTag/releases/latest)
+Download: [RavenTag-Brand-v1.0.5.apk](https://github.com/ALENOC/RavenTag/releases/latest)
 
 | Capability | Details |
 |---|---|
@@ -250,7 +250,7 @@ Set these environment variables on the backend:
 
 ```bash
 # Direct link to the RavenTag Verify APK (update with each release)
-VERIFY_APK_URL=https://github.com/ALENOC/RavenTag/releases/download/v1.0.0/RavenTag-Verify-v1.0.0.apk
+VERIFY_APK_URL=https://github.com/ALENOC/RavenTag/releases/download/v1.0.5/RavenTag-Verify-v1.0.5.apk
 
 # SHA-256 fingerprint(s) of release signing certificate(s) for Android App Links
 # RTSL-1.0 LICENSE REQUIREMENT: RavenTag fingerprint MUST be included.
