@@ -249,8 +249,10 @@ NFC foreground dispatch is active on the Scan tab and during the tag programming
 Set these environment variables on the backend:
 
 ```bash
-# Direct link to the RavenTag Verify APK (update with each release)
-VERIFY_APK_URL=https://github.com/ALENOC/RavenTag/releases/download/v1.0.5/RavenTag-Verify-v1.0.5.apk
+# Optional: direct APK download URL (defaults to latest GitHub release if empty)
+# VERIFY_APK_URL=
+# Optional: Google Play Store URL for RavenTag Verify (if set, the install page shows a Play Store badge)
+# PLAY_STORE_URL=https://play.google.com/store/apps/details?id=com.raventag.verify
 
 # SHA-256 fingerprint(s) of release signing certificate(s) for Android App Links
 # RTSL-1.0 LICENSE REQUIREMENT: RavenTag fingerprint MUST be included.
@@ -368,7 +370,7 @@ touch secrets/rvn_rpc_user secrets/rvn_rpc_pass    # leave empty if no local RVN
 ```bash
 cp .env.example .env
 # Edit .env: set BRAND_NAME, ALLOWED_ORIGINS, IPFS_GATEWAY
-# Set VERIFY_APK_URL and ANDROID_APP_FINGERPRINT for the browser install page
+# Set PLAY_STORE_URL, VERIFY_APK_URL, and ANDROID_APP_FINGERPRINT for the browser install page
 ```
 
 Non-secret `.env` variables:
@@ -379,7 +381,8 @@ Non-secret `.env` variables:
 | `ALLOWED_ORIGINS` | CORS origins (comma-separated). Set to your frontend domain. |
 | `IPFS_GATEWAY` | IPFS HTTP gateway for metadata fetches. Default: ipfs.io. |
 | `RVN_RPC_HOST` | Ravencoin node host. Optional: public node is used as fallback. |
-| `VERIFY_APK_URL` | Direct download URL for the RavenTag Verify APK. Shown on the browser install page. |
+| `PLAY_STORE_URL` | Google Play Store URL for RavenTag Verify. If set, the install page shows a "Get it on Google Play" badge instead of a direct download button. |
+| `VERIFY_APK_URL` | Direct APK download URL. Used only when `PLAY_STORE_URL` is not set. Defaults to the latest GitHub release. |
 | `ANDROID_APP_FINGERPRINT` | SHA-256 certificate fingerprint for Android App Links. |
 
 **Step 3: Start the backend**
