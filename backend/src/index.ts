@@ -172,7 +172,21 @@ app.get('/verify', verifyLimiter, (_req, res) => {
 
 function installHtml(): string {
   const releaseUrl = 'https://github.com/ALENOC/RavenTag/releases/latest'
-  const apkUrl = process.env.VERIFY_APK_URL ?? releaseUrl
+  const playStoreUrl = process.env.PLAY_STORE_URL
+  const apkUrl = process.env.VERIFY_APK_URL || releaseUrl
+
+  const downloadBtn = playStoreUrl
+    ? `<a href="${playStoreUrl}" target="_blank" rel="noopener noreferrer" style="display:inline-block">
+    <svg xmlns="http://www.w3.org/2000/svg" width="180" height="54" viewBox="0 0 180 54">
+      <rect width="180" height="54" rx="8" fill="#000"/>
+      <rect x=".5" y=".5" width="179" height="53" rx="7.5" fill="none" stroke="#a6a6a6" stroke-width="1"/>
+      <text x="62" y="18" fill="#fff" font-family="sans-serif" font-size="9" letter-spacing=".5">GET IT ON</text>
+      <text x="62" y="37" fill="#fff" font-family="sans-serif" font-size="18" font-weight="600">Google Play</text>
+      <g transform="translate(16,10)"><path d="M0 1.2C0 .5.4 0 .8.2L20.5 16 .8 31.8C.4 32 0 31.5 0 30.8Z" fill="#4285f4"/><path d="M.8.2 20.5 16l5.5-5.6L3.6.2C2.8-.2 1.6-.1.8.2Z" fill="#34a853"/><path d="M.8 31.8l2.8-.1L26 21.6 20.5 16Z" fill="#ea4335"/><path d="M26 10.4 3.6.2c-.4-.2-.8 0-.8.2L20.5 16Z" fill="#fbbc05"/><path d="M3.6 31.7 26 21.6 20.5 16 .8 31.8c.4.2 1.2.2 2.8-.1Z" fill="#ea4335"/></g>
+    </svg>
+  </a>`
+    : `<a class="btn" href="${apkUrl}">Download for Android</a>`
+
   return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>RavenTag</title>
@@ -189,7 +203,7 @@ p{color:#aaa;line-height:1.6;margin:0 0 24px;font-size:15px}
   ${logoSvg}
   <h1>RavenTag Verify</h1>
   <p>Install the RavenTag Verify app to authenticate this NFC tag.</p>
-  <a class="btn" href="${apkUrl}">Download for Android</a>
+  ${downloadBtn}
   <a class="sub" href="${releaseUrl}">View all releases</a>
 </div></body></html>`
 }
