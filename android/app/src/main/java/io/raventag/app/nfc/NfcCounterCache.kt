@@ -38,27 +38,33 @@ import androidx.security.crypto.MasterKey
  *
  * @param context Application context, used to access SharedPreferences.
  */
-class NfcCounterCache(context: Context) {
+class NfcCounterCache(private val context: Context) {
 
     /**
      * The underlying preferences store. Tries EncryptedSharedPreferences first
      * (AES-256-SIV for keys, AES-256-GCM for values). Falls back to plain
      * SharedPreferences if hardware encryption is unavailable.
+     *
+     * Initialized lazily on first use (during NFC verification, not at ViewModel
+     * construction time) so that the Keystore operation does not block the main thread
+     * during app startup.
      */
-    private val prefs: SharedPreferences = try {
-        val masterKey = MasterKey.Builder(context)
-            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-            .build()
-        EncryptedSharedPreferences.create(
-            context,
-            PREFS_NAME,
-            masterKey,
-            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-        )
-    } catch (_: Throwable) {
-        // Fallback to plain prefs if encryption unavailable
-        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    private val prefs: SharedPreferences by lazy {
+        try {
+            val masterKey = MasterKey.Builder(context)
+                .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                .build()
+            EncryptedSharedPreferences.create(
+                context,
+                PREFS_NAME,
+                masterKey,
+                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+            )
+        } catch (_: Throwable) {
+            // Fallback to plain prefs if encryption unavailable
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        }
     }
 
     /**

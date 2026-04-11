@@ -18,6 +18,11 @@ import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.withContext
 
 /**
  * WalletManager , BIP32/BIP44 HD wallet for Ravencoin.
@@ -34,6 +39,7 @@ class WalletManager(private val context: Context) {
     // BIP32 derivation + secp256k1 on the main thread.
     // @Volatile ensures visibility across threads (Dispatchers.IO reads it concurrently).
     @Volatile private var cachedAddress: String? = null
+    @Volatile private var sweepRunning = false
 
     companion object {
         private const val PREFS_NAME = "raventag_wallet"
@@ -41,6 +47,7 @@ class WalletManager(private val context: Context) {
         private const val KEY_SEED_IV = "seed_iv"
         private const val KEY_MNEMONIC_ENC = "mnemonic_enc"
         private const val KEY_MNEMONIC_IV = "mnemonic_iv"
+        private const val KEY_ADDRESS_INDEX = "address_index"
         private const val KEYSTORE_ALIAS = "raventag_wallet_key"
         private const val COIN_TYPE = 175
         private val RVN_ADDRESS_VERSION = byteArrayOf(0x3C.toByte())
@@ -385,6 +392,7 @@ class WalletManager(private val context: Context) {
         prefs().edit()
             .remove(KEY_SEED_ENC).remove(KEY_SEED_IV)
             .remove(KEY_MNEMONIC_ENC).remove(KEY_MNEMONIC_IV)
+            .remove(KEY_ADDRESS_INDEX)
             .apply()
         try {
             val ks = KeyStore.getInstance("AndroidKeyStore")
@@ -393,7 +401,570 @@ class WalletManager(private val context: Context) {
         } catch (_: Exception) {}
     }
 
-    /** Restore wallet from existing mnemonic. */
+    // ── Address rotation (post-quantum protection) ─────────────────────────
+
+    /**
+     * Returns the current BIP44 address index (the "clean" address that has
+     * never been used for an outgoing transaction).
+     *
+     * Path: m/44'/175'/0'/0/{index}
+     *
+     * Defaults to 0 for wallets created before the address rotation feature,
+     * ensuring full backward compatibility.
+     */
+    fun getCurrentAddressIndex(): Int = prefs().getInt(KEY_ADDRESS_INDEX, 0)
+
+    /**
+     * Persist the current address index and invalidate the cached address.
+     * Called after every outgoing transaction to advance to a fresh address
+     * whose public key has never been exposed on-chain.
+     */
+    private fun setCurrentAddressIndex(index: Int) {
+        prefs().edit().putInt(KEY_ADDRESS_INDEX, index).apply()
+        cachedAddress = null
+    }
+
+    /**
+     * Convenience method: returns the address at the current BIP44 index.
+     * This is the address that should be shown to the user for receiving funds.
+     */
+    fun getCurrentAddress(): String? = getAddress(0, getCurrentAddressIndex())
+
+    /**
+     * Lightweight check on app startup: verifies that the current address has
+     * never made an outgoing transaction (public key still hidden).
+     *
+     * If the current address has outgoing history, advances to the next clean
+     * address. This covers two cases:
+     * - Pre-rotation wallets that never had KEY_ADDRESS_INDEX set.
+     * - Edge cases where the app was killed before the index was advanced.
+     *
+     * Makes at most 2 ElectrumX calls (history + listunspent) per check.
+     * If the current address is clean, returns immediately with no network calls
+     * beyond the status check.
+     */
+    /**
+     * Reconcile the current address index with the actual on-chain state.
+     * Finds the HIGHEST index that has BOTH:
+     *   1. Clean status (RECEIVE_ONLY or NO_HISTORY - no outgoing transactions)
+     *   2. Actual funds (UTXOs exist)
+     *
+     * This ensures the wallet points to the correct receive address that holds
+     * the consolidated funds.
+     */
+    fun reconcileCurrentAddressIndex(): Int = kotlinx.coroutines.runBlocking(kotlinx.coroutines.Dispatchers.IO) {
+        val node = RavencoinPublicNode()
+        val storedIndex = getCurrentAddressIndex()
+
+        // Scan ONLY the top addresses (storedIndex-3 to storedIndex) in PARALLEL
+        // Most recent funds will be on the highest clean addresses
+        val startScan = maxOf(0, storedIndex - 5)
+        val indicesToCheck = (startScan..storedIndex).toList()
+
+        var highestCleanIndexWithFunds: Int? = null
+
+        val results = coroutineScope {
+            indicesToCheck.map { i ->
+                async(Dispatchers.IO) {
+                    val addr = getAddress(0, i) ?: return@async null
+                    val status = try { node.getAddressStatus(addr) } catch (_: Exception) {
+                        RavencoinPublicNode.AddressStatus.NO_HISTORY
+                    }
+                    if (status == RavencoinPublicNode.AddressStatus.HAS_OUTGOING) return@async null
+
+                    // Check if this clean address has funds
+                    val utxos = try { node.getUtxos(addr) } catch (_: Exception) { emptyList() }
+                    if (utxos.isNotEmpty()) i to utxos.size else null
+                }
+            }.awaitAll()
+        }
+
+        // Find the highest index with clean status AND funds
+        val nonNullResults = results.filterNotNull()
+        if (nonNullResults.isNotEmpty()) {
+            highestCleanIndexWithFunds = nonNullResults.maxByOrNull { it.first }?.first
+        }
+
+        if (highestCleanIndexWithFunds != null && highestCleanIndexWithFunds != storedIndex) {
+            android.util.Log.i("WalletManager", "reconcile: funds at index $highestCleanIndexWithFunds, was $storedIndex")
+            setCurrentAddressIndex(highestCleanIndexWithFunds!!)
+            return@runBlocking highestCleanIndexWithFunds!!
+        }
+
+        // Fallback: no clean address with funds found in recent range,
+        // scan ALL addresses for the highest clean one (even without funds)
+        if (highestCleanIndexWithFunds == null) {
+            val allIndices = (0..storedIndex).toList()
+            val allResults = coroutineScope {
+                allIndices.chunked(10).flatMap { batch ->
+                    batch.map { i ->
+                        async(Dispatchers.IO) {
+                            val addr = getAddress(0, i) ?: return@async null
+                            val status = try { node.getAddressStatus(addr) } catch (_: Exception) {
+                                RavencoinPublicNode.AddressStatus.NO_HISTORY
+                            }
+                            if (status != RavencoinPublicNode.AddressStatus.HAS_OUTGOING) i else null
+                        }
+                    }.awaitAll()
+                }
+            }
+            val cleanIndices = allResults.filterNotNull()
+            if (cleanIndices.isNotEmpty()) {
+                val maxClean = cleanIndices.maxOrNull()
+                if (maxClean != null && maxClean != storedIndex) {
+                    android.util.Log.i("WalletManager", "reconcile: highest clean index $maxClean (no funds), was $storedIndex")
+                    setCurrentAddressIndex(maxClean)
+                    return@runBlocking maxClean
+                }
+            }
+        }
+
+        return@runBlocking storedIndex
+    }
+
+    fun ensureCurrentAddressClean() {
+        val node = RavencoinPublicNode()
+        var index = getCurrentAddressIndex()
+        val addr = getAddress(0, index) ?: return
+
+        val status = try { node.getAddressStatus(addr) } catch (_: Exception) { return }
+        if (status != RavencoinPublicNode.AddressStatus.HAS_OUTGOING) return
+
+        // Current address has outgoing tx, advance until we find a clean one
+        index++
+        while (true) {
+            val nextAddr = getAddress(0, index) ?: break
+            val nextStatus = try { node.getAddressStatus(nextAddr) } catch (_: Exception) { break }
+            if (nextStatus != RavencoinPublicNode.AddressStatus.HAS_OUTGOING) break
+            index++
+        }
+        setCurrentAddressIndex(index)
+        android.util.Log.i("WalletManager", "ensureCurrentAddressClean: advanced to index $index")
+    }
+
+    /**
+     * Discover the current address index by scanning the BIP44 address chain.
+     * Used after wallet restore from mnemonic to find the first unused address
+     * that has never made an outgoing transaction.
+     *
+     * Scans in parallel batches of 5 addresses at a time, using a BIP44 gap
+     * limit of 20 consecutive addresses with no on-chain history.
+     *
+     * The discovered index is the first address that is either RECEIVE_ONLY
+     * (has received funds but never spent) or NO_HISTORY (never used).
+     * Addresses with HAS_OUTGOING status are skipped because their public
+     * key has been exposed.
+     *
+     * @return The discovered index (first clean address after all used ones).
+     */
+    suspend fun discoverCurrentIndex(): Int = withContext(Dispatchers.IO) {
+        val node = RavencoinPublicNode()
+        var lastUsed = -1
+        var gapCount = 0
+        var batchStart = 0
+        val batchSize = 20  // 1 Keystore decrypt + 2 TLS calls per 20 addresses
+
+        while (gapCount < 20) {
+            // Single Keystore decrypt for 20 addresses at once
+            val batchMap = getAddressBatch(0, batchStart until batchStart + batchSize)
+            if (batchMap.isEmpty()) break
+
+            val addrList = (batchStart until batchStart + batchSize).mapNotNull { batchMap[it] }
+
+            // 2 TLS calls total for all 20 address statuses
+            val statusMap = try {
+                node.getAddressStatusBatch(addrList)
+            } catch (_: Exception) {
+                emptyMap()
+            }
+
+            for (i in batchStart until batchStart + batchSize) {
+                val addr = batchMap[i] ?: continue
+                val status = statusMap[addr] ?: RavencoinPublicNode.AddressStatus.NO_HISTORY
+                if (status != RavencoinPublicNode.AddressStatus.NO_HISTORY) {
+                    lastUsed = i
+                    gapCount = 0
+                } else {
+                    gapCount++
+                    if (gapCount >= 20) break
+                }
+            }
+
+            batchStart += batchSize
+        }
+
+        // Find the first clean address after the last used one
+        // (skip HAS_OUTGOING, land on RECEIVE_ONLY or NO_HISTORY)
+        // Fetch a small batch to avoid per-address Keystore decrypts
+        var newIndex = lastUsed + 1
+        outer@ while (true) {
+            val lookMap = getAddressBatch(0, newIndex until newIndex + 5)
+            if (lookMap.isEmpty()) break
+            val lookAddrs = (newIndex until newIndex + 5).mapNotNull { lookMap[it] }
+            val lookStatuses = try { node.getAddressStatusBatch(lookAddrs) } catch (_: Exception) { break }
+            for (addr in lookAddrs) {
+                val s = lookStatuses[addr] ?: break@outer
+                if (s != RavencoinPublicNode.AddressStatus.HAS_OUTGOING) break@outer
+                newIndex++
+            }
+            if (lookAddrs.size < 5) break
+        }
+
+        setCurrentAddressIndex(newIndex)
+        android.util.Log.i("WalletManager", "Discover: scanned $batchStart addresses, current index = $newIndex")
+        newIndex
+    }
+
+    /**
+     * Sweep funds and assets from old addresses (0..currentIndex-1) that have
+     * outgoing transaction history (HAS_OUTGOING) to the current address.
+     *
+     * Addresses that have only received funds (RECEIVE_ONLY) are NOT swept,
+     * because their public key has never been exposed and they are quantum-safe.
+     * Only addresses that have spent (exposing their public key) need to be
+     * consolidated to the current clean address.
+     *
+     * Each old address is swept independently using its own private key.
+     * Assets are swept before RVN (assets need RVN for fees from the same address).
+     *
+     * @return List of broadcast transaction IDs.
+     */
+    fun sweepOldAddresses(): List<String> {
+        if (sweepRunning) return emptyList()
+        sweepRunning = true
+
+        try {
+            return sweepOldAddressesInternal()
+        } finally {
+            sweepRunning = false
+        }
+    }
+
+    /**
+     * Result of funding an old address for asset sweeping.
+     *
+     * @property txid       Transaction ID of the funding tx.
+     * @property fundUtxo   Synthetic UTXO representing the funding output on the old address.
+     *                      Can be used immediately without waiting for mempool propagation.
+     */
+    private data class FundingResult(val txid: String, val fundUtxo: Utxo)
+
+    /**
+     * Send a small amount of RVN from a sacrificial address to an old address
+     * so the old address can pay fees for sweeping its assets.
+     *
+     * POST-QUANTUM SAFE: Uses a sacrificial address that already HAS_OUTGOING status
+     * (public key already exposed), so funding does NOT expose any clean address keys.
+     *
+     * If no sacrificial address is available, returns null and the caller should skip
+     * the asset sweep for that address (assets remain until the address receives RVN externally).
+     *
+     * Returns a [FundingResult] with a synthetic UTXO that can be used immediately
+     * (no need to re-query ElectrumX, which may not reflect mempool yet).
+     *
+     * @param node              ElectrumX client.
+     * @param sacrificialIndex  Index of an address with HAS_OUTGOING status to fund from, or null.
+     * @param oldAddress        Old address that needs RVN for fees.
+     * @param assetCount        Number of assets to sweep (used to estimate fee budget).
+     * @return [FundingResult] on success, or null if no sacrificial address available.
+     */
+    private fun fundOldAddressForSweep(
+        node: RavencoinPublicNode,
+        sacrificialIndex: Int?,
+        oldAddress: String,
+        assetCount: Int
+    ): FundingResult? {
+        if (sacrificialIndex == null) {
+            android.util.Log.w("WalletManager", "Sweep: no sacrificial address available, skipping funding for $oldAddress")
+            return null
+        }
+
+        val sacrificialAddress = getAddress(0, sacrificialIndex) ?: return null
+
+        // Estimate how much RVN the old address needs:
+        // each asset transfer ~ 300 bytes, plus a small buffer for the final RVN sweep
+        val satPerByte = try { node.getMinRelayFeeRateSatPerByte() } catch (_: FeeUnavailableException) { 200L }
+        val perAssetFee = 300L * satPerByte
+        val fundAmountSat = perAssetFee * assetCount + 200L * satPerByte  // extra for final RVN sweep
+
+        // Get UTXOs from sacrificial address (exclude asset outpoints)
+        val sacAssetOutpoints = try { node.getAllAssetOutpoints(sacrificialAddress) } catch (_: Exception) { emptySet() }
+        val sacUtxos = node.getUtxos(sacrificialAddress)
+            .filter { "${it.txid}:${it.outputIndex}" !in sacAssetOutpoints }
+        if (sacUtxos.isEmpty()) {
+            android.util.Log.w("WalletManager", "Sweep: sacrificial address $sacrificialIndex has no RVN")
+            return null
+        }
+
+        val totalIn = sacUtxos.sumOf { it.satoshis }
+        val fundingTxFee = (10L + 148L * sacUtxos.size + 34L * 2) * satPerByte
+        if (totalIn < fundAmountSat + fundingTxFee) {
+            android.util.Log.w("WalletManager", "Sweep: sacrificial address $sacrificialIndex has insufficient RVN")
+            return null
+        }
+
+        var privKey: ByteArray? = null
+        try {
+            privKey = getPrivateKeyBytes(0, sacrificialIndex) ?: return null
+            val pubKey = getPublicKeyBytes(0, sacrificialIndex) ?: return null
+
+            val tx = RavencoinTxBuilder.buildAndSign(
+                utxos = sacUtxos,
+                toAddress = oldAddress,
+                amountSat = fundAmountSat,
+                feeSat = fundingTxFee,
+                changeAddress = sacrificialAddress,  // change stays on sacrificial (no rotation)
+                privKeyBytes = privKey,
+                pubKeyBytes = pubKey
+            )
+            val txid = node.broadcast(tx.hex)
+            android.util.Log.i("WalletManager", "Sweep: funded $oldAddress with ${fundAmountSat / 1e8} RVN from sacrificial $sacrificialIndex: $txid")
+
+            // Build synthetic UTXO: output 0 is always the recipient in buildAndSign
+            val scriptHex = addressToP2pkhScript(oldAddress)
+            val fundUtxo = Utxo(
+                txid = txid,
+                outputIndex = 0,
+                satoshis = fundAmountSat,
+                script = scriptHex,
+                height = 0  // mempool
+            )
+
+            return FundingResult(txid, fundUtxo)
+        } finally {
+            privKey?.fill(0)
+        }
+    }
+
+    /**
+     * Convert a Ravencoin P2PKH address to its scriptPubKey hex.
+     * Format: OP_DUP OP_HASH160 <20-byte hash> OP_EQUALVERIFY OP_CHECKSIG
+     */
+    private fun addressToP2pkhScript(address: String): String {
+        val decoded = base58Decode(address)
+        val hash160 = decoded.copyOfRange(1, 21)
+        return "76a914" + hash160.joinToString("") { "%02x".format(it) } + "88ac"
+    }
+
+    private fun sweepOldAddressesInternal(): List<String> {
+        val currentIndex = getCurrentAddressIndex()
+        if (currentIndex == 0) return emptyList()
+
+        val node = RavencoinPublicNode()
+
+        // Collect only HAS_OUTGOING addresses with residual funds.
+        //
+        // RECEIVE_ONLY addresses (received funds, never sent) are quantum-safe: their
+        // public key has never appeared in a scriptSig. Sweeping them would create an
+        // outgoing transaction that exposes the key, defeating the entire post-quantum
+        // protection model. They must NEVER be touched here.
+        //
+        // NO_HISTORY addresses have no funds, nothing to sweep.
+        //
+        // The current address (index == currentIndex) is NEVER included: it is the live
+        // receiving address and will be swept by sendRvnLocal() when the user next sends.
+        //
+        // Range is 0 until currentIndex (exclusive upper bound).
+        data class SweepTarget(
+            val index: Int,
+            val address: String,
+            val hasAssets: Boolean,
+            val hasRvn: Boolean
+        )
+        // Batch-fetch all address statuses in one pipelined call (1 Keystore decrypt + 2 TLS connections).
+        val addrMap = getAddressBatch(0, 0 until currentIndex)
+        val addrList = (0 until currentIndex).mapNotNull { i -> addrMap[i]?.let { i to it } }
+        val statusMap = try {
+            node.getAddressStatusBatch(addrList.map { it.second })
+        } catch (_: Exception) { emptyMap() }
+
+        val targets = mutableListOf<SweepTarget>()
+        for ((i, addr) in addrList) {
+            val status = statusMap[addr] ?: continue
+            if (status != RavencoinPublicNode.AddressStatus.HAS_OUTGOING) continue   // RECEIVE_ONLY and NO_HISTORY: skip
+            val hasAssets = try { node.getAssetBalances(addr).isNotEmpty() } catch (_: Exception) { false }
+            val hasRvn   = try { node.getBalance(addr).let { it.confirmed > 0 || it.unconfirmed > 0 } } catch (_: Exception) { false }
+            if (hasAssets || hasRvn) targets.add(SweepTarget(i, addr, hasAssets, hasRvn))
+        }
+        if (targets.isEmpty()) return emptyList()  // nothing to consolidate
+
+        // The sweep destination is the current address — already clean, no index advance.
+        // (Index advances only inside sendRvnLocal(), after the user makes an outgoing tx.)
+        val targetAddress = getAddress(0, currentIndex) ?: return emptyList()
+        android.util.Log.i("WalletManager", "Sweep: consolidating ${targets.size} HAS_OUTGOING address(es) to index $currentIndex")
+
+        val txids = mutableListOf<String>()
+
+        // STEP 1: Fund asset-only targets (assets but no RVN for fees).
+        // Use another HAS_OUTGOING address with RVN as the sacrificial source.
+        // The current clean address is NEVER used for funding (would expose its key).
+        val sacrificialIndex = targets.firstOrNull { it.hasRvn && !it.hasAssets }?.index
+            ?: targets.firstOrNull { it.hasRvn }?.index
+        val needsFunding = targets.filter { it.hasAssets && !it.hasRvn }
+        for (t in needsFunding) {
+            val assetCount = try { node.getAssetBalances(t.address).size } catch (_: Exception) { 1 }
+            val result = fundOldAddressForSweep(node, sacrificialIndex, t.address, assetCount)
+            if (result != null) txids.add(result.txid)
+        }
+
+        // STEP 2: Sweep each target to the current address.
+        for (t in targets) {
+            try {
+                val assetBalances = if (t.hasAssets) {
+                    try { node.getAssetBalances(t.address) } catch (_: Exception) { emptyList() }
+                } else emptyList()
+
+                val assetUtxosMap = mutableMapOf<String, List<AssetUtxo>>()
+                for (asset in assetBalances) {
+                    if (asset.amount > 0) {
+                        val utxos = node.getAssetUtxosFull(t.address, asset.name)
+                        if (utxos.isNotEmpty()) assetUtxosMap[asset.name] = utxos
+                    }
+                }
+
+                val allAssetOutpoints = node.getAllAssetOutpoints(t.address)
+                val rvnUtxos = node.getUtxos(t.address)
+                    .filter { "${it.txid}:${it.outputIndex}" !in allAssetOutpoints }
+
+                if (assetUtxosMap.isEmpty() && rvnUtxos.isEmpty()) continue
+
+                var privKey: ByteArray? = null
+                try {
+                    privKey = getPrivateKeyBytes(0, t.index) ?: continue
+                    val pubKey = getPublicKeyBytes(0, t.index) ?: continue
+
+                    if (assetUtxosMap.isNotEmpty()) {
+                        val totalAssetOutputs = assetBalances.count { it.amount > 0 }
+                        val totalInputs = rvnUtxos.size + assetUtxosMap.values.sumOf { it.size }
+                        val estimatedBytes = 10 + 148 * totalInputs + 70 * (1 + totalAssetOutputs) + 34
+                        val feeSat = estimatedBytes * node.getMinRelayFeeRateSatPerByte()
+
+                        val tx = RavencoinTxBuilder.buildAndSignFullAddressSweep(
+                            assetUtxos = assetUtxosMap,
+                            rvnUtxos = rvnUtxos,
+                            feeSat = feeSat,
+                            changeAddress = targetAddress,
+                            privKeyBytes = privKey,
+                            pubKeyBytes = pubKey
+                        )
+                        val txid = node.broadcast(tx.hex)
+                        txids.add(txid)
+                        android.util.Log.i("WalletManager", "Sweep: assets+RVN from index ${t.index} to $currentIndex: $txid")
+
+                    } else if (rvnUtxos.isNotEmpty()) {
+                        val totalSat = rvnUtxos.sumOf { it.satoshis }
+                        val satPerByte = node.getMinRelayFeeRateSatPerByte()
+                        val estimatedBytes = 10 + 148 * rvnUtxos.size + 34
+                        val feeSat = estimatedBytes * satPerByte
+                        val sendAmount = totalSat - feeSat
+
+                        if (sendAmount > 546) {
+                            val tx = RavencoinTxBuilder.buildAndSign(
+                                utxos = rvnUtxos,
+                                toAddress = targetAddress,
+                                amountSat = sendAmount,
+                                feeSat = feeSat,
+                                changeAddress = targetAddress,
+                                privKeyBytes = privKey,
+                                pubKeyBytes = pubKey
+                            )
+                            val txid = node.broadcast(tx.hex)
+                            txids.add(txid)
+                            android.util.Log.i("WalletManager", "Sweep: RVN from index ${t.index} to $currentIndex: $txid")
+                        }
+                    }
+                } finally {
+                    privKey?.fill(0)
+                }
+            } catch (e: Exception) {
+                android.util.Log.w("WalletManager", "Sweep: index ${t.index} failed: ${e.message}")
+            }
+        }
+
+        return txids
+    }
+
+    /**
+     * Fund multiple old addresses that have assets but no RVN.
+     * Uses the current address as the funding source.
+     *
+     * @param node ElectrumX client.
+     * @param addressesToFund List of (index, address) pairs that need funding.
+     * @return List of funding transaction IDs.
+     */
+    private fun fundAddressesForSweep(
+        node: RavencoinPublicNode,
+        addressesToFund: List<Pair<Int, String>>
+    ): List<String> {
+        if (addressesToFund.isEmpty()) return emptyList()
+
+        val currentIndex = getCurrentAddressIndex()
+        val currentAddress = getAddress(0, currentIndex) ?: return emptyList()
+
+        // Get UTXOs from current address
+        val curAssetOutpoints = try { node.getAllAssetOutpoints(currentAddress) } catch (_: Exception) { emptySet() }
+        val curUtxos = node.getUtxos(currentAddress)
+            .filter { "${it.txid}:${it.outputIndex}" !in curAssetOutpoints }
+        if (curUtxos.isEmpty()) {
+            android.util.Log.w("WalletManager", "Sweep funding: no RVN on current address")
+            return emptyList()
+        }
+
+        val fundingTxids = mutableListOf<String>()
+        val satPerByte = try { node.getMinRelayFeeRateSatPerByte() } catch (_: FeeUnavailableException) { 200L }
+
+        for ((index, oldAddress) in addressesToFund) {
+            val assetBalances = try { node.getAssetBalances(oldAddress) } catch (_: Exception) { emptyList() }
+            if (assetBalances.isEmpty()) continue
+
+            // Estimate funding needed
+            val perAssetFee = 300L * satPerByte
+            val fundAmountSat = perAssetFee * assetBalances.size + 500L * satPerByte
+
+            // Use remaining RVN after previous funding txs
+            val totalIn = curUtxos.sumOf { it.satoshis }
+            val alreadyFunded = fundingTxids.size * fundAmountSat
+            val available = totalIn - alreadyFunded
+            if (available < fundAmountSat) {
+                android.util.Log.w("WalletManager", "Sweep funding: insufficient for index $index")
+                continue
+            }
+
+            var privKey: ByteArray? = null
+            try {
+                privKey = getPrivateKeyBytes(0, currentIndex) ?: continue
+                val pubKey = getPublicKeyBytes(0, currentIndex) ?: continue
+
+                val fundingFee = (10L + 148L * 2 + 34L * 2) * satPerByte
+                val tx = RavencoinTxBuilder.buildAndSign(
+                    utxos = curUtxos,
+                    toAddress = oldAddress,
+                    amountSat = fundAmountSat,
+                    feeSat = fundingFee,
+                    changeAddress = currentAddress,
+                    privKeyBytes = privKey,
+                    pubKeyBytes = pubKey
+                )
+                val txid = node.broadcast(tx.hex)
+                fundingTxids.add(txid)
+                android.util.Log.i("WalletManager", "Sweep funding: funded index $index ($oldAddress) with ${fundAmountSat / 1e8} RVN: $txid")
+            } catch (e: Exception) {
+                android.util.Log.w("WalletManager", "Sweep funding: failed index $index: ${e.message}")
+            } finally {
+                privKey?.fill(0)
+            }
+        }
+
+        return fundingTxids
+    }
+
+    /**
+     * Restore wallet from existing mnemonic.
+     *
+     * Address index discovery is NOT done here (it requires many network calls).
+     * The caller should run [discoverCurrentIndex] in background after restore
+     * completes, or let [migrateAddressIndexIfNeeded] handle it on first refresh.
+     */
     fun restoreWallet(mnemonic: String): Boolean {
         return try {
             val normalized = mnemonic.trim()
@@ -401,6 +972,8 @@ class WalletManager(private val context: Context) {
             val seed = mnemonicToSeed(normalized, "")
             storeSeed(seed, normalized)
             cachedAddress = null
+            // Reset address index to 0; discovery will find the correct one
+            prefs().edit().putInt(KEY_ADDRESS_INDEX, 0).apply()
             true
         } catch (e: Exception) {
             false
@@ -479,10 +1052,11 @@ class WalletManager(private val context: Context) {
         } catch (e: Exception) { null }
     }
 
-    /** Get the Ravencoin address at m/44'/175'/0'/0/0 */
+    /** Get the Ravencoin address at m/44'/175'/0'/{accountIndex}/{addressIndex}. */
     fun getAddress(accountIndex: Int = 0, addressIndex: Int = 0): String? {
-        // Return cached address for the default BIP44 path (m/44'/175'/0'/0/0)
-        if (accountIndex == 0 && addressIndex == 0) {
+        // Return cached address if this is the current active index
+        val currentIdx = getCurrentAddressIndex()
+        if (accountIndex == 0 && addressIndex == currentIdx) {
             cachedAddress?.let { return it }
         }
         var seed: ByteArray? = null
@@ -492,7 +1066,7 @@ class WalletManager(private val context: Context) {
             privKey = derivePrivateKey(seed, accountIndex, addressIndex)
             val pubKey = privateKeyToPublicKey(privKey)
             val address = publicKeyToRavenAddress(pubKey)
-            if (accountIndex == 0 && addressIndex == 0) cachedAddress = address
+            if (accountIndex == 0 && addressIndex == currentIdx) cachedAddress = address
             address
         } catch (_: Throwable) {
             null
@@ -500,6 +1074,41 @@ class WalletManager(private val context: Context) {
             seed?.fill(0)
             privKey?.fill(0)
         }
+    }
+
+    /**
+     * Decrypt the seed once and derive all addresses in [indices] from a single Keystore operation.
+     *
+     * Calling [getAddress] N times triggers N independent Keystore AES-GCM decrypts. Because
+     * Android Keystore serializes internally under StrongBox contention, running those N decrypts
+     * in parallel causes each one to queue behind the others and the total time grows super-linearly.
+     * This function avoids the problem: one decrypt, N cheap BIP32 derivations.
+     *
+     * @param accountIndex BIP44 account index (almost always 0)
+     * @param indices      Range of address indices to derive
+     * @return Map from index to derived Ravencoin address; missing entries indicate derivation errors
+     */
+    fun getAddressBatch(accountIndex: Int, indices: IntRange): Map<Int, String> {
+        val seed = getSeed() ?: return emptyMap()
+        val result = mutableMapOf<Int, String>()
+        val currentIdx = getCurrentAddressIndex()
+        try {
+            for (i in indices) {
+                var privKey: ByteArray? = null
+                try {
+                    privKey = derivePrivateKey(seed, accountIndex, i)
+                    val address = publicKeyToRavenAddress(privateKeyToPublicKey(privKey))
+                    result[i] = address
+                    if (accountIndex == 0 && i == currentIdx) cachedAddress = address
+                } catch (_: Throwable) {
+                } finally {
+                    privKey?.fill(0)
+                }
+            }
+        } finally {
+            seed.fill(0)
+        }
+        return result
     }
 
     /** Get private key hex (export for signing) , use with extreme care */
@@ -544,69 +1153,196 @@ class WalletManager(private val context: Context) {
     }
 
     /**
-     * Query balance directly from public Ravencoin node (no backend required).
-     * Returns balance in RVN.
+     * Query aggregated balance across all used addresses (0..currentIndex)
+     * directly from public Ravencoin nodes (no backend required).
+     * Returns total balance in RVN, or null on failure.
+     *
+     * Uses [getAddressBatch] for a single Keystore decrypt, then sends all
+     * balance requests in one pipelined batch via [RavencoinPublicNode.getTotalBalance].
+     * With 37 addresses this opens 2 TLS connections instead of 37.
      */
-    fun getLocalBalance(): Double? {
-        return try {
-            val address = getAddress() ?: return null
+    suspend fun getLocalBalance(): Double? = withContext(Dispatchers.IO) {
+        try {
             val node = RavencoinPublicNode()
-            node.getBalance(address).totalRvn
+            val currentIndex = getCurrentAddressIndex()
+            val addresses = getAddressBatch(0, 0..currentIndex).values.toList()
+            node.getTotalBalance(addresses).takeIf { it > 0.0 }
         } catch (_: Exception) { null }
     }
 
     /**
-     * Send RVN from local wallet directly to the network.
-     * No backend required. Uses public Ravencoin node for UTXO query and broadcast.
+     * Send RVN from local wallet directly to the network with post-quantum protection.
+     *
+     * POST-QUANTUM SAFE LOGIC - SINGLE TRANSACTION:
+     * 1. Send the requested RVN amount to the external destination address
+     * 2. Transfer ALL assets to a fresh address (currentIndex + 1)
+     * 3. Send ALL remaining RVN to the fresh address (currentIndex + 1)
+     * 4. Advance the address index so the next transaction uses the clean address
+     *
+     * This ensures that after ANY outgoing transaction, the current address is completely
+     * emptied (both RVN and ALL assets) and all remaining funds are moved to a fresh,
+     * quantum-safe address whose public key has never been exposed on-chain.
      *
      * @param toAddress Recipient Ravencoin address
      * @param amountRvn Amount in RVN
      * @return "$txid|fee:$satoshis" on success
      */
     fun sendRvnLocal(toAddress: String, amountRvn: Double): String {
-        val address = getAddress() ?: error("No wallet")
-        var privKey: ByteArray? = null
-        return try {
-            privKey = getPrivateKeyBytes() ?: error("No private key")
-            val pubKey = getPublicKeyBytes() ?: error("No public key")
+        var currentIndex = getCurrentAddressIndex()
+        var address = getAddress(0, currentIndex) ?: error("No wallet")
 
-            val node = RavencoinPublicNode()
-            val utxos = node.getUtxos(address)
-            if (utxos.isEmpty()) {
-                val bal = try { node.getBalance(address) } catch (_: Exception) { null }
-                if (bal != null && bal.unconfirmed > 0 && bal.confirmed == 0L) {
-                    error("Transaction not confirmed yet. Wait for 1-2 blocks before sending.")
-                }
-                error("No spendable funds found for address $address")
+        val node = RavencoinPublicNode()
+
+        // FALLBACK: If current address has no RVN, scan backwards to find the address with funds.
+        // This handles the case where a sweep advanced currentIndex but the actual funds remain
+        // on a previous address.
+        var allUtxos = node.getUtxos(address)
+        if (allUtxos.isEmpty()) {
+            val bal = try { node.getBalance(address) } catch (_: Exception) { null }
+            if (bal != null && bal.unconfirmed > 0 && bal.confirmed == 0L) {
+                error("Transaction not confirmed yet. Wait for 1-2 blocks before sending.")
             }
 
-            // Query the node's minimum relay fee, then apply it with a 2x margin (floor 200 sat/byte)
-            val satPerByte = node.getMinRelayFeeRateSatPerByte()
-            // Estimate tx size: 10 overhead + 148 per input + 34 per output (assume 2 outputs)
-            val estimatedBytes = 10 + 148 * utxos.size + 34 * 2
-            val feeSat = estimatedBytes * satPerByte
+            android.util.Log.w("WalletManager", "sendRvn: currentIndex $currentIndex has no funds, scanning backwards for fallback")
+            var fallbackIndex = -1
+            for (i in currentIndex - 1 downTo 0) {
+                val fallbackAddr = getAddress(0, i) ?: continue
+                val fallbackUtxos = try { node.getUtxos(fallbackAddr) } catch (_: Exception) { emptyList() }
+                if (fallbackUtxos.isNotEmpty()) {
+                    val status = try { node.getAddressStatus(fallbackAddr) } catch (_: Exception) {
+                        RavencoinPublicNode.AddressStatus.NO_HISTORY
+                    }
+                    android.util.Log.i("WalletManager", "sendRvn: found funds on index $i (status: $status)")
+                    fallbackIndex = i
+                    break
+                }
+            }
+
+            if (fallbackIndex == -1) {
+                error("No spendable funds on current address. Try refreshing the wallet to consolidate funds.")
+            }
+
+            // Set currentIndex to the fallback index. The nextAddress (currentIndex+1) will be
+            // the clean address that receives all remaining funds after this transaction.
+            currentIndex = fallbackIndex
+            setCurrentAddressIndex(currentIndex)
+            address = getAddress(0, currentIndex) ?: error("Cannot derive fallback address")
+            allUtxos = node.getUtxos(address)
+            android.util.Log.i("WalletManager", "sendRvn: fallback to index $currentIndex ($address)")
+        }
+
+        val nextAddress = getAddress(0, currentIndex + 1) ?: error("Cannot derive next address")
+        var privKey: ByteArray? = null
+        return try {
+            privKey = getPrivateKeyBytes(0, currentIndex) ?: error("No private key")
+            val pubKey = getPublicKeyBytes(0, currentIndex) ?: error("No public key")
+
             val amountSat = (amountRvn * 1e8).toLong()
-            val tx = RavencoinTxBuilder.buildAndSign(
-                utxos = utxos,
-                toAddress = toAddress,
-                amountSat = amountSat,
-                feeSat = feeSat,
-                changeAddress = address,
-                privKeyBytes = privKey,
-                pubKeyBytes = pubKey
-            )
-            val txid = node.broadcast(tx.hex)
-            // Return txid with fee info for diagnostics
-            "$txid|fee:${feeSat}"
+
+            // Get all asset outpoints to separate RVN from asset UTXOs
+            val allAssetOutpoints = node.getAllAssetOutpoints(address)
+            val rvnUtxos = allUtxos.filter { "${it.txid}:${it.outputIndex}" !in allAssetOutpoints }
+
+            if (rvnUtxos.isEmpty()) {
+                error("No RVN available for transaction fee. Fund your wallet with at least 0.01 RVN.")
+            }
+
+            // Check for assets on current address
+            val assetBalances = node.getAssetBalances(address)
+            val hasAssets = assetBalances.any { it.amount > 0 }
+
+            val satPerByte = node.getMinRelayFeeRateSatPerByte()
+            val txid: String
+            var feeSatActual: Long = 0L
+
+            if (hasAssets) {
+                // POST-QUANTUM SAFE: Send RVN + sweep ALL assets to nextAddress in ONE transaction
+                val assetUtxos = mutableMapOf<String, List<AssetUtxo>>()
+                for (asset in assetBalances) {
+                    if (asset.amount > 0) {
+                        val utxos = node.getAssetUtxosFull(address, asset.name)
+                        if (utxos.isNotEmpty()) {
+                            assetUtxos[asset.name] = utxos
+                        }
+                    }
+                }
+
+                // Calculate fee: RVN inputs + all asset inputs, outputs for RVN + RVN change + all assets
+                val totalAssetOutputs = assetBalances.count { it.amount > 0 }
+                val totalInputs = rvnUtxos.size + assetUtxos.values.sumOf { it.size }
+                val estimatedBytes = 10 + 148 * totalInputs + 70 * (2 + totalAssetOutputs) + 34
+                feeSatActual = estimatedBytes * satPerByte
+
+                android.util.Log.i("WalletManager", "sendRvn with asset sweep: " +
+                    "${assetUtxos.size} asset types, $totalAssetOutputs asset outputs")
+
+                val tx = RavencoinTxBuilder.buildAndSignRvnSendWithAssetSweep(
+                    rvnUtxos = rvnUtxos,
+                    assetUtxos = assetUtxos,
+                    toAddress = toAddress,
+                    amountSat = amountSat,
+                    feeSat = feeSatActual,
+                    changeAddress = nextAddress,  // ALL assets and remaining RVN go to fresh address
+                    privKeyBytes = privKey,
+                    pubKeyBytes = pubKey
+                )
+                txid = node.broadcast(tx.hex)
+
+                android.util.Log.i("WalletManager", "sendRvn: sent $amountRvn RVN to $toAddress, " +
+                    "all assets and remaining RVN to $nextAddress, txid=$txid")
+
+            } else {
+                // Simple RVN send (no assets to sweep)
+                val estimatedBytes = 10 + 148 * rvnUtxos.size + 34 * 2
+                feeSatActual = estimatedBytes * satPerByte
+
+                val totalIn = rvnUtxos.sumOf { it.satoshis }
+                require(totalIn > amountSat + feeSatActual) {
+                    "Insufficient funds: have ${totalIn / 1e8} RVN, need ${amountSat / 1e8} RVN + ${feeSatActual / 1e8} RVN fee"
+                }
+
+                val changeSat = totalIn - amountSat - feeSatActual
+                require(changeSat > 546) {
+                    "Remaining change (${"%.8f".format(changeSat / 1e8)} RVN) is below dust limit. " +
+                    "Send a slightly smaller amount or send the full balance."
+                }
+
+                val tx = RavencoinTxBuilder.buildAndSign(
+                    utxos = rvnUtxos,
+                    toAddress = toAddress,
+                    amountSat = amountSat,
+                    feeSat = feeSatActual,
+                    changeAddress = nextAddress,
+                    privKeyBytes = privKey,
+                    pubKeyBytes = pubKey
+                )
+                txid = node.broadcast(tx.hex)
+
+                android.util.Log.i("WalletManager", "sendRvn: sent $amountRvn RVN to $toAddress, " +
+                    "remaining ${"%.8f".format(changeSat / 1e8)} RVN to $nextAddress, txid=$txid")
+            }
+
+            // Advance to next address (public key of current address is now exposed)
+            setCurrentAddressIndex(currentIndex + 1)
+
+            "$txid|fee:$feeSatActual"
         } finally {
             privKey?.fill(0)
         }
     }
 
     /**
-     * Transfer a Ravencoin asset directly on-chain (no backend required).
-     * Fetches asset UTXOs and RVN UTXOs, builds and signs the transfer transaction,
-     * then broadcasts via ElectrumX.
+     * Transfer a Ravencoin asset directly on-chain (no backend required) with post-quantum protection.
+     *
+     * POST-QUANTUM SAFE LOGIC - SINGLE TRANSACTION:
+     * 1. Transfer the requested asset to the external destination address
+     * 2. Transfer ALL other remaining assets to a fresh address (currentIndex + 1)
+     * 3. Transfer ALL remaining RVN to the fresh address (currentIndex + 1)
+     * 4. Advance the address index so the next transaction uses the clean address
+     *
+     * Everything happens in ONE ATOMIC TRANSACTION, ensuring the current address
+     * is completely emptied and all remaining funds move to a fresh, quantum-safe
+     * address whose public key has never been exposed on-chain.
      *
      * Handles all asset types correctly:
      *   - Unique tokens ("BRAND/PRODUCT#SN001"): always qty=1, divisions=0, no asset change.
@@ -625,93 +1361,117 @@ class WalletManager(private val context: Context) {
         toAddress: String,
         qty: Double = 1.0
     ): String {
-        val address = getAddress() ?: error("No wallet")
+        val currentIndex = getCurrentAddressIndex()
+        val address = getAddress(0, currentIndex) ?: error("No wallet")
+        val nextAddress = getAddress(0, currentIndex + 1) ?: error("Cannot derive next address")
         var privKey: ByteArray? = null
         return try {
-            privKey = getPrivateKeyBytes() ?: error("No private key")
-            val pubKey = getPublicKeyBytes() ?: error("No public key")
+            privKey = getPrivateKeyBytes(0, currentIndex) ?: error("No private key")
+            val pubKey = getPublicKeyBytes(0, currentIndex) ?: error("No public key")
 
             val node = RavencoinPublicNode()
 
-            // Ravencoin wire format always encodes asset amounts as qty * COIN (10^8), regardless
-            // of the asset's divisions field. Divisions control only display precision, not the
-            // on-chain LE64 value. Unique tokens ("#") and owner tokens ("!") each carry exactly
-            // 1 * COIN = 100_000_000 raw units per UTXO.
             val rawQtyRequested = Math.round(qty * 100_000_000.0)
             require(rawQtyRequested > 0) { "Transfer quantity must be greater than zero" }
 
-            // Fetch asset UTXOs (each carries the asset and a dust amount of RVN)
-            val assetUtxosFull = node.getAssetUtxosFull(address, assetName)
-            if (assetUtxosFull.isEmpty()) error("No UTXOs found for asset $assetName in address $address")
+            // Get UTXOs for the primary asset being transferred externally
+            val primaryAssetUtxosFull = node.getAssetUtxosFull(address, assetName)
+            if (primaryAssetUtxosFull.isEmpty()) error("No UTXOs found for asset $assetName. Try refreshing the wallet.")
 
-            val totalRawAmount = assetUtxosFull.sumOf { it.assetRawAmount }
+            val totalRawAmount = primaryAssetUtxosFull.sumOf { it.assetRawAmount }
             require(totalRawAmount > 0) { "Asset $assetName has zero balance in UTXOs" }
             require(rawQtyRequested <= totalRawAmount) {
                 "Insufficient asset balance: requested $qty, " +
                 "available ${totalRawAmount / 100_000_000.0}"
             }
 
-            // Remaining asset balance returns to the sender as a second OP_RVN_ASSET output.
             val assetChangeRawAmount = totalRawAmount - rawQtyRequested
+            val primaryAssetUtxos = primaryAssetUtxosFull.map { it.utxo }
 
-            val assetUtxos = assetUtxosFull.map { it.utxo }
-            val assetDust = assetUtxos.sumOf { it.satoshis }
+            // Get ALL other asset balances (excluding the primary asset)
+            val otherAssetBalances = node.getAssetBalances(address)
+                .filter { it.name != assetName && it.amount > 0 }
 
-            // Number of asset outputs: 1 for full transfer (unique tokens), 2 if there's asset change.
-            val numAssetOutputs = if (assetChangeRawAmount > 0) 2 else 1
+            // Get UTXOs for all other assets
+            val otherAssetUtxos = mutableMapOf<String, List<AssetUtxo>>()
+            for (otherAsset in otherAssetBalances) {
+                val otherUtxos = node.getAssetUtxosFull(address, otherAsset.name)
+                if (otherUtxos.isNotEmpty()) {
+                    otherAssetUtxos[otherAsset.name] = otherUtxos
+                }
+            }
 
-            // Estimate fee dynamically using ElectrumX relay fee with safety margin.
-            // Use conservative estimate: 10 overhead + 148 per input + ~70 per asset output + 34 per RVN output.
-            // Start with minimum estimate and adjust after fetching UTXOs.
-            val relayFeeSatPerByte = try { node.getMinRelayFeeRateSatPerByte() } catch (_: FeeUnavailableException) { 200L }
-            // Use relay fee directly without excessive margin (floor 200 sat/byte)
-            val satPerByte = maxOf(relayFeeSatPerByte, 200L)
-            
-            // Dust for asset outputs: only needed if asset UTXOs have satoshis (preserves value balance).
-            // For tokens issued with 0 satoshis, use 0 dust to avoid "creating satoshi from nothing" error.
-            val dustNeeded = if (assetDust > 0) 600L * numAssetOutputs else 0L
-
-            // Always fetch RVN UTXOs to pay the fee, even if no dust is needed for asset outputs.
-            val excludedOutpoints = node.getAllAssetOutpoints(address)
+            // Get RVN-only UTXOs (exclude all asset outpoints)
+            val allAssetOutpoints = node.getAllAssetOutpoints(address)
             val rvnUtxos = node.getUtxos(address)
-                .filter { "${it.txid}:${it.outputIndex}" !in excludedOutpoints }
-            
-            // Recalculate fee with actual UTXO count
-            val totalInputs = assetUtxos.size + rvnUtxos.size
-            val estimatedBytes = 10 + 148 * totalInputs + 70 * numAssetOutputs + 34
+                .filter { "${it.txid}:${it.outputIndex}" !in allAssetOutpoints }
+
+            // Estimate fee
+            val primaryAssetChangeOutputs = if (assetChangeRawAmount > 0) 1 else 0
+            val totalAssetOutputs = 1 + primaryAssetChangeOutputs + otherAssetBalances.size // primary + change + others
+            val totalInputs = primaryAssetUtxos.size +
+                otherAssetUtxos.values.sumOf { it.size } +
+                rvnUtxos.size
+
+            val relayFeeSatPerByte = try { node.getMinRelayFeeRateSatPerByte() } catch (_: FeeUnavailableException) { 200L }
+            val satPerByte = maxOf(relayFeeSatPerByte, 200L)
+            val estimatedBytes = 10 + 148 * totalInputs + 70 * totalAssetOutputs + 34
             val feeSat = estimatedBytes * satPerByte
-            
-            // Verify RVN UTXOs cover both dust and fee
+
+            // Check if we have enough RVN for fee
             val rvnTotal = rvnUtxos.sumOf { it.satoshis }
-            val required = dustNeeded + feeSat
-            if (rvnTotal < required) {
-                error("Insufficient RVN for fee and dust. Need ${required / 1e8} RVN, have ${rvnTotal / 1e8} RVN. Fund your wallet with at least 0.01 RVN.")
+            val dustEstimate = 600L * totalAssetOutputs
+            if (rvnTotal < feeSat + dustEstimate) {
+                error("Insufficient RVN for fee and dust. Need ${(feeSat + dustEstimate) / 1e8} RVN, have ${rvnTotal / 1e8} RVN. Fund your wallet with at least 0.01 RVN.")
             }
             if (rvnUtxos.isEmpty()) {
                 error("Insufficient RVN for fee. Fund your wallet with at least 0.01 RVN.")
             }
 
-            val tx = RavencoinTxBuilder.buildAndSignAssetTransfer(
-                assetUtxos = assetUtxos,
-                rvnUtxos = rvnUtxos,
-                toAddress = toAddress,
+            // Build the multi-asset transfer transaction
+            val primaryOutput = RavencoinTxBuilder.AssetOutput(
                 assetName = assetName,
-                assetAmount = rawQtyRequested,
-                assetChangeAmount = assetChangeRawAmount,
+                rawAmount = rawQtyRequested,
+                toAddress = toAddress
+            )
+
+            val tx = RavencoinTxBuilder.buildAndSignMultiAssetTransfer(
+                primaryAssetUtxos = primaryAssetUtxos,
+                otherAssetUtxos = otherAssetUtxos,
+                rvnUtxos = rvnUtxos,
+                primaryAssetOutput = primaryOutput,
+                primaryAssetChange = assetChangeRawAmount,
                 feeSat = feeSat,
-                changeAddress = address,
+                changeAddress = nextAddress,  // ALL remaining assets and RVN go to fresh address
                 privKeyBytes = privKey,
                 pubKeyBytes = pubKey
             )
-            node.broadcast(tx.hex)
+            val txid = node.broadcast(tx.hex)
+
+            android.util.Log.i("WalletManager", "transferAsset: sent $qty $assetName to $toAddress, " +
+                "all remaining assets and RVN to $nextAddress, txid=$txid")
+
+            // Advance to next address (public key of current address is now exposed)
+            setCurrentAddressIndex(currentIndex + 1)
+
+            txid
         } finally {
             privKey?.fill(0)
         }
     }
 
     /**
-     * Issue a Ravencoin asset directly on-chain (no backend required).
-     * Builds and signs an rvni transaction, then broadcasts via ElectrumX.
+     * Issue a Ravencoin asset directly on-chain (no backend required) with post-quantum protection.
+     *
+     * POST-QUANTUM SAFE LOGIC - SINGLE TRANSACTION:
+     * 1. Issue the new asset to the specified address
+     * 2. Transfer ALL other existing assets to a fresh address (currentIndex + 1)
+     * 3. All RVN change goes to the fresh address (currentIndex + 1)
+     * 4. Advance the address index so the next transaction uses the clean address
+     *
+     * This ensures that after asset issuance, the current address is completely
+     * emptied (RVN + ALL existing assets) and all remaining funds are moved to
+     * a fresh, quantum-safe address whose public key has never been exposed on-chain.
      *
      * @param assetName  Full asset name: "ROOT", "ROOT/SUB", or "ROOT/SUB#UNIQUE"
      * @param qty        Asset quantity in display units (e.g. 1000.0)
@@ -728,15 +1488,27 @@ class WalletManager(private val context: Context) {
         reissuable: Boolean = false,
         ipfsHash: String? = null
     ): String {
-        val address = getAddress() ?: error("No wallet")
+        val currentIndex = getCurrentAddressIndex()
+        val address = getAddress(0, currentIndex) ?: error("No wallet")
+        val nextAddress = getAddress(0, currentIndex + 1) ?: error("Cannot derive next address")
+
+        // Post-quantum: signing this tx exposes key[currentIndex].
+        // If the caller passed the current signing address as the destination (the UI default),
+        // redirect to nextAddress so the asset lands on a quantum-safe address immediately,
+        // avoiding a subsequent sweep transaction.
+        // External addresses (different wallet) are passed through unchanged.
+        val actualToAddress = if (toAddress == address) nextAddress else toAddress
+
         var privKey: ByteArray? = null
         return try {
-            privKey = getPrivateKeyBytes() ?: error("No private key")
-            val pubKey = getPublicKeyBytes() ?: error("No public key")
+            privKey = getPrivateKeyBytes(0, currentIndex) ?: error("No private key")
+            val pubKey = getPublicKeyBytes(0, currentIndex) ?: error("No public key")
 
             val node = RavencoinPublicNode()
-            val utxos = node.getUtxos(address)
-            if (utxos.isEmpty()) error("No spendable RVN found for address $address")
+            val allUtxos = node.getUtxos(address)
+            if (allUtxos.isEmpty()) error("No spendable RVN on current address. Try refreshing the wallet.")
+
+            // Get owner asset if needed (for sub-assets and unique tokens)
             val ownerAssetName = when {
                 assetName.contains('#') -> assetName.substringBefore('#') + "!"
                 assetName.contains('/') -> assetName.substringBefore('/') + "!"
@@ -747,8 +1519,6 @@ class WalletManager(private val context: Context) {
                 require(allOwnerUtxos.isNotEmpty()) {
                     "Missing owner asset $requiredOwnerAsset in wallet. Transfer the owner token to this address before issuing $assetName."
                 }
-                // Owner tokens must have exactly amount = 1 (in raw units: 100000000 = 1 * 10^8).
-                // Select a single UTXO with rawAmount = 100000000L.
                 val singleOwnerUtxo = allOwnerUtxos.firstOrNull { it.assetRawAmount == 100_000_000L }
                     ?: allOwnerUtxos.firstOrNull()
                     ?: error("No valid owner token UTXO found for $requiredOwnerAsset")
@@ -756,10 +1526,27 @@ class WalletManager(private val context: Context) {
                     "Owner token $requiredOwnerAsset has amount ${singleOwnerUtxo.assetRawAmount}, expected 100000000 (1 in raw units). " +
                     "Make sure you have a single owner token UTXO with amount 1."
                 }
-                // Owner-token UTXOs are signed as asset inputs, but compliant owner outputs carry zero RVN.
-                // Keep the input selected while excluding it from the spendable RVN total.
                 listOf(singleOwnerUtxo.utxo.copy(satoshis = 0L))
             }.orEmpty()
+
+            // Get all other asset balances (excluding owner asset which is already handled)
+            val otherAssetBalances = node.getAssetBalances(address)
+                .filter { asset ->
+                    asset.amount > 0 && asset.name != ownerAssetName
+                }
+
+            // Get UTXOs for all other assets
+            val otherAssetUtxos = mutableMapOf<String, List<AssetUtxo>>()
+            for (otherAsset in otherAssetBalances) {
+                val utxos = node.getAssetUtxosFull(address, otherAsset.name)
+                if (utxos.isNotEmpty()) {
+                    otherAssetUtxos[otherAsset.name] = utxos
+                }
+            }
+
+            // Separate RVN-only UTXOs from asset UTXOs
+            val allAssetOutpoints = node.getAllAssetOutpoints(address)
+            val rvnUtxos = allUtxos.filter { "${it.txid}:${it.outputIndex}" !in allAssetOutpoints }
 
             val burnSat = when {
                 assetName.contains('#') -> RavencoinTxBuilder.BURN_UNIQUE_SAT
@@ -767,31 +1554,30 @@ class WalletManager(private val context: Context) {
                 else                    -> RavencoinTxBuilder.BURN_ROOT_SAT
             }
 
-            val satPerByte = node.getMinRelayFeeRateSatPerByte()
-            // Estimate tx size: 10 + 148*inputs + 34 per output.
-            // Root assets: burn + owner + issue + change = 4 outputs.
-            // Sub-assets: burn + change + parent-owner return + new owner + issue = 5 outputs.
-            // Unique tokens: burn + change + parent-owner return + issue = 4 outputs.
-            val outputCount = when {
+            // Estimate fee: RVN inputs + owner asset inputs + swept asset inputs
+            val totalAssetSweepOutputs = otherAssetBalances.size
+            val totalInputs = rvnUtxos.size + ownerAssetUtxos.size +
+                otherAssetUtxos.values.sumOf { it.size }
+            val outputCountForIssuance = when {
                 assetName.contains('#') -> 4
                 assetName.contains('/') -> 5
                 else -> 4
             }
-            val estimatedBytes = 10 + 148 * (utxos.size + ownerAssetUtxos.size) + 34 * outputCount
-            val feeSat = estimatedBytes * satPerByte
+            val estimatedBytes = 10 + 148 * totalInputs + 70 * (outputCountForIssuance + totalAssetSweepOutputs) + 34
+            val feeSat = estimatedBytes * node.getMinRelayFeeRateSatPerByte()
 
-            // Ravencoin encodes asset amounts with 8 fixed decimals; `units` limits the
-            // allowed precision but does not change the wire-format scale.
             val qtyRaw = (qty * 100_000_000.0).toLong()
-            val tx = RavencoinTxBuilder.buildAndSignAssetIssue(
-                utxos = utxos.filterNot { rvn ->
+
+            val tx = RavencoinTxBuilder.buildAndSignAssetIssueWithAssetSweep(
+                utxos = rvnUtxos.filterNot { rvn ->
                     ownerAssetUtxos.any { owner -> owner.txid == rvn.txid && owner.outputIndex == rvn.outputIndex }
                 },
                 ownerAssetUtxos = ownerAssetUtxos,
+                otherAssetUtxos = otherAssetUtxos,  // ALL other assets swept to nextAddress
                 assetName = assetName,
                 qtyRaw = qtyRaw,
-                toAddress = toAddress,
-                changeAddress = address,
+                toAddress = actualToAddress,
+                changeAddress = nextAddress,  // RVN change + ALL assets + owner token go to fresh address
                 units = units,
                 reissuable = reissuable,
                 ipfsHash = ipfsHash,
@@ -800,7 +1586,15 @@ class WalletManager(private val context: Context) {
                 privKeyBytes = privKey,
                 pubKeyBytes = pubKey
             )
-            node.broadcast(tx.hex)
+            val txid = node.broadcast(tx.hex)
+
+            android.util.Log.i("WalletManager", "issueAsset: issued $qty $assetName to $actualToAddress, " +
+                "owner token + all other assets and RVN change to $nextAddress, txid=$txid")
+
+            // Advance to next address (public key of current address is now exposed)
+            setCurrentAddressIndex(currentIndex + 1)
+
+            txid
         } finally {
             privKey?.fill(0)
         }
@@ -921,6 +1715,22 @@ class WalletManager(private val context: Context) {
         val h1 = MessageDigest.getInstance("SHA-256").digest(data)
         val h2 = MessageDigest.getInstance("SHA-256").digest(h1)
         return h2.copyOf(4)
+    }
+
+    private fun base58Decode(input: String): ByteArray {
+        var num = BigInteger.ZERO
+        val base = BigInteger.valueOf(58)
+        for (c in input) {
+            val idx = B58_ALPHABET.indexOf(c)
+            if (idx < 0) error("Invalid Base58 character: $c")
+            num = num.multiply(base).add(BigInteger.valueOf(idx.toLong()))
+        }
+        val bytes = num.toByteArray()
+        // Strip sign byte if present
+        val stripped = if (bytes.size > 1 && bytes[0] == 0.toByte()) bytes.copyOfRange(1, bytes.size) else bytes
+        // Restore leading zeros
+        val leadingZeros = input.takeWhile { it == B58_ALPHABET[0] }.length
+        return ByteArray(leadingZeros) + stripped
     }
 
     private fun base58Encode(data: ByteArray): String {
