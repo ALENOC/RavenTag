@@ -567,6 +567,8 @@ class WalletManager(private val context: Context) {
         while (gapCount < 20) {
             // Single Keystore decrypt for 20 addresses at once
             val batchMap = getAddressBatch(0, batchStart until batchStart + batchSize)
+            // Empty map means Keystore or network failure. If it happens on the very first
+            // batch we have no data at all — bail out WITHOUT touching the stored index.
             if (batchMap.isEmpty()) break
 
             val addrList = (batchStart until batchStart + batchSize).mapNotNull { batchMap[it] }
@@ -610,9 +612,20 @@ class WalletManager(private val context: Context) {
             if (lookAddrs.size < 5) break
         }
 
-        setCurrentAddressIndex(newIndex)
-        android.util.Log.i("WalletManager", "Discover: scanned $batchStart addresses, current index = $newIndex")
-        newIndex
+        // If the very first batch returned nothing (Keystore/network failure), keep the
+        // stored index intact. Overwriting with newIndex=0 would make all subsequent
+        // balance checks look only at address 0 and show 0 RVN.
+        val storedIndex = getCurrentAddressIndex()
+        if (batchStart == 0 && lastUsed == -1) {
+            android.util.Log.w("WalletManager", "Discover: first batch empty (network/Keystore error), keeping stored index $storedIndex")
+            return@withContext storedIndex
+        }
+        // Never decrease the stored index — a lower result means discovery scanned fewer
+        // addresses than previously known (transient gap in connectivity), not a rollback.
+        val finalIndex = maxOf(newIndex, storedIndex)
+        setCurrentAddressIndex(finalIndex)
+        android.util.Log.i("WalletManager", "Discover: scanned $batchStart addresses, current index = $finalIndex")
+        finalIndex
     }
 
     /**
