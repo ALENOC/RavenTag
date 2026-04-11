@@ -66,3 +66,6 @@ screenshots/
 
 # Qwen Code configuration (local only)
 .qwen/
+
+# Legal documents (personal data)
+docs/associazione/

@@ -554,31 +554,59 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      *            requests via a semaphore) and update the list progressively.
      */
     fun loadOwnedAssets() {
-        val address = walletManager?.getAddress() ?: return
+        val wm = walletManager ?: return
         viewModelScope.launch {
             assetsLoading = true
             assetsLoadError = false
             try {
-                // 1. Fetch raw balances first - this is one fast call
-                val basic = withContext(Dispatchers.IO) { rpcClient.listAssetsByAddress(address) }
+                // One Keystore decrypt + one pipelined batch for all asset balances.
+                val basic = withContext(Dispatchers.IO) {
+                    val currentIndex = wm.getCurrentAddressIndex()
+                    val addresses = wm.getAddressBatch(0, 0..currentIndex).values.toList()
+                    val node = io.raventag.app.wallet.RavencoinPublicNode()
+                    val totals = node.getTotalAssetBalances(addresses)
+                    totals.map { (name, amount) ->
+                        val type = when {
+                            name.contains('#') -> io.raventag.app.ravencoin.AssetType.UNIQUE
+                            name.contains('/') -> io.raventag.app.ravencoin.AssetType.SUB
+                            else -> io.raventag.app.ravencoin.AssetType.ROOT
+                        }
+                        io.raventag.app.ravencoin.OwnedAsset(
+                            name = name,
+                            balance = amount,
+                            type = type,
+                            ipfsHash = null
+                        )
+                    }.sortedWith(compareBy({ it.type.ordinal }, { it.name }))
+                }
 
                 // Show balances IMMEDIATELY
                 ownedAssets = basic
                 assetsLoading = false
 
-                // 2. Fetch all metadata (blockchain IPFS hash + IPFS JSON) in parallel
-                // Max 3 concurrent IPFS requests to avoid gateway rate limiting
-                val semaphore = Semaphore(3)
-                basic.forEach { asset ->
-                    // Launch a separate coroutine per asset enrichment for maximum reactivity
+                // Pre-fetch IPFS hashes for all assets in one batch RPC call,
+                // then only IPFS HTTP fetches remain (no per-asset RPC calls).
+                val withHashes = withContext(Dispatchers.IO) {
+                    val node = io.raventag.app.wallet.RavencoinPublicNode()
+                    val names = basic.map { it.name }
+                    val metaBatch = try { node.getAssetMetaBatch(names) } catch (_: Exception) { emptyMap() }
+                    basic.map { asset ->
+                        val hash = metaBatch[asset.name]?.ipfsHash
+                        if (hash != null) asset.copy(ipfsHash = hash) else asset
+                    }
+                }
+                ownedAssets = withHashes
+
+                // Fetch IPFS metadata in parallel (semaphore=8 since RPC is no longer in the hot path)
+                val semaphore = Semaphore(8)
+                withHashes.forEach { asset ->
                     viewModelScope.launch(Dispatchers.IO) {
                         try {
                             semaphore.withPermit {
                                 val enriched = rpcClient.enrichWithIpfsData(asset)
-                                // Update UI as EACH item finishes independently
                                 withContext(Dispatchers.Main) {
-                                    ownedAssets = ownedAssets?.map { 
-                                        if (it.name == enriched.name) enriched else it 
+                                    ownedAssets = ownedAssets?.map {
+                                        if (it.name == enriched.name) enriched else it
                                     }
                                 }
                             }
@@ -588,7 +616,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
 
-                Log.d("MainActivity", "loadOwnedAssets: background enrichment started for ${basic.size} assets")
+                Log.d("MainActivity", "loadOwnedAssets: background enrichment started for ${withHashes.size} assets")
             } catch (e: Exception) {
                 Log.e("MainActivity", "loadOwnedAssets failed", e)
                 assetsLoadError = true
@@ -603,26 +631,35 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun loadTransactionHistory() {
         val wm = walletManager ?: return
-        val address = wm.getAddress() ?: return
         txHistoryLoading = true
         viewModelScope.launch {
             try {
-                // Fetch total count first
-                val totalCount = withContext(Dispatchers.IO) {
-                    io.raventag.app.wallet.RavencoinPublicNode().getTransactionCount(address)
-                }
-                txHistoryTotal = totalCount
+                val currentIndex = wm.getCurrentAddressIndex()
+                val node = io.raventag.app.wallet.RavencoinPublicNode()
 
-                // Fetch first page
-                val history = withContext(Dispatchers.IO) {
-                    io.raventag.app.wallet.RavencoinPublicNode().getTransactionHistory(
-                        address,
-                        limit = txHistoryPageSize,
-                        offset = 0
-                    )
+                // One Keystore decrypt for all addresses, then parallel ElectrumX queries.
+                val allHistory = withContext(Dispatchers.IO) {
+                    val addresses = wm.getAddressBatch(0, 0..currentIndex)
+                    val deferreds = addresses.values.map { addr ->
+                        async {
+                            try { node.getTransactionHistory(addr, limit = txHistoryPageSize) }
+                            catch (_: Throwable) { emptyList() }
+                        }
+                    }
+                    deferreds.awaitAll().flatten()
                 }
-                txHistory = history
-                txHistoryLoadedCount = history.size
+
+                // Deduplicate by txid (same tx may appear in multiple address histories)
+                val deduped = allHistory.distinctBy { it.txid }
+                    .sortedWith(
+                        compareByDescending<io.raventag.app.wallet.TxHistoryEntry> {
+                            if (it.height <= 0) Int.MAX_VALUE else it.height
+                        }.thenByDescending { it.timestamp }
+                    )
+
+                txHistory = deduped
+                txHistoryTotal = deduped.size
+                txHistoryLoadedCount = deduped.size
             } catch (_: Throwable) {
                 // silently ignore: tx history is optional
             } finally {
@@ -633,15 +670,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /**
      * Load more transactions (next page).
-     * Called when user taps "Load More" button.
+     * With multi-address aggregation, all transactions are loaded at once,
+     * so this is a no-op for now.
      */
     fun loadMoreTransactions() {
-        val wm = walletManager ?: return
-        val address = wm.getAddress() ?: return
-        
-        // Check if we've loaded all transactions already
         if (txHistoryLoadedCount >= txHistoryTotal) return
-        
+
+        val wm = walletManager ?: return
+        val address = wm.getCurrentAddress() ?: return
+
         viewModelScope.launch {
             try {
                 val history = withContext(Dispatchers.IO) {
@@ -651,12 +688,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         offset = txHistoryLoadedCount
                     )
                 }
-                
-                // Append new transactions to existing list
+
                 txHistory = txHistory + history
                 txHistoryLoadedCount += history.size
             } catch (_: Throwable) {
-                // silently ignore: tx history is optional
             }
         }
     }
@@ -733,7 +768,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         walletManager = wm
         assetManager = am
         hasWallet = wm.hasWallet()
-        if (hasWallet) { loadWalletInfo(); loadOwnedAssets() }
+        // loadWalletInfo() already calls loadOwnedAssets() and loadTransactionHistory() internally
+        if (hasWallet) { loadWalletInfo() }
     }
 
     /** Delete the wallet from secure storage and clear all wallet state. */
@@ -782,7 +818,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val address = withContext(Dispatchers.Default) {
                 wm.finalizeWallet(mnemonic)
-                wm.getAddress() ?: ""
+                wm.getCurrentAddress() ?: ""
             }
             hasWallet = true
             walletInfo = WalletInfo(address = address, balanceRvn = 0.0, isLoading = true)
@@ -795,18 +831,33 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * Restore a wallet from a BIP39 mnemonic phrase.
      * On success, loads balance, assets, and transaction history.
      * On failure, sets an error message in [walletInfo].
+     *
+     * Guards against double-click with [walletGenerating].
+     * Runs BIP44 address discovery before loading balance to ensure correct index.
      */
     fun restoreWallet(mnemonic: String) {
         val wm = walletManager ?: return
+        if (walletGenerating) return
         viewModelScope.launch {
+            walletGenerating = true
             try {
                 val address = withContext(Dispatchers.Default) {
                     if (!wm.restoreWallet(mnemonic)) return@withContext null
-                    wm.getAddress()
+                    wm.getCurrentAddress()
                 }
                 if (address != null) {
                     hasWallet = true
                     walletInfo = WalletInfo(address = address, balanceRvn = 0.0, isLoading = true)
+
+                    // Discover the correct address index BEFORE loading balance.
+                    // Spinner stays visible during discovery so the user sees progress.
+                    try {
+                        wm.discoverCurrentIndex()
+                        walletInfo = walletInfo?.copy(address = wm.getCurrentAddress() ?: address)
+                    } catch (_: Exception) {
+                        // Network unavailable: keep index 0, will retry on next refresh
+                    }
+
                     loadWalletBalance()
                     loadOwnedAssets()
                     loadTransactionHistory()
@@ -815,6 +866,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             } catch (e: Throwable) {
                 walletInfo = WalletInfo(address = "", balanceRvn = 0.0, error = "Restore failed: ${e.message}")
+            } finally {
+                walletGenerating = false
             }
         }
     }
@@ -822,13 +875,109 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** Initialise [walletInfo] with the address and start loading balance + history. */
     private fun loadWalletInfo() {
         val wm = walletManager ?: return
-        walletInfo = WalletInfo(address = wm.getAddress() ?: "", balanceRvn = 0.0, isLoading = true)
-        loadWalletBalance()
-        loadTransactionHistory()
+        // Do NOT call getCurrentAddress() here: it decrypts via Keystore and blocks the main thread.
+        walletInfo = WalletInfo(address = "", balanceRvn = 0.0, isLoading = true)
+
+        viewModelScope.launch {
+            // STEP 1: Load balance + assets + tx history immediately from the stored index.
+            // Do NOT wait for reconcile/sweep: users see data in seconds instead of 30+ s.
+            // getLocalBalance() uses getAddressBatch() internally: one Keystore decrypt, then
+            // parallel ElectrumX balance queries.
+            val balanceDeferred = async { wm.getLocalBalance() }
+            loadOwnedAssets()
+            loadTransactionHistory()
+
+            val balance = balanceDeferred.await()
+            // cachedAddress is populated by getAddressBatch() inside getLocalBalance().
+            val address = withContext(Dispatchers.IO) { wm.getCurrentAddress() ?: "" }
+            walletInfo = walletInfo?.copy(
+                address = address,
+                balanceRvn = balance ?: 0.0,
+                isLoading = false
+            )
+
+            // STEP 2: Background maintenance (does not block the UI).
+            launch(Dispatchers.IO) {
+
+                // Auto-discovery: if the initial balance is null (no funds on the known
+                // address range), the stored index may be too low. This happens when the
+                // wallet was restored while offline (discoverCurrentIndex was skipped) or
+                // when funds were moved to higher-index addresses by another app instance.
+                // Run a full BIP44 gap-limited scan to find the real current index.
+                if (balance == null) {
+                    try {
+                        Log.i("MainViewModel", "Balance empty, running discoverCurrentIndex")
+                        wm.discoverCurrentIndex()
+                        val discoveredAddr = wm.getCurrentAddress()
+                        if (discoveredAddr != null && discoveredAddr != walletInfo?.address) {
+                            withContext(Dispatchers.Main) {
+                                walletInfo = walletInfo?.copy(address = discoveredAddr, isLoading = true)
+                            }
+                            val newBalance = wm.getLocalBalance()
+                            withContext(Dispatchers.Main) {
+                                walletInfo = walletInfo?.copy(
+                                    balanceRvn = newBalance ?: 0.0,
+                                    isLoading = false
+                                )
+                            }
+                            loadOwnedAssets()
+                            loadTransactionHistory()
+                        }
+                    } catch (_: Exception) {}
+                }
+
+                try { wm.ensureCurrentAddressClean() } catch (_: Exception) {}
+                try { wm.reconcileCurrentAddressIndex() } catch (_: Exception) {}
+
+                // Refresh address after reconcile: the index may have changed.
+                wm.getCurrentAddress()?.let { addr ->
+                    withContext(Dispatchers.Main) {
+                        if (addr != walletInfo?.address) walletInfo = walletInfo?.copy(address = addr)
+                    }
+                }
+
+                try {
+                    val txids = wm.sweepOldAddresses()
+                    if (txids.isNotEmpty()) {
+                        Log.i("MainViewModel", "Startup sweep: ${txids.size} txs")
+                        withContext(Dispatchers.Main) { loadWalletBalance() }
+                    }
+                } catch (_: Exception) {}
+
+                // Refresh address after sweep: sweep advances the index to a fresh address.
+                wm.getCurrentAddress()?.let { addr ->
+                    withContext(Dispatchers.Main) {
+                        if (addr != walletInfo?.address) walletInfo = walletInfo?.copy(address = addr)
+                    }
+                }
+            }
+        }
     }
 
-    /** Refresh balance, owned assets, and transaction history (pull-to-refresh). */
-    fun refreshBalance() { loadWalletBalance(); loadOwnedAssets(); loadTransactionHistory() }
+    /**
+     * Refresh balance, owned assets, and transaction history (pull-to-refresh).
+     * AUTO-SWEEP: Automatically consolidates any funds sent to old/exposed addresses
+     * to the current clean address (currentIndex+1) before loading the balance.
+     */
+    fun refreshBalance() {
+        val wm = walletManager ?: return
+        // Load data immediately so pull-to-refresh feels instant.
+        loadWalletBalance()
+        loadOwnedAssets()
+        loadTransactionHistory()
+        // Sweep old addresses in the background; reload balance if funds actually moved.
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val txids = wm.sweepOldAddresses()
+                if (txids.isNotEmpty()) {
+                    Log.i("MainViewModel", "Auto-sweep completed: ${txids.size} transactions")
+                    withContext(Dispatchers.Main) { loadWalletBalance() }
+                }
+            } catch (e: Exception) {
+                Log.w("MainViewModel", "Auto-sweep failed: ${e.message}")
+            }
+        }
+    }
 
     /**
      * Load the RVN balance for the wallet address.
@@ -841,7 +990,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val wm = walletManager ?: return
         viewModelScope.launch {
             try {
-                val balance = withContext(Dispatchers.IO) { wm.getLocalBalance() }
+                val balance = wm.getLocalBalance()
                 if (balance != null) {
                     walletInfo = walletInfo?.copy(balanceRvn = balance, isLoading = false)
                     return@launch
@@ -879,6 +1028,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 issueSuccess = true
                 val s = getStrings()
                 issueResult = s.issueRootSuccess.replace("%1", assetName).replace("%2", "${txid.take(16)}...")
+                walletInfo = walletInfo?.copy(address = wm.getCurrentAddress() ?: walletInfo?.address ?: "")
                 notifyRavenTagRegistry(assetName, txid, "root")
             } catch (e: Throwable) {
                 issueSuccess = false; issueResult = getStrings().issueFailed
@@ -902,6 +1052,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 issueSuccess = true
                 val s = getStrings()
                 issueResult = s.issueSubSuccess.replace("%1", fullName).replace("%2", "${txid.take(16)}...")
+                walletInfo = walletInfo?.copy(address = wm.getCurrentAddress() ?: walletInfo?.address ?: "")
                 notifyRavenTagRegistry(fullName, txid, "sub")
             } catch (e: Throwable) {
                 issueSuccess = false; issueResult = getStrings().issueFailed
@@ -926,6 +1077,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 issueSuccess = true
                 val s = getStrings()
                 issueResult = s.issueUniqueSuccess.replace("%1", fullName).replace("%2", "${txid.take(16)}...")
+                walletInfo = walletInfo?.copy(address = wm.getCurrentAddress() ?: walletInfo?.address ?: "")
                 notifyRavenTagRegistry(fullName, txid, "unique")
             } catch (e: Throwable) {
                 issueSuccess = false; issueResult = getStrings().issueFailed
@@ -1106,6 +1258,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 sendResult = s.walletSendResult.replace("%1", amount.toString())
                     .replace("%2", "%.5f".format(feeRvn))
                     .replace("%3", "${txid.take(20)}...")
+                // Update displayed address (rotated after send)
+                walletInfo = walletInfo?.copy(address = wm.getCurrentAddress() ?: walletInfo?.address ?: "")
                 loadWalletBalance()
             } catch (e: io.raventag.app.wallet.FeeUnavailableException) {
                 sendLoading = false
@@ -1134,6 +1288,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 issueLoading = false
                 issueSuccess = true
                 issueResult = s.walletTransferResult.replace("%1", assetName).replace("%2", "${txid.take(20)}...")
+                // Update displayed address (rotated after transfer)
+                walletInfo = walletInfo?.copy(address = wm.getCurrentAddress() ?: walletInfo?.address ?: "")
             } catch (e: Throwable) {
                 val s = getStrings()
                 issueLoading = false
@@ -1409,6 +1565,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return Result.failure(Exception("Emissione Ravencoin fallita: ${e.message}"))
         }
         Log.i("IssueWriteFlow", "processIssueAndWrite asset-issued asset=$fullName txid=$txid")
+        // Update displayed address (rotated after issuance)
+        walletInfo = walletInfo?.copy(address = wm.getCurrentAddress() ?: walletInfo?.address ?: "")
         notifyRavenTagRegistry(
             assetName = fullName,
             txid = txid,

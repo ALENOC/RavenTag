@@ -46,17 +46,22 @@ class WalletPollingWorker(
             if (!appPrefs.getBoolean("notifications_enabled", true)) return@withContext Result.success()
 
             val walletManager = WalletManager(applicationContext)
-            // getAddress() requires Keystore; returns null if wallet is not set up or device locked
-            val address = walletManager.getAddress() ?: return@withContext Result.success()
+            // getCurrentAddress() requires Keystore; returns null if wallet is not set up or device locked
+            walletManager.getCurrentAddress() ?: return@withContext Result.success()
+            val currentIndex = walletManager.getCurrentAddressIndex()
 
             val node = RavencoinPublicNode()
 
-            // ── RVN balance check ──────────────────────────────────────────────
-            val balance = node.getBalance(address)
-            val newRvnSat = balance.confirmed + balance.unconfirmed
+            // Derive all addresses with a single Keystore decrypt
+            val addresses = walletManager.getAddressBatch(0, 0..currentIndex).values.toList()
+
+            // ── RVN balance check (single batch TLS call for all addresses) ────
+            val newRvnSat = (node.getTotalBalance(addresses) * 1e8).toLong()
             val lastRvnSat = prefs.getLong("poll_rvn_sat", -1L)
 
+            var incomingDetected = false
             if (lastRvnSat >= 0 && newRvnSat > lastRvnSat) {
+                incomingDetected = true
                 val receivedRvn = (newRvnSat - lastRvnSat) / 1e8
                 NotificationHelper.notify(
                     applicationContext,
@@ -67,8 +72,11 @@ class WalletPollingWorker(
             }
             prefs.edit().putLong("poll_rvn_sat", newRvnSat).apply()
 
-            // ── Asset balance check ────────────────────────────────────────────
-            val assets = node.getAssetBalances(address)
+            // ── Asset balance check (single batch TLS call for all addresses) ──
+            val assetTotals = node.getTotalAssetBalances(addresses)
+            val assets = assetTotals.map { (name, amount) ->
+                io.raventag.app.wallet.ElectrumAssetBalance(name, amount)
+            }
             val lastAssetsType = object : TypeToken<Map<String, Long>>() {}.type
             val lastAssets: Map<String, Long> = gson.fromJson(
                 prefs.getString("poll_assets", "{}"), lastAssetsType
@@ -81,6 +89,7 @@ class WalletPollingWorker(
                 newAssets[asset.name] = newSat
                 val lastSat = lastAssets[asset.name] ?: -1L
                 if (lastSat >= 0 && newSat > lastSat) {
+                    incomingDetected = true
                     val diff = (newSat - lastSat) / 1e8
                     NotificationHelper.notify(
                         applicationContext,
@@ -91,6 +100,18 @@ class WalletPollingWorker(
                 }
             }
             prefs.edit().putString("poll_assets", gson.toJson(newAssets)).apply()
+
+            // ── Auto-sweep: if any incoming transfer was detected, consolidate funds
+            //    from HAS_OUTGOING addresses to the current quantum-safe address.
+            //    Addresses that only received funds (RECEIVE_ONLY) are never touched.
+            if (incomingDetected) {
+                try {
+                    walletManager.sweepOldAddresses()
+                } catch (_: Exception) {
+                    // Sweep failure is non-fatal: funds stay on the old address until
+                    // the next polling cycle or the user opens the app.
+                }
+            }
 
         } catch (_: java.io.IOException) {
             // Network error: retry with backoff so we don't silently miss a run
