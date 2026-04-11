@@ -580,24 +580,41 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }.sortedWith(compareBy({ it.type.ordinal }, { it.name }))
                 }
 
-                // Show balances IMMEDIATELY
-                ownedAssets = basic
+                // Merge balances with already-loaded metadata so images never disappear on refresh.
+                // IPFS content is immutable: same CID always serves the same image, so cached
+                // imageUrl and description can be reused without re-fetching.
+                val previous = ownedAssets?.associateBy { it.name } ?: emptyMap()
+                val merged = basic.map { asset ->
+                    val prev = previous[asset.name]
+                    if (prev?.imageUrl != null) {
+                        asset.copy(ipfsHash = prev.ipfsHash, imageUrl = prev.imageUrl, description = prev.description)
+                    } else {
+                        asset
+                    }
+                }
+                ownedAssets = merged
                 assetsLoading = false
 
-                // Pre-fetch IPFS hashes for all assets in one batch RPC call,
-                // then only IPFS HTTP fetches remain (no per-asset RPC calls).
+                // Only fetch metadata for assets not yet enriched.
+                val needsEnrichment = merged.filter { it.imageUrl == null }
+                if (needsEnrichment.isEmpty()) return@launch
+
+                // Pre-fetch IPFS hashes for un-enriched assets in one batch RPC call.
                 val withHashes = withContext(Dispatchers.IO) {
                     val node = io.raventag.app.wallet.RavencoinPublicNode()
-                    val names = basic.map { it.name }
+                    val names = needsEnrichment.map { it.name }
                     val metaBatch = try { node.getAssetMetaBatch(names) } catch (_: Exception) { emptyMap() }
-                    basic.map { asset ->
+                    needsEnrichment.map { asset ->
                         val hash = metaBatch[asset.name]?.ipfsHash
                         if (hash != null) asset.copy(ipfsHash = hash) else asset
                     }
                 }
-                ownedAssets = withHashes
+                // Update only the un-enriched entries with their hashes.
+                ownedAssets = ownedAssets?.map { existing ->
+                    withHashes.find { it.name == existing.name } ?: existing
+                }
 
-                // Fetch IPFS metadata in parallel (semaphore=8 since RPC is no longer in the hot path)
+                // Fetch IPFS metadata in parallel only for assets that still need it.
                 val semaphore = Semaphore(8)
                 withHashes.forEach { asset ->
                     viewModelScope.launch(Dispatchers.IO) {
@@ -768,8 +785,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         walletManager = wm
         assetManager = am
         hasWallet = wm.hasWallet()
-        // loadWalletInfo() already calls loadOwnedAssets() and loadTransactionHistory() internally
-        if (hasWallet) { loadWalletInfo() }
+        // Only start loading if the ViewModel has no data yet (first launch or process restart).
+        // On Activity re-creation (screen rotation, system config change) the ViewModel survives
+        // with walletInfo already populated — skip the reload to avoid flashing 0 on screen.
+        if (hasWallet && walletInfo == null) { loadWalletInfo() }
     }
 
     /** Delete the wallet from secure storage and clear all wallet state. */
@@ -875,8 +894,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** Initialise [walletInfo] with the address and start loading balance + history. */
     private fun loadWalletInfo() {
         val wm = walletManager ?: return
-        // Do NOT call getCurrentAddress() here: it decrypts via Keystore and blocks the main thread.
-        walletInfo = WalletInfo(address = "", balanceRvn = 0.0, isLoading = true)
+        // Preserve existing data while refreshing so the UI never flashes 0.
+        // Only create a blank placeholder when there is no previous data (first load).
+        walletInfo = walletInfo?.copy(isLoading = true)
+            ?: WalletInfo(address = "", balanceRvn = 0.0, isLoading = true)
 
         viewModelScope.launch {
             // STEP 1: Load balance + assets + tx history immediately from the stored index.
@@ -891,8 +912,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // cachedAddress is populated by getAddressBatch() inside getLocalBalance().
             val address = withContext(Dispatchers.IO) { wm.getCurrentAddress() ?: "" }
             walletInfo = walletInfo?.copy(
-                address = address,
-                balanceRvn = balance ?: 0.0,
+                // Keep existing address/balance if new load fails (network error)
+                address = address.ifEmpty { walletInfo?.address ?: "" },
+                balanceRvn = balance ?: walletInfo?.balanceRvn ?: 0.0,
                 isLoading = false
             )
 
