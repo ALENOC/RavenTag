@@ -84,6 +84,7 @@ fun WalletScreen(
     assetsLoading: Boolean,
     assetsLoadError: Boolean = false,
     needsConsolidation: Boolean = false,
+    consolidationInProgress: Boolean = false,
     onConsolidateFunds: (() -> Unit)? = null,
     electrumStatus: MainViewModel.ElectrumStatus = MainViewModel.ElectrumStatus.UNKNOWN,
     blockHeight: Int? = null,
@@ -299,7 +300,7 @@ fun WalletScreen(
                 }
             }
             // Consolidation banner: shown when funds are detected on old addresses
-            if (needsConsolidation && onConsolidateFunds != null && !assetsLoading) {
+            if (needsConsolidation && onConsolidateFunds != null && !assetsLoading && !consolidationInProgress) {
                 item(key = "consolidation_banner") {
                     Card(
                         colors = CardDefaults.cardColors(containerColor = Color(0xFF1A2D00)),
@@ -333,6 +334,27 @@ fun WalletScreen(
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text("Consolidate to Fresh Address", color = Color.White, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium)
                             }
+                        }
+                    }
+                }
+            }
+            // Consolidation in progress banner
+            if (consolidationInProgress) {
+                item(key = "consolidation_progress") {
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFF1A2D00)),
+                        border = BorderStroke(1.dp, AuthenticGreen.copy(alpha = 0.5f)),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp)
+                    ) {
+                        Row(modifier = Modifier.padding(12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(color = AuthenticGreen, modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                            Text(
+                                "Consolidating funds to fresh address...",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = AuthenticGreen.copy(alpha = 0.9f),
+                                fontWeight = FontWeight.SemiBold
+                            )
                         }
                     }
                 }
