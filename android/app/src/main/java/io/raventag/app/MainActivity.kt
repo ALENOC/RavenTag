@@ -44,7 +44,10 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.AndroidViewModel
@@ -2700,21 +2703,21 @@ fun RavenTagApp(
             }
         }
     ) { innerPadding ->
-        when (currentTab) {
-            // ── Scan tab ──────────────────────────────────────────────────────
-            AppTab.SCAN -> ScanScreen(
-                modifier = Modifier.padding(innerPadding),
-                scanState = viewModel.scanState,
-                errorMessage = viewModel.errorMessage,
-                nfcSupported = nfcSupported,
-                nfcEnabled = nfcEnabled,
-                onStartScan = { viewModel.scanState = ScanState.SCANNING }
-            )
+        Box(modifier = Modifier.padding(innerPadding).fillMaxSize()) {
 
-            // ── Wallet tab ────────────────────────────────────────────────────
-            AppTab.WALLET -> {
-                WalletScreen(
-                    modifier = Modifier.padding(innerPadding),
+            // WalletScreen: keep alive in the composition tree after the first visit.
+            // `when` branches are destroyed on every tab switch — for a large screen like
+            // WalletScreen (many asset cards, scroll state, dialogs) that initial composition
+            // costs more than one frame and produces visible lag.
+            // Using alpha(0f) + pointer-blocking overlay keeps it alive without rendering.
+            val walletEverShown = remember { mutableStateOf(currentTab == AppTab.WALLET) }
+            if (currentTab == AppTab.WALLET) walletEverShown.value = true
+            val walletVisible = currentTab == AppTab.WALLET
+
+            if (walletEverShown.value) {
+                Box(modifier = Modifier.fillMaxSize().alpha(if (walletVisible) 1f else 0f)) {
+                    WalletScreen(
+                        modifier = Modifier.fillMaxSize(),
                     walletInfo = viewModel.walletInfo,
                     hasWallet = viewModel.hasWallet,
                     isGenerating = viewModel.walletGenerating,
@@ -2795,88 +2798,113 @@ fun RavenTagApp(
                     onRestoreModeChange = { restoreActive ->
                         viewModel.restoreModeActive = restoreActive
                     }
-                )
+                    )
+                    // When hidden: consume all pointer events to prevent the invisible
+                    // scrollable wallet content from intercepting touches on the active tab.
+                    if (!walletVisible) {
+                        Box(modifier = Modifier.fillMaxSize().pointerInput(Unit) {
+                            awaitPointerEventScope {
+                                while (true) {
+                                    awaitPointerEvent(PointerEventPass.Initial)
+                                        .changes.forEach { it.consume() }
+                                }
+                            }
+                        })
+                    }
+                }
             }
 
-            // ── Brand tab ─────────────────────────────────────────────────────
-            AppTab.BRAND -> {
-                // Auto-check server and key statuses when landing on Brand tab
-                LaunchedEffect(Unit) {
-                    if (viewModel.serverStatus == MainViewModel.ServerStatus.UNKNOWN)
-                        viewModel.checkServerStatus(viewModel.currentVerifyUrl)
-                }
-                LaunchedEffect(viewModel.serverStatus) {
-                    if (viewModel.serverStatus == MainViewModel.ServerStatus.ONLINE) {
-                        if (viewModel.pinataJwtStatus == MainViewModel.AdminKeyStatus.UNKNOWN)
-                            viewModel.checkPinataJwt(savedPinataJwt)
-                        if (viewModel.kuboNodeStatus == MainViewModel.AdminKeyStatus.UNKNOWN)
-                            viewModel.checkKuboNode(savedKuboNodeUrl)
-                    }
-                }
-                BrandDashboardScreen(
-                modifier = Modifier.padding(innerPadding),
-                hasWallet = viewModel.hasWallet,
-                serverStatus = viewModel.serverStatus,
-                walletRole = walletRole,
-                onIssueAsset = { checkAndIssue(IssueMode.ROOT_ASSET) },
-                onIssueSubAsset = { checkAndIssue(IssueMode.SUB_ASSET) },
-                onIssueUnique = { checkAndIssue(IssueMode.UNIQUE_TOKEN) },
-                onRevokeAsset = { viewModel.issueMode = IssueMode.REVOKE },
-                onUnrevokeAsset = { viewModel.issueMode = IssueMode.UNREVOKE },
-                onGoToWallet = { switchTab(AppTab.WALLET) }
-            )
-            }
+            // Other tabs render on top (drawn after wallet = higher z-order in Box)
+            when (currentTab) {
+                AppTab.WALLET -> { /* alive above */ }
 
-            // ── Settings tab ──────────────────────────────────────────────────
-            AppTab.SETTINGS -> {
-                LaunchedEffect(Unit) {
-                    if (viewModel.serverStatus == MainViewModel.ServerStatus.UNKNOWN) {
-                        viewModel.checkServerStatus(viewModel.currentVerifyUrl)
-                    }
-                }
-                // Auto-check admin key whenever server becomes Online (brand app only)
-                LaunchedEffect(viewModel.serverStatus) {
-                    if (viewModel.serverStatus == MainViewModel.ServerStatus.ONLINE) {
-                        if (viewModel.pinataJwtStatus == MainViewModel.AdminKeyStatus.UNKNOWN)
-                            viewModel.checkPinataJwt(savedPinataJwt)
-                        if (viewModel.kuboNodeStatus == MainViewModel.AdminKeyStatus.UNKNOWN)
-                            viewModel.checkKuboNode(savedKuboNodeUrl)
-                    }
-                }
-                SettingsScreen(
-                    modifier = Modifier.padding(innerPadding),
-                    // Map AppStrings instance back to a language code for the selector UI
-                    currentLang = when (s) {
-                        stringsIt -> "it"; stringsFr -> "fr"; stringsDe -> "de"; stringsEs -> "es"
-                        stringsZh -> "zh"; stringsJa -> "ja"; stringsKo -> "ko"; stringsRu -> "ru"
-                        else -> "en"
-                    },
-                    currentVerifyUrl = viewModel.currentVerifyUrl,
-                    currentInitialMasterKey = savedInitialMasterKey,
-                    currentPinataJwt = savedPinataJwt,
-                    currentKuboNodeUrl = savedKuboNodeUrl,
-                    onPinataJwtSave = onPinataJwtSave,
-                    onKuboNodeUrlSave = onKuboNodeUrlSave,
-                    serverStatus = viewModel.serverStatus,
-                    pinataJwtStatus = viewModel.pinataJwtStatus,
-                    kuboNodeStatus = viewModel.kuboNodeStatus,
-                    onLangChange = onLangChange,
-                    onVerifyUrlSave = onVerifyUrlSave,
-                    onInitialMasterKeySave = onInitialMasterKeySave,
-                    onDonate = {
-                        viewModel.donateMode = true
-                        viewModel.showSend = true
-                    },
-                    walletBalance = viewModel.walletInfo?.balanceRvn ?: 0.0,
-                    hasWallet = viewModel.hasWallet,
-                    requireAuthOnStart = requireAuthOnStart,
-                    onRequireAuthChange = onRequireAuthChange,
-                    hasLockScreen = hasLockScreen,
-                    allowScreenshots = allowScreenshots,
-                    onAllowScreenshotsChange = onAllowScreenshotsChange,
-                    notificationsEnabled = notificationsEnabled,
-                    onNotificationsEnabledChange = onNotificationsEnabledChange
+                // ── Scan tab ──────────────────────────────────────────────────
+                AppTab.SCAN -> ScanScreen(
+                    modifier = Modifier.fillMaxSize(),
+                    scanState = viewModel.scanState,
+                    errorMessage = viewModel.errorMessage,
+                    nfcSupported = nfcSupported,
+                    nfcEnabled = nfcEnabled,
+                    onStartScan = { viewModel.scanState = ScanState.SCANNING }
                 )
+
+                // ── Brand tab ─────────────────────────────────────────────────
+                AppTab.BRAND -> {
+                    LaunchedEffect(Unit) {
+                        if (viewModel.serverStatus == MainViewModel.ServerStatus.UNKNOWN)
+                            viewModel.checkServerStatus(viewModel.currentVerifyUrl)
+                    }
+                    LaunchedEffect(viewModel.serverStatus) {
+                        if (viewModel.serverStatus == MainViewModel.ServerStatus.ONLINE) {
+                            if (viewModel.pinataJwtStatus == MainViewModel.AdminKeyStatus.UNKNOWN)
+                                viewModel.checkPinataJwt(savedPinataJwt)
+                            if (viewModel.kuboNodeStatus == MainViewModel.AdminKeyStatus.UNKNOWN)
+                                viewModel.checkKuboNode(savedKuboNodeUrl)
+                        }
+                    }
+                    BrandDashboardScreen(
+                        modifier = Modifier.fillMaxSize(),
+                        hasWallet = viewModel.hasWallet,
+                        serverStatus = viewModel.serverStatus,
+                        walletRole = walletRole,
+                        onIssueAsset = { checkAndIssue(IssueMode.ROOT_ASSET) },
+                        onIssueSubAsset = { checkAndIssue(IssueMode.SUB_ASSET) },
+                        onIssueUnique = { checkAndIssue(IssueMode.UNIQUE_TOKEN) },
+                        onRevokeAsset = { viewModel.issueMode = IssueMode.REVOKE },
+                        onUnrevokeAsset = { viewModel.issueMode = IssueMode.UNREVOKE },
+                        onGoToWallet = { switchTab(AppTab.WALLET) }
+                    )
+                }
+
+                // ── Settings tab ──────────────────────────────────────────────
+                AppTab.SETTINGS -> {
+                    LaunchedEffect(Unit) {
+                        if (viewModel.serverStatus == MainViewModel.ServerStatus.UNKNOWN) {
+                            viewModel.checkServerStatus(viewModel.currentVerifyUrl)
+                        }
+                    }
+                    LaunchedEffect(viewModel.serverStatus) {
+                        if (viewModel.serverStatus == MainViewModel.ServerStatus.ONLINE) {
+                            if (viewModel.pinataJwtStatus == MainViewModel.AdminKeyStatus.UNKNOWN)
+                                viewModel.checkPinataJwt(savedPinataJwt)
+                            if (viewModel.kuboNodeStatus == MainViewModel.AdminKeyStatus.UNKNOWN)
+                                viewModel.checkKuboNode(savedKuboNodeUrl)
+                        }
+                    }
+                    SettingsScreen(
+                        modifier = Modifier.fillMaxSize(),
+                        currentLang = when (s) {
+                            stringsIt -> "it"; stringsFr -> "fr"; stringsDe -> "de"; stringsEs -> "es"
+                            stringsZh -> "zh"; stringsJa -> "ja"; stringsKo -> "ko"; stringsRu -> "ru"
+                            else -> "en"
+                        },
+                        currentVerifyUrl = viewModel.currentVerifyUrl,
+                        currentInitialMasterKey = savedInitialMasterKey,
+                        currentPinataJwt = savedPinataJwt,
+                        currentKuboNodeUrl = savedKuboNodeUrl,
+                        onPinataJwtSave = onPinataJwtSave,
+                        onKuboNodeUrlSave = onKuboNodeUrlSave,
+                        serverStatus = viewModel.serverStatus,
+                        pinataJwtStatus = viewModel.pinataJwtStatus,
+                        kuboNodeStatus = viewModel.kuboNodeStatus,
+                        onLangChange = onLangChange,
+                        onVerifyUrlSave = onVerifyUrlSave,
+                        onInitialMasterKeySave = onInitialMasterKeySave,
+                        onDonate = {
+                            viewModel.donateMode = true
+                            viewModel.showSend = true
+                        },
+                        walletBalance = viewModel.walletInfo?.balanceRvn ?: 0.0,
+                        hasWallet = viewModel.hasWallet,
+                        requireAuthOnStart = requireAuthOnStart,
+                        onRequireAuthChange = onRequireAuthChange,
+                        hasLockScreen = hasLockScreen,
+                        allowScreenshots = allowScreenshots,
+                        onAllowScreenshotsChange = onAllowScreenshotsChange,
+                        notificationsEnabled = notificationsEnabled,
+                        onNotificationsEnabledChange = onNotificationsEnabledChange
+                    )
+                }
             }
         }
     }
