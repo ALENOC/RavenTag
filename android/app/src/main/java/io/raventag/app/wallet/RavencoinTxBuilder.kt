@@ -1017,9 +1017,9 @@ object RavencoinTxBuilder {
             }
         }
 
-        // Total inputs include only RVN UTXOs + owner asset UTXOs (not swept assets yet)
         val rvnAndOwnerInputs = utxos + ownerAssetUtxos
-        val totalIn = rvnAndOwnerInputs.sumOf { it.satoshis }
+        val otherAssetSatoshis = otherAssetUtxos.values.flatten().sumOf { it.utxo.satoshis }
+        val totalIn = rvnAndOwnerInputs.sumOf { it.satoshis } + otherAssetSatoshis
         val required = burnSat + ownerDust + dustOut + feeSat + dustForSweptAssets
 
         require(totalIn >= required) {
