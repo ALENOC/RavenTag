@@ -552,6 +552,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** True when portfolio scan found funds on old addresses that need consolidation. */
     var needsConsolidation by mutableStateOf(false)
 
+    /** True while consolidation is in progress (prevents banner from reappearing). */
+    var consolidationInProgress by mutableStateOf(false)
+
     /**
      * Load the asset portfolio for the wallet address.
      *
@@ -562,10 +565,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun loadOwnedAssets() {
         val wm = walletManager ?: return
+        
+        // Don't reset consolidation flag if consolidation is in progress
+        if (!consolidationInProgress) {
+            needsConsolidation = false
+        }
+        
         viewModelScope.launch {
             assetsLoading = true
             assetsLoadError = false
-            needsConsolidation = false
             try {
                 // One Keystore decrypt + one pipelined batch for all asset balances.
                 val basic = withContext(Dispatchers.IO) {
@@ -890,30 +898,33 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (walletGenerating) return
         viewModelScope.launch {
             walletGenerating = true
+            // Start with loading state — no 0 balance or empty assets shown
+            walletInfo = WalletInfo(address = "", balanceRvn = 0.0, isLoading = true)
             try {
-                val address = withContext(Dispatchers.Default) {
-                    if (!wm.restoreWallet(mnemonic)) return@withContext null
-                    wm.getCurrentAddress()
+                val restored = withContext(Dispatchers.Default) {
+                    wm.restoreWallet(mnemonic)
                 }
-                if (address != null) {
-                    hasWallet = true
-                    walletInfo = WalletInfo(address = address, balanceRvn = 0.0, isLoading = true)
-
-                    // Discover the correct address index BEFORE loading balance.
-                    // Spinner stays visible during discovery so the user sees progress.
-                    try {
-                        wm.discoverCurrentIndex()
-                        walletInfo = walletInfo?.copy(address = wm.getCurrentAddress() ?: address)
-                    } catch (_: Exception) {
-                        // Network unavailable: keep index 0, will retry on next refresh
-                    }
-
-                    loadWalletBalance()
-                    loadOwnedAssets()
-                    loadTransactionHistory()
-                } else {
+                if (!restored) {
                     walletInfo = WalletInfo(address = "", balanceRvn = 0.0, error = "Invalid mnemonic")
+                    return@launch
                 }
+
+                // Discover the correct address index (checks both RVN history AND assets)
+                // This may take a few seconds — isLoading stays true so user sees progress
+                try {
+                    wm.discoverCurrentIndex()
+                } catch (_: Exception) {
+                    Log.w("MainActivity", "discoverCurrentIndex failed, using index 0")
+                }
+
+                hasWallet = true
+                val address = wm.getCurrentAddress() ?: ""
+                walletInfo = walletInfo?.copy(address = address, isLoading = true, error = null)
+
+                // Now load balance, assets, and history in parallel
+                loadWalletBalance()
+                loadOwnedAssets()
+                loadTransactionHistory()
             } catch (e: Throwable) {
                 walletInfo = WalletInfo(address = "", balanceRvn = 0.0, error = "Restore failed: ${e.message}")
             } finally {
@@ -952,12 +963,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // STEP 2: Background maintenance (does not block the UI).
             launch(Dispatchers.IO) {
 
-                // Auto-discovery: only run after wallet restore (index reset to 0).
-                // Running discovery on every 0-balance load would open many parallel
-                // ElectrumX connections and is unnecessary once the index is known.
-                if (balance == null && wm.getCurrentAddressIndex() == 0) {
+                // Auto-discovery: run when index is 0 and balance is 0 or null.
+                // This handles the case where the stored index was lost/reset but
+                // the user has funds at a higher address index.
+                val currentIdx = wm.getCurrentAddressIndex()
+                if (currentIdx == 0 && (balance == null || balance == 0.0)) {
                     try {
-                        Log.i("MainViewModel", "Fresh wallet, running discoverCurrentIndex")
+                        Log.i("MainViewModel", "Zero balance at index 0, running discoverCurrentIndex")
                         wm.discoverCurrentIndex()
                         val discoveredAddr = wm.getCurrentAddress()
                         if (discoveredAddr != null && discoveredAddr != walletInfo?.address) {
@@ -1333,6 +1345,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun consolidateFunds() {
         val wm = walletManager ?: return
+        
+        // Set flag to prevent banner from reappearing during consolidation
+        consolidationInProgress = true
+        
         viewModelScope.launch {
             try {
                 assetsLoading = true
@@ -1340,14 +1356,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 
                 if (txid != null) {
                     needsConsolidation = false
+                    // Update current address to the target address (currentIndex + 1)
+                    // so the UI shows the correct receiving address and balance
+                    val newAddress = wm.getCurrentAddress() ?: wm.getAddress(0, wm.getCurrentAddressIndex() + 1)
+                    walletInfo = walletInfo?.copy(address = newAddress ?: walletInfo?.address ?: "")
+
                     // Reload balance and assets after consolidation
                     loadWalletBalance()
                     loadOwnedAssets()
-                } else {
-                    assetsLoading = false
                 }
             } catch (e: Exception) {
                 Log.e("MainActivity", "consolidateFunds failed", e)
+            } finally {
+                // Clear the flag when done (success or failure)
+                consolidationInProgress = false
                 assetsLoading = false
             }
         }
@@ -2780,6 +2802,7 @@ fun RavenTagApp(
                     assetsLoading = viewModel.assetsLoading,
                     assetsLoadError = viewModel.assetsLoadError,
                     needsConsolidation = viewModel.needsConsolidation,
+                    consolidationInProgress = viewModel.consolidationInProgress,
                     onConsolidateFunds = { viewModel.consolidateFunds() },
                     electrumStatus = viewModel.electrumStatus,
                     blockHeight = viewModel.blockHeight,
