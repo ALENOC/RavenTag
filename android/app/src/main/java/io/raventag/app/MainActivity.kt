@@ -175,6 +175,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** True while mnemonic entropy is being generated (prevents double-click). */
     var walletGenerating by mutableStateOf(false)
 
+    /** Error from the last failed wallet restore (invalid mnemonic, network failure). */
+    var restoreError by mutableStateOf<String?>(null)
+
     // ── Issue / revoke / register / transfer state ────────────────────────────
 
     /** Currently active issue/revoke/transfer mode (null = no overlay shown). */
@@ -898,35 +901,40 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (walletGenerating) return
         viewModelScope.launch {
             walletGenerating = true
-            // Start with loading state — no 0 balance or empty assets shown
-            walletInfo = WalletInfo(address = "", balanceRvn = 0.0, isLoading = true)
+            // Hide any stale wallet UI and clear previous errors during discovery.
+            // hasWallet stays false until the correct index is found, so address and
+            // balance are never shown before discovery completes.
+            hasWallet = false
+            walletInfo = null
+            restoreError = null
             try {
                 val restored = withContext(Dispatchers.Default) {
                     wm.restoreWallet(mnemonic)
                 }
                 if (!restored) {
-                    walletInfo = WalletInfo(address = "", balanceRvn = 0.0, error = "Invalid mnemonic")
+                    restoreError = "Invalid mnemonic"
                     return@launch
                 }
 
-                // Discover the correct address index (checks both RVN history AND assets)
-                // This may take a few seconds — isLoading stays true so user sees progress
+                // Discover the correct address index on the blockchain.
+                // isGenerating stays true so WalletSetupCard shows a spinner, not the form.
                 try {
                     wm.discoverCurrentIndex()
                 } catch (_: Exception) {
                     Log.w("MainActivity", "discoverCurrentIndex failed, using index 0")
                 }
 
-                hasWallet = true
                 val address = wm.getCurrentAddress() ?: ""
-                walletInfo = walletInfo?.copy(address = address, isLoading = true, error = null)
+                walletInfo = WalletInfo(address = address, balanceRvn = 0.0, isLoading = true)
+                hasWallet = true
 
                 // Now load balance, assets, and history in parallel
                 loadWalletBalance()
                 loadOwnedAssets()
                 loadTransactionHistory()
             } catch (e: Throwable) {
-                walletInfo = WalletInfo(address = "", balanceRvn = 0.0, error = "Restore failed: ${e.message}")
+                restoreError = "Restore failed: ${e.message}"
+                walletInfo = null
             } finally {
                 walletGenerating = false
             }
@@ -2811,6 +2819,7 @@ fun RavenTagApp(
                     walletRole = walletRole,
                     controlKeyValidating = viewModel.controlKeyValidating,
                     controlKeyError = viewModel.controlKeyError,
+                    restoreError = viewModel.restoreError,
                     onGenerateWallet = { controlKey ->
                         if (!io.raventag.app.config.AppConfig.IS_BRAND_APP) {
                             viewModel.generateWallet()
