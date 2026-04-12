@@ -949,16 +949,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     } catch (_: Exception) {}
                 }
 
-                try { wm.ensureCurrentAddressClean() } catch (_: Exception) {}
-                try { wm.reconcileCurrentAddressIndex() } catch (_: Exception) {}
-
-                // Refresh address after reconcile: the index may have changed.
-                wm.getCurrentAddress()?.let { addr ->
-                    withContext(Dispatchers.Main) {
-                        if (addr != walletInfo?.address) walletInfo = walletInfo?.copy(address = addr)
-                    }
-                }
-
                 try {
                     val txids = wm.sweepOldAddresses()
                     if (txids.isNotEmpty()) {
