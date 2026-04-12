@@ -682,9 +682,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
 
                 // Fetch IPFS metadata in parallel only for assets that still need it.
+                // Using async instead of launch so we can await completion and update the cache.
                 val semaphore = Semaphore(8)
-                withHashes.forEach { asset ->
-                    viewModelScope.launch(Dispatchers.IO) {
+                val enrichmentJobs = withHashes.map { asset ->
+                    viewModelScope.async(Dispatchers.IO) {
                         try {
                             semaphore.withPermit {
                                 val enriched = rpcClient.enrichWithIpfsData(asset)
@@ -700,7 +701,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
 
-                Log.d("MainActivity", "loadOwnedAssets: background enrichment started for ${withHashes.size} assets")
+                // Save cache once all enrichments complete so images survive the next startup.
+                viewModelScope.launch {
+                    enrichmentJobs.awaitAll()
+                    val current = ownedAssets
+                    if (!current.isNullOrEmpty()) {
+                        withContext(Dispatchers.IO) { saveAssetsCache(current) }
+                    }
+                    Log.d("MainActivity", "loadOwnedAssets: enrichment done, cache updated with images")
+                }
             } catch (e: Exception) {
                 Log.e("MainActivity", "loadOwnedAssets failed", e)
                 assetsLoadError = true
