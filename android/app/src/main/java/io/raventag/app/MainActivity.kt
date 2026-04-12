@@ -594,17 +594,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         Pair(assetsDeferred.await(), rvnDeferred.await())
                     }
                     
-                    // Check if funds exist on old addresses (not on currentIndex)
+                    // Check if any old address has funds with one lightweight batch call.
                     if (currentIndex > 0) {
                         val oldAddresses = wm.getAddressBatch(0, 0 until currentIndex).values.toList()
-                        val oldAssets = try { node.getTotalAssetBalances(oldAddresses) } catch (_: Exception) { emptyMap() }
-                        val oldRvn = try { node.getTotalBalance(oldAddresses) } catch (_: Exception) { 0.0 }
-                        
-                        // Set consolidation flag if old addresses have any funds
-                        val oldHasAssets = oldAssets.values.sum() > 0
-                        val oldHasRvn = oldRvn > 0.0001
-                        
-                        needsConsolidation = oldHasAssets || oldHasRvn
+                        val funded = try { node.getAddressesWithFunds(oldAddresses) } catch (_: Exception) { emptySet() }
+                        needsConsolidation = funded.isNotEmpty()
                     }
                     
                     totals.map { (name, amount) ->
