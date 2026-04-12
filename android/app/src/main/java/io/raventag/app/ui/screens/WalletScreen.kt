@@ -80,6 +80,7 @@ fun WalletScreen(
     walletInfo: WalletInfo?,
     hasWallet: Boolean,
     isGenerating: Boolean = false,
+    restoreError: String? = null,
     ownedAssets: List<OwnedAsset>?,
     assetsLoading: Boolean,
     assetsLoadError: Boolean = false,
@@ -247,6 +248,7 @@ fun WalletScreen(
                     controlKey = controlKey,
                     controlKeyValidating = controlKeyValidating,
                     controlKeyError = controlKeyError,
+                    restoreError = restoreError,
                     onControlKeyChange = { controlKey = it },
                     onWordChange = { idx, word ->
                         restoreWords = restoreWords.toMutableList().also { it[idx] = word }
@@ -746,6 +748,7 @@ private fun WalletSetupCard(
     controlKey: String,
     controlKeyValidating: Boolean,
     controlKeyError: String?,
+    restoreError: String? = null,
     onControlKeyChange: (String) -> Unit,
     onWordChange: (Int, String) -> Unit,
     onGenerate: () -> Unit,
@@ -797,7 +800,18 @@ private fun WalletSetupCard(
                 }
                 Spacer(modifier = Modifier.height(16.dp))
             }
-            if (isGenerating || controlKeyValidating) { CircularProgressIndicator(color = RavenOrange) } else {
+            if (isGenerating || controlKeyValidating) {
+                CircularProgressIndicator(color = RavenOrange)
+                if (isGenerating && !controlKeyValidating) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(
+                        strings.walletScanningBlockchain,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = RavenMuted,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            } else {
                 Button(
                     onClick = if (showRestore) onRestore else onGenerate,
                     modifier = Modifier.fillMaxWidth().height(50.dp),
@@ -829,6 +843,16 @@ private fun WalletSetupCard(
                     Spacer(modifier = Modifier.height(12.dp))
                     MnemonicInputGrid(strings = strings, words = restoreWords, onWordChange = onWordChange)
                 }
+            }
+            if (restoreError != null) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    restoreError,
+                    color = NotAuthenticRed,
+                    style = MaterialTheme.typography.bodySmall,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
         }
     }
