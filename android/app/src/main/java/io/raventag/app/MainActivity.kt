@@ -566,17 +566,47 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      *   Phase 2: enrich each asset with IPFS metadata in parallel (max 4 concurrent
      *            requests via a semaphore) and update the list progressively.
      */
+    private fun saveAssetsCache(assets: List<OwnedAsset>) {
+        try {
+            val addr = walletManager?.getCurrentAddress() ?: return
+            val json = com.google.gson.Gson().toJson(assets)
+            getApplication<Application>().getSharedPreferences("raventag_assets_cache", Application.MODE_PRIVATE)
+                .edit().putString(addr, json).apply()
+        } catch (_: Exception) {}
+    }
+
+    private fun loadAssetsCache(): List<OwnedAsset>? {
+        return try {
+            val addr = walletManager?.getCurrentAddress() ?: return null
+            val prefs = getApplication<Application>().getSharedPreferences("raventag_assets_cache", Application.MODE_PRIVATE)
+            val json = prefs.getString(addr, null) ?: return null
+            val type = object : com.google.gson.reflect.TypeToken<List<OwnedAsset>>() {}.type
+            com.google.gson.Gson().fromJson<List<OwnedAsset>>(json, type)
+        } catch (_: Exception) { null }
+    }
+
     fun loadOwnedAssets() {
         val wm = walletManager ?: return
-        
+
         // Don't reset consolidation flag if consolidation is in progress
         if (!consolidationInProgress) {
             needsConsolidation = false
         }
-        
+
         viewModelScope.launch {
             assetsLoading = true
             assetsLoadError = false
+
+            // Show cached assets immediately while fresh data loads from the network.
+            // Only used when the list is empty (first load after startup).
+            if (ownedAssets.isNullOrEmpty()) {
+                val cached = withContext(Dispatchers.IO) { loadAssetsCache() }
+                if (!cached.isNullOrEmpty()) {
+                    ownedAssets = cached
+                    assetsLoading = false
+                }
+            }
+
             try {
                 // One Keystore decrypt + one pipelined batch for all asset balances.
                 val basic = withContext(Dispatchers.IO) {
@@ -630,6 +660,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 ownedAssets = merged
                 assetsLoading = false
+                saveAssetsCache(merged)
 
                 // Only fetch metadata for assets not yet enriched.
                 val needsEnrichment = merged.filter { it.imageUrl == null }
