@@ -1166,6 +1166,39 @@ class WalletManager(private val context: Context) {
     }
 
     /**
+     * Returns (privateKeyBytes, publicKeyBytes) from a single Keystore decrypt.
+     *
+     * This is more efficient than calling [getPrivateKeyBytes] and [getPublicKeyBytes]
+     * separately, which would each invoke [getSeed] and thus require two Keystore
+     * AES-GCM decryptions (~250 ms each under StrongBox).
+     *
+     * The returned private key is a copy allocated by [derivePrivateKey]. The CALLER
+     * is responsible for zeroing it with [ByteArray.fill] after use. The public key
+     * does not need to be zeroed.
+     *
+     * @return Pair(privKeyBytes, pubKeyBytes), or null if the wallet is not set up
+     *         or the Keystore is locked.
+     */
+    fun getKeyPair(accountIndex: Int = 0, addressIndex: Int = 0): Pair<ByteArray, ByteArray>? {
+        var seed: ByteArray? = null
+        var priv: ByteArray? = null
+        var succeeded = false
+        return try {
+            seed = getSeed() ?: return null
+            priv = derivePrivateKey(seed, accountIndex, addressIndex)
+            val pub = privateKeyToPublicKey(priv)
+            succeeded = true
+            Pair(priv, pub)
+        } catch (_: Throwable) {
+            null
+        } finally {
+            seed?.fill(0)
+            // Zero priv only on failure; on success the caller owns it and must zero it
+            if (!succeeded) priv?.fill(0)
+        }
+    }
+
+    /**
      * Query aggregated balance across all used addresses (0..currentIndex)
      * directly from public Ravencoin nodes (no backend required).
      * Returns total balance in RVN, or null on failure.
@@ -1200,17 +1233,24 @@ class WalletManager(private val context: Context) {
      * @param amountRvn Amount in RVN
      * @return "$txid|fee:$satoshis" on success
      */
-    fun sendRvnLocal(toAddress: String, amountRvn: Double): String {
+    suspend fun sendRvnLocal(toAddress: String, amountRvn: Double): String = withContext(Dispatchers.IO) {
         var currentIndex = getCurrentAddressIndex()
         var address = getAddress(0, currentIndex) ?: error("No wallet")
-
         val node = RavencoinPublicNode()
 
+        // Fetch all UTXOs and the relay fee rate in parallel (2 TLS for UTXOs + 1 TLS for fee,
+        // all 3 connections run concurrently so total wall time is max(~600ms, ~300ms) not sum).
+        val (utxoResult, satPerByte) = coroutineScope {
+            val utxosDeferred = async { node.getUtxosAndAllAssetUtxosBatch(address) }
+            val feeDeferred   = async { node.getMinRelayFeeRateSatPerByte() }
+            Pair(utxosDeferred.await(), feeDeferred.await())
+        }
+        var rvnUtxos:    List<Utxo>                    = utxoResult.first
+        var assetUtxosMap: Map<String, List<AssetUtxo>> = utxoResult.third
+
         // FALLBACK: If current address has no RVN, scan backwards to find the address with funds.
-        // This handles the case where a sweep advanced currentIndex but the actual funds remain
-        // on a previous address.
-        var allUtxos = node.getUtxos(address)
-        if (allUtxos.isEmpty()) {
+        // This handles the case where a sweep advanced currentIndex but funds remain on a previous address.
+        if (rvnUtxos.isEmpty()) {
             val bal = try { node.getBalance(address) } catch (_: Exception) { null }
             if (bal != null && bal.unconfirmed > 0 && bal.confirmed == 0L) {
                 error("Transaction not confirmed yet. Wait for 1-2 blocks before sending.")
@@ -1222,10 +1262,7 @@ class WalletManager(private val context: Context) {
                 val fallbackAddr = getAddress(0, i) ?: continue
                 val fallbackUtxos = try { node.getUtxos(fallbackAddr) } catch (_: Exception) { emptyList() }
                 if (fallbackUtxos.isNotEmpty()) {
-                    val status = try { node.getAddressStatus(fallbackAddr) } catch (_: Exception) {
-                        RavencoinPublicNode.AddressStatus.NO_HISTORY
-                    }
-                    android.util.Log.i("WalletManager", "sendRvn: found funds on index $i (status: $status)")
+                    android.util.Log.i("WalletManager", "sendRvn: found funds on index $i")
                     fallbackIndex = i
                     break
                 }
@@ -1235,68 +1272,54 @@ class WalletManager(private val context: Context) {
                 error("No spendable funds on current address. Try refreshing the wallet to consolidate funds.")
             }
 
-            // Set currentIndex to the fallback index. The nextAddress (currentIndex+1) will be
-            // the clean address that receives all remaining funds after this transaction.
+            // Advance currentIndex to the fallback; nextAddress will be currentIndex+1 (quantum-safe).
             currentIndex = fallbackIndex
             setCurrentAddressIndex(currentIndex)
             address = getAddress(0, currentIndex) ?: error("Cannot derive fallback address")
-            allUtxos = node.getUtxos(address)
             android.util.Log.i("WalletManager", "sendRvn: fallback to index $currentIndex ($address)")
+
+            // Re-fetch UTXOs for the fallback address (still only 2 TLS connections)
+            val fallback = node.getUtxosAndAllAssetUtxosBatch(address)
+            rvnUtxos      = fallback.first
+            assetUtxosMap  = fallback.third
+        }
+
+        if (rvnUtxos.isEmpty()) {
+            error("No RVN available for transaction fee. Fund your wallet with at least 0.01 RVN.")
         }
 
         val nextAddress = getAddress(0, currentIndex + 1) ?: error("Cannot derive next address")
-        var privKey: ByteArray? = null
-        return try {
-            privKey = getPrivateKeyBytes(0, currentIndex) ?: error("No private key")
-            val pubKey = getPublicKeyBytes(0, currentIndex) ?: error("No public key")
 
-            val amountSat = (amountRvn * 1e8).toLong()
+        // Single Keystore decrypt for both private and public key (~250 ms saved vs two separate calls)
+        val keyPair = getKeyPair(0, currentIndex) ?: error("No wallet key")
+        var privKey: ByteArray? = keyPair.first
+        val pubKey = keyPair.second
 
-            // Get all asset outpoints to separate RVN from asset UTXOs
-            val allAssetOutpoints = node.getAllAssetOutpoints(address)
-            val rvnUtxos = allUtxos.filter { "${it.txid}:${it.outputIndex}" !in allAssetOutpoints }
+        val amountSat = (amountRvn * 1e8).toLong()
+        val hasAssets = assetUtxosMap.isNotEmpty()
 
-            if (rvnUtxos.isEmpty()) {
-                error("No RVN available for transaction fee. Fund your wallet with at least 0.01 RVN.")
-            }
-
-            // Check for assets on current address
-            val assetBalances = node.getAssetBalances(address)
-            val hasAssets = assetBalances.any { it.amount > 0 }
-
-            val satPerByte = node.getMinRelayFeeRateSatPerByte()
+        return@withContext try {
             val txid: String
             var feeSatActual: Long = 0L
 
             if (hasAssets) {
                 // POST-QUANTUM SAFE: Send RVN + sweep ALL assets to nextAddress in ONE transaction
-                val assetUtxos = mutableMapOf<String, List<AssetUtxo>>()
-                for (asset in assetBalances) {
-                    if (asset.amount > 0) {
-                        val utxos = node.getAssetUtxosFull(address, asset.name)
-                        if (utxos.isNotEmpty()) {
-                            assetUtxos[asset.name] = utxos
-                        }
-                    }
-                }
-
-                // Calculate fee: RVN inputs + all asset inputs, outputs for RVN + RVN change + all assets
-                val totalAssetOutputs = assetBalances.count { it.amount > 0 }
-                val totalInputs = rvnUtxos.size + assetUtxos.values.sumOf { it.size }
+                val totalAssetOutputs = assetUtxosMap.size
+                val totalInputs = rvnUtxos.size + assetUtxosMap.values.sumOf { it.size }
                 val estimatedBytes = 10 + 148 * totalInputs + 70 * (2 + totalAssetOutputs) + 34
                 feeSatActual = estimatedBytes * satPerByte
 
                 android.util.Log.i("WalletManager", "sendRvn with asset sweep: " +
-                    "${assetUtxos.size} asset types, $totalAssetOutputs asset outputs")
+                    "${assetUtxosMap.size} asset types, $totalAssetOutputs asset outputs")
 
                 val tx = RavencoinTxBuilder.buildAndSignRvnSendWithAssetSweep(
                     rvnUtxos = rvnUtxos,
-                    assetUtxos = assetUtxos,
+                    assetUtxos = assetUtxosMap,
                     toAddress = toAddress,
                     amountSat = amountSat,
                     feeSat = feeSatActual,
                     changeAddress = nextAddress,  // ALL assets and remaining RVN go to fresh address
-                    privKeyBytes = privKey,
+                    privKeyBytes = privKey!!,
                     pubKeyBytes = pubKey
                 )
                 txid = node.broadcast(tx.hex)
@@ -1326,7 +1349,7 @@ class WalletManager(private val context: Context) {
                     amountSat = amountSat,
                     feeSat = feeSatActual,
                     changeAddress = nextAddress,
-                    privKeyBytes = privKey,
+                    privKeyBytes = privKey!!,
                     pubKeyBytes = pubKey
                 )
                 txid = node.broadcast(tx.hex)
@@ -1369,79 +1392,65 @@ class WalletManager(private val context: Context) {
      *                   Must be > 0 and <= current asset balance.
      * @return transaction ID on success
      */
-    fun transferAssetLocal(
+    suspend fun transferAssetLocal(
         assetName: String,
         toAddress: String,
         qty: Double = 1.0
-    ): String {
+    ): String = withContext(Dispatchers.IO) {
         val currentIndex = getCurrentAddressIndex()
         val address = getAddress(0, currentIndex) ?: error("No wallet")
         val nextAddress = getAddress(0, currentIndex + 1) ?: error("Cannot derive next address")
-        var privKey: ByteArray? = null
-        return try {
-            privKey = getPrivateKeyBytes(0, currentIndex) ?: error("No private key")
-            val pubKey = getPublicKeyBytes(0, currentIndex) ?: error("No public key")
+        val node = RavencoinPublicNode()
 
-            val node = RavencoinPublicNode()
+        val rawQtyRequested = Math.round(qty * 100_000_000.0)
+        require(rawQtyRequested > 0) { "Transfer quantity must be greater than zero" }
 
-            val rawQtyRequested = Math.round(qty * 100_000_000.0)
-            require(rawQtyRequested > 0) { "Transfer quantity must be greater than zero" }
-
-            // Get UTXOs for the primary asset being transferred externally
-            val primaryAssetUtxosFull = node.getAssetUtxosFull(address, assetName)
-            if (primaryAssetUtxosFull.isEmpty()) error("No UTXOs found for asset $assetName. Try refreshing the wallet.")
-
-            val totalRawAmount = primaryAssetUtxosFull.sumOf { it.assetRawAmount }
-            require(totalRawAmount > 0) { "Asset $assetName has zero balance in UTXOs" }
-            require(rawQtyRequested <= totalRawAmount) {
-                "Insufficient asset balance: requested $qty, " +
-                "available ${totalRawAmount / 100_000_000.0}"
+        // Fetch all UTXOs and the relay fee rate in parallel
+        val (utxoResult, satPerByte) = coroutineScope {
+            val utxosDeferred = async { node.getUtxosAndAllAssetUtxosBatch(address) }
+            val feeDeferred   = async {
+                try { node.getMinRelayFeeRateSatPerByte() } catch (_: FeeUnavailableException) { 200L }
             }
+            Pair(utxosDeferred.await(), feeDeferred.await())
+        }
+        val rvnUtxos     = utxoResult.first
+        val allAssetMap  = utxoResult.third  // all asset UTXOs keyed by name
 
-            val assetChangeRawAmount = totalRawAmount - rawQtyRequested
-            val primaryAssetUtxos = primaryAssetUtxosFull.map { it.utxo }
+        val primaryAssetUtxosFull = allAssetMap[assetName] ?: emptyList()
+        if (primaryAssetUtxosFull.isEmpty()) error("No UTXOs found for asset $assetName. Try refreshing the wallet.")
 
-            // Get ALL other asset balances (excluding the primary asset)
-            val otherAssetBalances = node.getAssetBalances(address)
-                .filter { it.name != assetName && it.amount > 0 }
+        val totalRawAmount = primaryAssetUtxosFull.sumOf { it.assetRawAmount }
+        require(totalRawAmount > 0) { "Asset $assetName has zero balance in UTXOs" }
+        require(rawQtyRequested <= totalRawAmount) {
+            "Insufficient asset balance: requested $qty, available ${totalRawAmount / 100_000_000.0}"
+        }
 
-            // Get UTXOs for all other assets
-            val otherAssetUtxos = mutableMapOf<String, List<AssetUtxo>>()
-            for (otherAsset in otherAssetBalances) {
-                val otherUtxos = node.getAssetUtxosFull(address, otherAsset.name)
-                if (otherUtxos.isNotEmpty()) {
-                    otherAssetUtxos[otherAsset.name] = otherUtxos
-                }
-            }
+        val assetChangeRawAmount = totalRawAmount - rawQtyRequested
+        val primaryAssetUtxos = primaryAssetUtxosFull.map { it.utxo }
 
-            // Get RVN-only UTXOs (exclude all asset outpoints)
-            val allAssetOutpoints = node.getAllAssetOutpoints(address)
-            val rvnUtxos = node.getUtxos(address)
-                .filter { "${it.txid}:${it.outputIndex}" !in allAssetOutpoints }
+        // All other assets (excluding the primary one being transferred)
+        val otherAssetUtxos: Map<String, List<AssetUtxo>> = allAssetMap.filterKeys { it != assetName }
 
-            // Estimate fee
-            val primaryAssetChangeOutputs = if (assetChangeRawAmount > 0) 1 else 0
-            val totalAssetOutputs = 1 + primaryAssetChangeOutputs + otherAssetBalances.size // primary + change + others
-            val totalInputs = primaryAssetUtxos.size +
-                otherAssetUtxos.values.sumOf { it.size } +
-                rvnUtxos.size
+        val primaryAssetChangeOutputs = if (assetChangeRawAmount > 0) 1 else 0
+        val totalAssetOutputs = 1 + primaryAssetChangeOutputs + otherAssetUtxos.size
+        val totalInputs = primaryAssetUtxos.size + otherAssetUtxos.values.sumOf { it.size } + rvnUtxos.size
 
-            val relayFeeSatPerByte = try { node.getMinRelayFeeRateSatPerByte() } catch (_: FeeUnavailableException) { 200L }
-            val satPerByte = maxOf(relayFeeSatPerByte, 200L)
-            val estimatedBytes = 10 + 148 * totalInputs + 70 * totalAssetOutputs + 34
-            val feeSat = estimatedBytes * satPerByte
+        val feeSat = (10 + 148 * totalInputs + 70 * totalAssetOutputs + 34) * maxOf(satPerByte, 200L)
 
-            // Check if we have enough RVN for fee
-            val rvnTotal = rvnUtxos.sumOf { it.satoshis }
-            val dustEstimate = 600L * totalAssetOutputs
-            if (rvnTotal < feeSat + dustEstimate) {
-                error("Insufficient RVN for fee and dust. Need ${(feeSat + dustEstimate) / 1e8} RVN, have ${rvnTotal / 1e8} RVN. Fund your wallet with at least 0.01 RVN.")
-            }
-            if (rvnUtxos.isEmpty()) {
-                error("Insufficient RVN for fee. Fund your wallet with at least 0.01 RVN.")
-            }
+        val rvnTotal = rvnUtxos.sumOf { it.satoshis }
+        val dustEstimate = 600L * totalAssetOutputs
+        if (rvnUtxos.isEmpty()) error("Insufficient RVN for fee. Fund your wallet with at least 0.01 RVN.")
+        if (rvnTotal < feeSat + dustEstimate) {
+            error("Insufficient RVN for fee and dust. Need ${(feeSat + dustEstimate) / 1e8} RVN, " +
+                "have ${rvnTotal / 1e8} RVN. Fund your wallet with at least 0.01 RVN.")
+        }
 
-            // Build the multi-asset transfer transaction
+        // Single Keystore decrypt for both keys
+        val keyPair = getKeyPair(0, currentIndex) ?: error("No wallet key")
+        var privKey: ByteArray? = keyPair.first
+        val pubKey = keyPair.second
+
+        return@withContext try {
             val primaryOutput = RavencoinTxBuilder.AssetOutput(
                 assetName = assetName,
                 rawAmount = rawQtyRequested,
@@ -1456,7 +1465,7 @@ class WalletManager(private val context: Context) {
                 primaryAssetChange = assetChangeRawAmount,
                 feeSat = feeSat,
                 changeAddress = nextAddress,  // ALL remaining assets and RVN go to fresh address
-                privKeyBytes = privKey,
+                privKeyBytes = privKey!!,
                 pubKeyBytes = pubKey
             )
             val txid = node.broadcast(tx.hex)
@@ -1464,9 +1473,7 @@ class WalletManager(private val context: Context) {
             android.util.Log.i("WalletManager", "transferAsset: sent $qty $assetName to $toAddress, " +
                 "all remaining assets and RVN to $nextAddress, txid=$txid")
 
-            // Advance to next address (public key of current address is now exposed)
             setCurrentAddressIndex(currentIndex + 1)
-
             txid
         } finally {
             privKey?.fill(0)
@@ -1493,94 +1500,82 @@ class WalletManager(private val context: Context) {
      * @param ipfsHash   Optional CIDv0 "Qm..." IPFS hash for metadata
      * @return transaction ID on success
      */
-    fun issueAssetLocal(
+    suspend fun issueAssetLocal(
         assetName: String,
         qty: Double,
         toAddress: String,
         units: Int = 0,
         reissuable: Boolean = false,
         ipfsHash: String? = null
-    ): String {
+    ): String = withContext(Dispatchers.IO) {
         val currentIndex = getCurrentAddressIndex()
         val address = getAddress(0, currentIndex) ?: error("No wallet")
         val nextAddress = getAddress(0, currentIndex + 1) ?: error("Cannot derive next address")
 
-        // Post-quantum: signing this tx exposes key[currentIndex].
-        // If the caller passed the current signing address as the destination (the UI default),
-        // redirect to nextAddress so the asset lands on a quantum-safe address immediately,
-        // avoiding a subsequent sweep transaction.
-        // External addresses (different wallet) are passed through unchanged.
+        // Post-quantum: redirect self-sends to nextAddress (quantum-safe, unexposed key).
         val actualToAddress = if (toAddress == address) nextAddress else toAddress
 
-        var privKey: ByteArray? = null
-        return try {
-            privKey = getPrivateKeyBytes(0, currentIndex) ?: error("No private key")
-            val pubKey = getPublicKeyBytes(0, currentIndex) ?: error("No public key")
+        val node = RavencoinPublicNode()
 
-            val node = RavencoinPublicNode()
-            val allUtxos = node.getUtxos(address)
-            if (allUtxos.isEmpty()) error("No spendable RVN on current address. Try refreshing the wallet.")
+        // Fetch all UTXOs and the relay fee rate in parallel
+        val (utxoResult, satPerByte) = coroutineScope {
+            val utxosDeferred = async { node.getUtxosAndAllAssetUtxosBatch(address) }
+            val feeDeferred   = async { node.getMinRelayFeeRateSatPerByte() }
+            Pair(utxosDeferred.await(), feeDeferred.await())
+        }
+        val rvnUtxos    = utxoResult.first
+        val allAssetMap = utxoResult.third
 
-            // Get owner asset if needed (for sub-assets and unique tokens)
-            val ownerAssetName = when {
-                assetName.contains('#') -> assetName.substringBefore('#') + "!"
-                assetName.contains('/') -> assetName.substringBefore('/') + "!"
-                else -> null
+        if (rvnUtxos.isEmpty()) error("No spendable RVN on current address. Try refreshing the wallet.")
+
+        // Extract owner asset UTXO if needed (sub-assets and unique tokens require the parent owner token)
+        val ownerAssetName = when {
+            assetName.contains('#') -> assetName.substringBefore('#') + "!"
+            assetName.contains('/') -> assetName.substringBefore('/') + "!"
+            else -> null
+        }
+        val ownerAssetUtxos: List<Utxo> = ownerAssetName?.let { requiredOwnerAsset ->
+            val allOwnerUtxos = allAssetMap[requiredOwnerAsset] ?: emptyList()
+            require(allOwnerUtxos.isNotEmpty()) {
+                "Missing owner asset $requiredOwnerAsset in wallet. " +
+                "Transfer the owner token to this address before issuing $assetName."
             }
-            val ownerAssetUtxos = ownerAssetName?.let { requiredOwnerAsset ->
-                val allOwnerUtxos = node.getAssetUtxosFull(address, requiredOwnerAsset)
-                require(allOwnerUtxos.isNotEmpty()) {
-                    "Missing owner asset $requiredOwnerAsset in wallet. Transfer the owner token to this address before issuing $assetName."
-                }
-                val singleOwnerUtxo = allOwnerUtxos.firstOrNull { it.assetRawAmount == 100_000_000L }
-                    ?: allOwnerUtxos.firstOrNull()
-                    ?: error("No valid owner token UTXO found for $requiredOwnerAsset")
-                require(singleOwnerUtxo.assetRawAmount == 100_000_000L) {
-                    "Owner token $requiredOwnerAsset has amount ${singleOwnerUtxo.assetRawAmount}, expected 100000000 (1 in raw units). " +
-                    "Make sure you have a single owner token UTXO with amount 1."
-                }
-                listOf(singleOwnerUtxo.utxo.copy(satoshis = 0L))
-            }.orEmpty()
-
-            // Get all other asset balances (excluding owner asset which is already handled)
-            val otherAssetBalances = node.getAssetBalances(address)
-                .filter { asset ->
-                    asset.amount > 0 && asset.name != ownerAssetName
-                }
-
-            // Get UTXOs for all other assets
-            val otherAssetUtxos = mutableMapOf<String, List<AssetUtxo>>()
-            for (otherAsset in otherAssetBalances) {
-                val utxos = node.getAssetUtxosFull(address, otherAsset.name)
-                if (utxos.isNotEmpty()) {
-                    otherAssetUtxos[otherAsset.name] = utxos
-                }
+            val singleOwnerUtxo = allOwnerUtxos.firstOrNull { it.assetRawAmount == 100_000_000L }
+                ?: allOwnerUtxos.firstOrNull()
+                ?: error("No valid owner token UTXO found for $requiredOwnerAsset")
+            require(singleOwnerUtxo.assetRawAmount == 100_000_000L) {
+                "Owner token $requiredOwnerAsset has amount ${singleOwnerUtxo.assetRawAmount}, " +
+                "expected 100000000 (1 in raw units). Make sure you have a single owner token UTXO with amount 1."
             }
+            listOf(singleOwnerUtxo.utxo.copy(satoshis = 0L))
+        }.orEmpty()
 
-            // Separate RVN-only UTXOs from asset UTXOs
-            val allAssetOutpoints = node.getAllAssetOutpoints(address)
-            val rvnUtxos = allUtxos.filter { "${it.txid}:${it.outputIndex}" !in allAssetOutpoints }
+        // All other assets (excluding the owner token which is already handled above)
+        val otherAssetUtxos: Map<String, List<AssetUtxo>> = allAssetMap.filterKeys { it != ownerAssetName }
 
-            val burnSat = when {
-                assetName.contains('#') -> RavencoinTxBuilder.BURN_UNIQUE_SAT
-                assetName.contains('/') -> RavencoinTxBuilder.BURN_SUB_SAT
-                else                    -> RavencoinTxBuilder.BURN_ROOT_SAT
-            }
+        val burnSat = when {
+            assetName.contains('#') -> RavencoinTxBuilder.BURN_UNIQUE_SAT
+            assetName.contains('/') -> RavencoinTxBuilder.BURN_SUB_SAT
+            else                    -> RavencoinTxBuilder.BURN_ROOT_SAT
+        }
 
-            // Estimate fee: RVN inputs + owner asset inputs + swept asset inputs
-            val totalAssetSweepOutputs = otherAssetBalances.size
-            val totalInputs = rvnUtxos.size + ownerAssetUtxos.size +
-                otherAssetUtxos.values.sumOf { it.size }
-            val outputCountForIssuance = when {
-                assetName.contains('#') -> 4
-                assetName.contains('/') -> 5
-                else -> 4
-            }
-            val estimatedBytes = 10 + 148 * totalInputs + 70 * (outputCountForIssuance + totalAssetSweepOutputs) + 34
-            val feeSat = estimatedBytes * node.getMinRelayFeeRateSatPerByte()
+        val totalAssetSweepOutputs = otherAssetUtxos.size
+        val totalInputs = rvnUtxos.size + ownerAssetUtxos.size + otherAssetUtxos.values.sumOf { it.size }
+        val outputCountForIssuance = when {
+            assetName.contains('#') -> 4
+            assetName.contains('/') -> 5
+            else -> 4
+        }
+        val feeSat = (10 + 148 * totalInputs + 70 * (outputCountForIssuance + totalAssetSweepOutputs) + 34) * satPerByte
 
-            val qtyRaw = (qty * 100_000_000.0).toLong()
+        val qtyRaw = (qty * 100_000_000.0).toLong()
 
+        // Single Keystore decrypt for both keys
+        val keyPair = getKeyPair(0, currentIndex) ?: error("No wallet key")
+        var privKey: ByteArray? = keyPair.first
+        val pubKey = keyPair.second
+
+        return@withContext try {
             val tx = RavencoinTxBuilder.buildAndSignAssetIssueWithAssetSweep(
                 utxos = rvnUtxos.filterNot { rvn ->
                     ownerAssetUtxos.any { owner -> owner.txid == rvn.txid && owner.outputIndex == rvn.outputIndex }
@@ -1596,7 +1591,7 @@ class WalletManager(private val context: Context) {
                 ipfsHash = ipfsHash,
                 burnSat = burnSat,
                 feeSat = feeSat,
-                privKeyBytes = privKey,
+                privKeyBytes = privKey!!,
                 pubKeyBytes = pubKey
             )
             val txid = node.broadcast(tx.hex)
@@ -1604,9 +1599,7 @@ class WalletManager(private val context: Context) {
             android.util.Log.i("WalletManager", "issueAsset: issued $qty $assetName to $actualToAddress, " +
                 "owner token + all other assets and RVN change to $nextAddress, txid=$txid")
 
-            // Advance to next address (public key of current address is now exposed)
             setCurrentAddressIndex(currentIndex + 1)
-
             txid
         } finally {
             privKey?.fill(0)
