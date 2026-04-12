@@ -79,11 +79,14 @@ object NetworkModule {
                 )
             }
             // Follow redirects for IPFS gateways
+            .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+            .writeTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
             .followRedirects(true)
             .followSslRedirects(true)
             .dispatcher(okhttp3.Dispatcher().apply {
-                maxRequests = 50
-                maxRequestsPerHost = 20
+                maxRequests = 100
+                maxRequestsPerHost = 50
             })
             .build()
     }
