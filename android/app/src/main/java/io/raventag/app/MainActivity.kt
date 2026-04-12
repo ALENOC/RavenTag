@@ -924,14 +924,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // STEP 2: Background maintenance (does not block the UI).
             launch(Dispatchers.IO) {
 
-                // Auto-discovery: if the initial balance is null (no funds on the known
-                // address range), the stored index may be too low. This happens when the
-                // wallet was restored while offline (discoverCurrentIndex was skipped) or
-                // when funds were moved to higher-index addresses by another app instance.
-                // Run a full BIP44 gap-limited scan to find the real current index.
-                if (balance == null) {
+                // Auto-discovery: only run after wallet restore (index reset to 0).
+                // Running discovery on every 0-balance load would open many parallel
+                // ElectrumX connections and is unnecessary once the index is known.
+                if (balance == null && wm.getCurrentAddressIndex() == 0) {
                     try {
-                        Log.i("MainViewModel", "Balance empty, running discoverCurrentIndex")
+                        Log.i("MainViewModel", "Fresh wallet, running discoverCurrentIndex")
                         wm.discoverCurrentIndex()
                         val discoveredAddr = wm.getCurrentAddress()
                         if (discoveredAddr != null && discoveredAddr != walletInfo?.address) {
@@ -996,14 +994,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                Log.i("MainActivity", "Starting healing/sweep sequence")
-                val currentIndex = wm.getCurrentAddressIndex()
-
-                // Parallel healing and sweeping
-                (0 until currentIndex).map { i ->
-                    async { wm.healAndSweepTarget(i) }
-                }.awaitAll()
-
+                Log.i("MainActivity", "Starting sweep sequence")
+                // Sequential sweep: avoids opening many parallel TCP connections to ElectrumX
+                // servers simultaneously, which caused connection resets.
                 val txids = wm.sweepOldAddresses()
                 if (txids.isNotEmpty()) {
                     Log.i("MainViewModel", "Auto-sweep completed: ${txids.size} transactions")
