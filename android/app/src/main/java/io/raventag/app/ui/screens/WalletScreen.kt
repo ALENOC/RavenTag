@@ -313,7 +313,8 @@ fun WalletScreen(
                 }
             }
             item(key = "asset_filters_spacer") { Spacer(modifier = Modifier.height(4.dp)) }
-            if (!assetsLoading && assetsLoadError) {
+            // Error card: only when no cached assets are available to show
+            if (!assetsLoading && assetsLoadError && filteredAssets.isEmpty()) {
                 item(key = "assets_load_error") {
                     Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF1A0D00)), border = BorderStroke(1.dp, RavenOrange.copy(alpha = 0.3f)), shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth()) {
                         Row(modifier = Modifier.padding(16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {

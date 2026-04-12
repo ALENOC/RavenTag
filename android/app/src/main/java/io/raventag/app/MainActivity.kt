@@ -1043,7 +1043,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 val info = withContext(Dispatchers.IO) { am.getWalletInfo() }
                 walletInfo = walletInfo?.copy(
-                    balanceRvn = info?.first ?: 0.0,
+                    // Preserve the last known balance if backend also fails; never overwrite with 0
+                    balanceRvn = info?.first ?: walletInfo?.balanceRvn ?: 0.0,
                     isLoading = false
                 )
             } catch (_: Throwable) {
