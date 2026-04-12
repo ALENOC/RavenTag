@@ -452,94 +452,30 @@ class WalletManager(private val context: Context) {
      * This ensures the wallet points to the correct receive address that holds
      * the consolidated funds.
      */
-    fun reconcileCurrentAddressIndex(): Int = kotlinx.coroutines.runBlocking(kotlinx.coroutines.Dispatchers.IO) {
-        val node = RavencoinPublicNode()
+    /**
+     * Verify the stored address index is not lower than it should be.
+     * Only INCREASES the index (never decreases), because post-quantum
+     * safety requires the index to only move forward after outgoing transactions.
+     */
+    fun reconcileCurrentAddressIndex(): Int {
         val storedIndex = getCurrentAddressIndex()
-
-        // Scan ONLY the top addresses (storedIndex-3 to storedIndex) in PARALLEL
-        // Most recent funds will be on the highest clean addresses
-        val startScan = maxOf(0, storedIndex - 5)
-        val indicesToCheck = (startScan..storedIndex).toList()
-
-        var highestCleanIndexWithFunds: Int? = null
-
-        val results = coroutineScope {
-            indicesToCheck.map { i ->
-                async(Dispatchers.IO) {
-                    val addr = getAddress(0, i) ?: return@async null
-                    val status = try { node.getAddressStatus(addr) } catch (_: Exception) {
-                        RavencoinPublicNode.AddressStatus.NO_HISTORY
-                    }
-                    if (status == RavencoinPublicNode.AddressStatus.HAS_OUTGOING) return@async null
-
-                    // Check if this clean address has funds
-                    val utxos = try { node.getUtxos(addr) } catch (_: Exception) { emptyList() }
-                    if (utxos.isNotEmpty()) i to utxos.size else null
-                }
-            }.awaitAll()
-        }
-
-        // Find the highest index with clean status AND funds
-        val nonNullResults = results.filterNotNull()
-        if (nonNullResults.isNotEmpty()) {
-            highestCleanIndexWithFunds = nonNullResults.maxByOrNull { it.first }?.first
-        }
-
-        if (highestCleanIndexWithFunds != null && highestCleanIndexWithFunds != storedIndex) {
-            android.util.Log.i("WalletManager", "reconcile: funds at index $highestCleanIndexWithFunds, was $storedIndex")
-            setCurrentAddressIndex(highestCleanIndexWithFunds!!)
-            return@runBlocking highestCleanIndexWithFunds!!
-        }
-
-        // Fallback: no clean address with funds found in recent range,
-        // scan ALL addresses for the highest clean one (even without funds)
-        if (highestCleanIndexWithFunds == null) {
-            val allIndices = (0..storedIndex).toList()
-            val allResults = coroutineScope {
-                allIndices.chunked(10).flatMap { batch ->
-                    batch.map { i ->
-                        async(Dispatchers.IO) {
-                            val addr = getAddress(0, i) ?: return@async null
-                            val status = try { node.getAddressStatus(addr) } catch (_: Exception) {
-                                RavencoinPublicNode.AddressStatus.NO_HISTORY
-                            }
-                            if (status != RavencoinPublicNode.AddressStatus.HAS_OUTGOING) i else null
-                        }
-                    }.awaitAll()
-                }
-            }
-            val cleanIndices = allResults.filterNotNull()
-            if (cleanIndices.isNotEmpty()) {
-                val maxClean = cleanIndices.maxOrNull()
-                if (maxClean != null && maxClean != storedIndex) {
-                    android.util.Log.i("WalletManager", "reconcile: highest clean index $maxClean (no funds), was $storedIndex")
-                    setCurrentAddressIndex(maxClean)
-                    return@runBlocking maxClean
-                }
-            }
-        }
-
-        return@runBlocking storedIndex
+        // No-op: the index is managed exclusively by sendRvnLocal/transferAssetLocal
+        // (which advance it) and discoverCurrentIndex (which finds the correct starting
+        // point after wallet restore). Lowering the index would break asset visibility
+        // and post-quantum protection.
+        return storedIndex
     }
 
+    /**
+     * No-op: kept for API compatibility.
+     * The current address index is now managed exclusively by:
+     *   - sendRvnLocal / transferAssetLocal (advance after outgoing tx)
+     *   - discoverCurrentIndex (find correct start after wallet restore)
+     * Advancing the index based on address status was causing the index to
+     * decrease on network errors, hiding assets from the UI.
+     */
     fun ensureCurrentAddressClean() {
-        val node = RavencoinPublicNode()
-        var index = getCurrentAddressIndex()
-        val addr = getAddress(0, index) ?: return
-
-        val status = try { node.getAddressStatus(addr) } catch (_: Exception) { return }
-        if (status != RavencoinPublicNode.AddressStatus.HAS_OUTGOING) return
-
-        // Current address has outgoing tx, advance until we find a clean one
-        index++
-        while (true) {
-            val nextAddr = getAddress(0, index) ?: break
-            val nextStatus = try { node.getAddressStatus(nextAddr) } catch (_: Exception) { break }
-            if (nextStatus != RavencoinPublicNode.AddressStatus.HAS_OUTGOING) break
-            index++
-        }
-        setCurrentAddressIndex(index)
-        android.util.Log.i("WalletManager", "ensureCurrentAddressClean: advanced to index $index")
+        // intentionally empty
     }
 
     /**
@@ -784,6 +720,8 @@ class WalletManager(private val context: Context) {
             val hasAssets: Boolean,
             val hasRvn: Boolean
         )
+        android.util.Log.i("WalletManager", "Sweep: scanning ${currentIndex} old addresses (0..${currentIndex - 1})")
+
         val addrBatch = getAddressBatch(0, 0 until currentIndex)
         val addrList = (0 until currentIndex).mapNotNull { i -> addrBatch[i]?.let { i to it } }
 
@@ -794,11 +732,17 @@ class WalletManager(private val context: Context) {
                 val hasAssets = r.third.isNotEmpty()
                 val rvnBalance = r.first.sumOf { it.satoshis }
                 if (hasAssets || rvnBalance > 0) {
+                    android.util.Log.i("WalletManager", "Sweep: index $i ($addr) has assets=$hasAssets rvn=${rvnBalance / 1e8}")
                     targets.add(SweepTarget(i, addr, hasAssets, rvnBalance > 0))
                 }
-            } catch (_: Exception) {}
+            } catch (e: Exception) {
+                android.util.Log.w("WalletManager", "Sweep: scan failed for index $i: ${e.message}")
+            }
         }
-        if (targets.isEmpty()) return emptyList()
+        if (targets.isEmpty()) {
+            android.util.Log.i("WalletManager", "Sweep: no funded old addresses found, nothing to do")
+            return emptyList()
+        }
 
         // The sweep destination is the current address — already clean, no index advance.
         // (Index advances only inside sendRvnLocal(), after the user makes an outgoing tx.)
