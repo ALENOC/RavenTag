@@ -589,6 +589,150 @@ class RavencoinPublicNode {
     }
 
     /**
+     * Fetches all UTXOs for [address] and returns RVN UTXOs, asset outpoints, and all
+     * asset UTXOs with full scripts in at most 2 TLS connections.
+     *
+     * TLS 1: blockchain.scripthash.listunspent (full unfiltered UTXO list)
+     * TLS 2: batch blockchain.transaction.get for every unique txid referenced by
+     *        unknown-type UTXOs (need "88acc0" check) and asset UTXOs (need on-chain script)
+     *
+     * This replaces the combination of [getUtxos] + [getAllAssetOutpoints] + N calls to
+     * [getAssetUtxosFull] that previously required N+2 separate TLS connections.
+     *
+     * @param address Ravencoin P2PKH address.
+     * @return Triple:
+     *   - rvnUtxos:       plain RVN UTXOs safe to spend as fee inputs
+     *   - assetOutpoints: set of "txid:vout" that carry assets (to exclude from fee inputs)
+     *   - assetUtxosMap:  map from asset name to list of AssetUtxo (with on-chain scripts)
+     */
+    fun getUtxosAndAllAssetUtxosBatch(
+        address: String
+    ): Triple<List<Utxo>, Set<String>, Map<String, List<AssetUtxo>>> {
+        val rvnScript = p2pkhScriptHex(address)
+        val rawList = listUnspentRaw(address)   // TLS 1
+
+        // Classify each UTXO into one of three buckets
+        data class PendingUtxo(
+            val txHash: String,
+            val txPos: Int,
+            val height: Int,
+            val valueField: Long?,   // raw "value" from listunspent (may be asset amount for asset UTXOs)
+            val isKnownAsset: Boolean,
+            val isUnknown: Boolean,  // no "asset" field: needs raw-tx check for "88acc0"
+            val assetName: String?,
+            val assetAmount: Long?
+        )
+
+        val pending = mutableListOf<PendingUtxo>()
+        for (obj in rawList) {
+            val txHash = obj.get("tx_hash")?.asString ?: continue
+            val txPos  = obj.get("tx_pos")?.asInt    ?: continue
+            val height = obj.get("height")?.asInt    ?: 0
+            val value  = obj.get("value")?.asLong
+            val assetField = if (obj.has("asset")) obj.get("asset") else null
+
+            when {
+                assetField == null || assetField.isJsonNull -> {
+                    // No "asset" tag: server either omitted it or this is plain RVN
+                    pending.add(PendingUtxo(txHash, txPos, height, value, false, true, null, null))
+                }
+                assetField.isJsonPrimitive -> {
+                    val name = runCatching { assetField.asString }.getOrDefault("")
+                    if (name.isEmpty() || name == "RVN") {
+                        pending.add(PendingUtxo(txHash, txPos, height, value, false, false, null, null))
+                    } else {
+                        pending.add(PendingUtxo(txHash, txPos, height, value, true, false, name, value))
+                    }
+                }
+                else -> {
+                    val ao = assetField.asJsonObject
+                    val name   = ao.get("name")?.asString   ?: ""
+                    val amount = ao.get("amount")?.asLong
+                    if (name.isEmpty() || name == "RVN") {
+                        pending.add(PendingUtxo(txHash, txPos, height, value, false, false, null, null))
+                    } else {
+                        pending.add(PendingUtxo(txHash, txPos, height, value, true, false, name, amount))
+                    }
+                }
+            }
+        }
+
+        // Collect txids that need a raw transaction fetch (unknown + known asset)
+        val txidsToFetch = pending
+            .filter { it.isKnownAsset || it.isUnknown }
+            .map { it.txHash }
+            .distinct()
+
+        // Batch-fetch all raw transactions in one TLS connection  (TLS 2)
+        val txCache = mutableMapOf<String, JsonObject?>()
+        if (txidsToFetch.isNotEmpty()) {
+            val requests = txidsToFetch.map { "blockchain.transaction.get" to listOf(it, true) as List<Any> }
+            val results = callWithFailoverBatch(requests)
+            txidsToFetch.forEachIndexed { i, txid ->
+                txCache[txid] = try { results[i]?.asJsonObject } catch (_: Exception) { null }
+            }
+        }
+
+        // Build the three return collections
+        val rvnUtxos      = mutableListOf<Utxo>()
+        val assetOutpoints = mutableSetOf<String>()
+        val assetUtxosMap  = mutableMapOf<String, MutableList<AssetUtxo>>()
+
+        for (u in pending) {
+            val outpoint = "${u.txHash}:${u.txPos}"
+            when {
+                u.isKnownAsset -> {
+                    // Asset UTXO: extract on-chain script and actual RVN satoshis from raw tx
+                    assetOutpoints.add(outpoint)
+                    val tx = txCache[u.txHash]
+                    val vout = try {
+                        tx?.getAsJsonArray("vout")?.get(u.txPos)?.asJsonObject
+                    } catch (_: Exception) { null }
+                    val satoshis = try {
+                        val rvn = vout?.get("value")?.asDouble ?: 0.0
+                        (rvn * 100_000_000.0).toLong()
+                    } catch (_: Exception) { 0L }
+                    val onChainScript = try {
+                        vout?.getAsJsonObject("scriptPubKey")?.get("hex")?.asString
+                    } catch (_: Exception) { null }
+                    val name = u.assetName ?: continue
+                    val rawAmount = u.assetAmount ?: continue
+                    val assetScript = onChainScript ?: if (name.endsWith("!")) {
+                        buildOwnerAssetScriptHex(address, name)
+                    } else {
+                        buildAssetScriptHex(address, name, rawAmount)
+                    }
+                    val utxo = Utxo(u.txHash, u.txPos, satoshis, assetScript, u.height)
+                    assetUtxosMap.getOrPut(name) { mutableListOf() }.add(AssetUtxo(utxo, name, rawAmount))
+                }
+                u.isUnknown -> {
+                    // No "asset" tag: check raw tx scriptPubKey for OP_RVN_ASSET marker "88acc0"
+                    val tx = txCache[u.txHash]
+                    val scriptHex = try {
+                        tx?.getAsJsonArray("vout")?.get(u.txPos)?.asJsonObject
+                            ?.getAsJsonObject("scriptPubKey")?.get("hex")?.asString
+                    } catch (_: Exception) { null }
+                    if (scriptHex != null && "88acc0" in scriptHex) {
+                        assetOutpoints.add(outpoint)
+                        // Asset but we don't know the name: exclude from RVN UTXOs only
+                    } else {
+                        // Confirmed RVN or unknown (treat as RVN to avoid locking up funds)
+                        val satoshis = u.valueField ?: continue
+                        rvnUtxos.add(Utxo(u.txHash, u.txPos, satoshis, rvnScript, u.height))
+                    }
+                }
+                else -> {
+                    // Explicitly tagged as plain RVN
+                    val satoshis = u.valueField ?: continue
+                    rvnUtxos.add(Utxo(u.txHash, u.txPos, satoshis, rvnScript, u.height))
+                }
+            }
+        }
+
+        return Triple(rvnUtxos, assetOutpoints, assetUtxosMap)
+    }
+
+    /**
      * Returns metadata for [assetName] via the "blockchain.asset.get_meta" call.
      *
      * Handles two variations of the IPFS field name ("ipfs" vs "ipfs_hash") seen
