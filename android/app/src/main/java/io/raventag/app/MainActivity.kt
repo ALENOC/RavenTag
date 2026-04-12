@@ -984,22 +984,39 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * AUTO-SWEEP: Automatically consolidates any funds sent to old/exposed addresses
      * to the current clean address (currentIndex+1) before loading the balance.
      */
+    private val isRefreshing = java.util.concurrent.atomic.AtomicBoolean(false)
+
     fun refreshBalance() {
-        val wm = walletManager ?: return
-        // Load data immediately so pull-to-refresh feels instant.
+        if (isRefreshing.getAndSet(true)) return
+
+        val wm = walletManager ?: run { isRefreshing.set(false); return }
         loadWalletBalance()
         loadOwnedAssets()
         loadTransactionHistory()
-        // Sweep old addresses in the background; reload balance if funds actually moved.
+
         viewModelScope.launch(Dispatchers.IO) {
             try {
+                Log.i("MainActivity", "Starting healing/sweep sequence")
+                val currentIndex = wm.getCurrentAddressIndex()
+
+                // Parallel healing and sweeping
+                (0 until currentIndex).map { i ->
+                    async { wm.healAndSweepTarget(i) }
+                }.awaitAll()
+
                 val txids = wm.sweepOldAddresses()
                 if (txids.isNotEmpty()) {
                     Log.i("MainViewModel", "Auto-sweep completed: ${txids.size} transactions")
-                    withContext(Dispatchers.Main) { loadWalletBalance() }
+                    withContext(Dispatchers.Main) { 
+                        loadWalletBalance() 
+                        loadOwnedAssets()
+                        loadTransactionHistory()
+                    }
                 }
             } catch (e: Exception) {
-                Log.w("MainViewModel", "Auto-sweep failed: ${e.message}")
+                Log.e("MainActivity", "Heal/sweep sequence failed", e)
+            } finally {
+                isRefreshing.set(false)
             }
         }
     }
