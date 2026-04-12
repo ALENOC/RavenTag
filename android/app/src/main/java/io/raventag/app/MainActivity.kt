@@ -54,6 +54,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import io.raventag.app.nfc.NfcCounterCache
@@ -548,6 +549,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** True if the last asset-list fetch failed with an error. */
     var assetsLoadError by mutableStateOf(false)
 
+    /** True when portfolio scan found funds on old addresses that need consolidation. */
+    var needsConsolidation by mutableStateOf(false)
+
     /**
      * Load the asset portfolio for the wallet address.
      *
@@ -561,13 +565,37 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             assetsLoading = true
             assetsLoadError = false
+            needsConsolidation = false
             try {
                 // One Keystore decrypt + one pipelined batch for all asset balances.
                 val basic = withContext(Dispatchers.IO) {
                     val currentIndex = wm.getCurrentAddressIndex()
                     val addresses = wm.getAddressBatch(0, 0..currentIndex).values.toList()
                     val node = io.raventag.app.wallet.RavencoinPublicNode()
-                    val totals = node.getTotalAssetBalances(addresses)
+                    
+                    // Fetch both asset balances and RVN balance in parallel
+                    val (totals, _) = coroutineScope {
+                        val assetsDeferred = async { node.getTotalAssetBalances(addresses) }
+                        val rvnDeferred = async { 
+                            try { node.getTotalBalance(addresses) } catch (_: Exception) { 0.0 }
+                        }
+                        
+                        Pair(assetsDeferred.await(), rvnDeferred.await())
+                    }
+                    
+                    // Check if funds exist on old addresses (not on currentIndex)
+                    if (currentIndex > 0) {
+                        val oldAddresses = wm.getAddressBatch(0, 0 until currentIndex).values.toList()
+                        val oldAssets = try { node.getTotalAssetBalances(oldAddresses) } catch (_: Exception) { emptyMap() }
+                        val oldRvn = try { node.getTotalBalance(oldAddresses) } catch (_: Exception) { 0.0 }
+                        
+                        // Set consolidation flag if old addresses have any funds
+                        val oldHasAssets = oldAssets.values.sum() > 0
+                        val oldHasRvn = oldRvn > 0.0001
+                        
+                        needsConsolidation = oldHasAssets || oldHasRvn
+                    }
+                    
                     totals.map { (name, amount) ->
                         val type = when {
                             name.contains('#') -> io.raventag.app.ravencoin.AssetType.UNIQUE
@@ -1295,6 +1323,32 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 sendLoading = false
                 sendSuccess = false
                 sendResult = e.message ?: s.walletSendFailed
+            }
+        }
+    }
+
+    /**
+     * Consolidate all funds (RVN + assets) from scattered addresses to a fresh virgin address.
+     * Triggered when the portfolio scan detects funds on old addresses that need to be moved.
+     */
+    fun consolidateFunds() {
+        val wm = walletManager ?: return
+        viewModelScope.launch {
+            try {
+                assetsLoading = true
+                val txid = withContext(Dispatchers.IO) { wm.consolidateAllFundsToFreshAddress() }
+                
+                if (txid != null) {
+                    needsConsolidation = false
+                    // Reload balance and assets after consolidation
+                    loadWalletBalance()
+                    loadOwnedAssets()
+                } else {
+                    assetsLoading = false
+                }
+            } catch (e: Exception) {
+                Log.e("MainActivity", "consolidateFunds failed", e)
+                assetsLoading = false
             }
         }
     }
@@ -2725,6 +2779,8 @@ fun RavenTagApp(
                     ownedAssets = viewModel.ownedAssets,
                     assetsLoading = viewModel.assetsLoading,
                     assetsLoadError = viewModel.assetsLoadError,
+                    needsConsolidation = viewModel.needsConsolidation,
+                    onConsolidateFunds = { viewModel.consolidateFunds() },
                     electrumStatus = viewModel.electrumStatus,
                     blockHeight = viewModel.blockHeight,
                     rvnPrice = viewModel.rvnPrice,

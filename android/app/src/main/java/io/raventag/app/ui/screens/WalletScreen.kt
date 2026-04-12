@@ -83,6 +83,8 @@ fun WalletScreen(
     ownedAssets: List<OwnedAsset>?,
     assetsLoading: Boolean,
     assetsLoadError: Boolean = false,
+    needsConsolidation: Boolean = false,
+    onConsolidateFunds: (() -> Unit)? = null,
     electrumStatus: MainViewModel.ElectrumStatus = MainViewModel.ElectrumStatus.UNKNOWN,
     blockHeight: Int? = null,
     rvnPrice: Double? = null,
@@ -292,6 +294,45 @@ fun WalletScreen(
                         Row(modifier = Modifier.padding(12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                             Icon(Icons.Default.Warning, contentDescription = null, tint = RavenOrange, modifier = Modifier.size(16.dp))
                             Text(s.assetsLowRvnWarning, style = MaterialTheme.typography.bodySmall, color = RavenOrange.copy(alpha = 0.9f))
+                        }
+                    }
+                }
+            }
+            // Consolidation banner: shown when funds are detected on old addresses
+            if (needsConsolidation && onConsolidateFunds != null && !assetsLoading) {
+                item(key = "consolidation_banner") {
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFF1A2D00)),
+                        border = BorderStroke(1.dp, AuthenticGreen.copy(alpha = 0.5f)),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.SyncProblem, contentDescription = null, tint = AuthenticGreen, modifier = Modifier.size(16.dp))
+                                Text(
+                                    "Funds detected on old addresses",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = AuthenticGreen.copy(alpha = 0.9f),
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                "Consolidate all RVN and assets to a fresh, secure address",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = RavenMuted
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Button(
+                                onClick = onConsolidateFunds,
+                                colors = ButtonDefaults.buttonColors(containerColor = AuthenticGreen),
+                                modifier = Modifier.fillMaxWidth().height(36.dp)
+                            ) {
+                                Icon(Icons.Default.Sync, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Consolidate to Fresh Address", color = Color.White, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium)
+                            }
                         }
                     }
                 }
