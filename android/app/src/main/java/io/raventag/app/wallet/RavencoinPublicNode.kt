@@ -264,6 +264,38 @@ class RavencoinPublicNode {
     }
 
     /**
+     * Returns the subset of [addresses] that currently hold any funds (RVN or assets),
+     * using a single pipelined batch `get_balance?asset=true` request.
+     *
+     * Replaces the previous pattern of N*2 sequential getAssetBalances+getUtxos calls
+     * (one TLS connection per address) with a single batched query (ceil(N/20) connections).
+     *
+     * @param addresses List of Ravencoin P2PKH addresses to check.
+     * @return Set of addresses that have at least one satoshi of RVN or assets.
+     */
+    fun getAddressesWithFunds(addresses: List<String>): Set<String> {
+        if (addresses.isEmpty()) return emptySet()
+        val requests = addresses.map { addr ->
+            "blockchain.scripthash.get_balance" to listOf(addressToScripthash(addr), true) as List<Any>
+        }
+        val responses = callWithFailoverBatch(requests)
+        val result = mutableSetOf<String>()
+        addresses.forEachIndexed { i, addr ->
+            val resp = responses.getOrNull(i) ?: return@forEachIndexed
+            if (resp == null || !resp.isJsonObject) return@forEachIndexed
+            for ((_, value) in resp.asJsonObject.entrySet()) {
+                try {
+                    val obj = value.asJsonObject
+                    val sat = (obj.get("confirmed")?.asLong ?: 0L) +
+                              (obj.get("unconfirmed")?.asLong ?: 0L)
+                    if (sat > 0) { result.add(addr); break }
+                } catch (_: Exception) {}
+            }
+        }
+        return result
+    }
+
+    /**
      * Returns the total RVN balance (confirmed + unconfirmed) across all [addresses]
      * using a single pipelined batch request.
      *

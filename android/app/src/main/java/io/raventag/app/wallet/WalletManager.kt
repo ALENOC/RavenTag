@@ -391,26 +391,24 @@ class WalletManager(private val context: Context) {
         }
 
         // Phase 2: Find the highest address that currently holds funds (RVN or assets).
-        // Only scan addresses that have any history to avoid unnecessary API calls.
+        // Single batch call (get_balance?asset=true) replaces N*2 sequential TLS calls.
         var lastWithFunds = -1
-        for (i in 0 until searchLimit) {
-            val addr = batchMap[i] ?: continue
+        val addressesWithHistory = (0 until searchLimit).mapNotNull { i ->
+            val addr = batchMap[i] ?: return@mapNotNull null
             val status = statusMap[addr] ?: RavencoinPublicNode.AddressStatus.NO_HISTORY
-            if (status == RavencoinPublicNode.AddressStatus.NO_HISTORY) continue
-            try {
-                val balances = node.getAssetBalances(addr)
-                if (balances.isNotEmpty()) {
+            if (status != RavencoinPublicNode.AddressStatus.NO_HISTORY) i to addr else null
+        }
+        if (addressesWithHistory.isNotEmpty()) {
+            val historyAddrList = addressesWithHistory.map { it.second }
+            val withFunds = try {
+                node.getAddressesWithFunds(historyAddrList)
+            } catch (_: Exception) { emptySet() }
+            for ((i, addr) in addressesWithHistory) {
+                if (addr in withFunds) {
                     lastWithFunds = maxOf(lastWithFunds, i)
-                    android.util.Log.i("WalletManager", "discoverCurrentIndex: index $i has assets: ${balances.map { it.name }}")
+                    android.util.Log.i("WalletManager", "discoverCurrentIndex: index $i has funds")
                 }
-            } catch (_: Exception) {}
-            try {
-                val utxos = node.getUtxos(addr)
-                if (utxos.isNotEmpty()) {
-                    lastWithFunds = maxOf(lastWithFunds, i)
-                    android.util.Log.i("WalletManager", "discoverCurrentIndex: index $i has RVN UTXOs")
-                }
-            } catch (_: Exception) {}
+            }
         }
 
         // Determine current index:
@@ -442,7 +440,7 @@ class WalletManager(private val context: Context) {
         finalResult
     }
 
-    fun sweepOldAddresses(): List<String> {
+    suspend fun sweepOldAddresses(): List<String> {
         if (sweepRunning) return emptyList()
         sweepRunning = true
         try {
@@ -524,7 +522,7 @@ class WalletManager(private val context: Context) {
         return "76a914" + hash160.joinToString("") { "%02x".format(it) } + "88ac"
     }
 
-    private fun sweepOldAddressesInternal(): List<String> {
+    private suspend fun sweepOldAddressesInternal(): List<String> {
         val currentIndex = getCurrentAddressIndex()
         if (currentIndex == 0) return emptyList()
 
@@ -585,9 +583,7 @@ class WalletManager(private val context: Context) {
                     if (utxos.isEmpty()) { allVisible = false; break }
                 }
                 if (allVisible) break
-                kotlinx.coroutines.runBlocking {
-                    kotlinx.coroutines.delay(3000)
-                }
+                kotlinx.coroutines.delay(3000)
                 waited += 3
             }
             android.util.Log.i("WalletManager", "Sweep: funding txs visible after ${waited}s, proceeding with sweep")
@@ -995,19 +991,30 @@ class WalletManager(private val context: Context) {
 
         data class OldFunds(val index: Int, val rvn: List<Utxo>, val assets: Map<String, List<AssetUtxo>>)
         val oldFunds = mutableListOf<OldFunds>()
-        val debugBatch = getAddressBatch(0, 0 until 100)
-        android.util.Log.i("WalletManager", "sendRvn: Starting sweep on known batch of ${debugBatch.size} addresses")
+        if (currentIndex > 0) {
+            val oldAddrBatch = getAddressBatch(0, 0 until currentIndex)
+            val oldAddrList = (0 until currentIndex).mapNotNull { i ->
+                oldAddrBatch[i]?.let { i to it }
+            }
+            // Single batch call to find which old addresses have funds before fetching UTXOs.
+            val fundedAddrs = try {
+                node.getAddressesWithFunds(oldAddrList.map { it.second })
+            } catch (_: Exception) { emptySet() }
 
-        try {
-            for ((index, addr) in debugBatch) {
-                if (index == currentIndex) continue
-                val r = node.getUtxosAndAllAssetUtxosBatch(addr)
-                if (r.first.isNotEmpty() || r.third.isNotEmpty()) {
-                    oldFunds.add(OldFunds(index, r.first, r.third))
+            if (fundedAddrs.isNotEmpty()) {
+                android.util.Log.i("WalletManager", "sendRvn: ${fundedAddrs.size} old address(es) with funds, fetching UTXOs")
+                try {
+                    for ((index, addr) in oldAddrList) {
+                        if (addr !in fundedAddrs) continue
+                        val r = node.getUtxosAndAllAssetUtxosBatch(addr)
+                        if (r.first.isNotEmpty() || r.third.isNotEmpty()) {
+                            oldFunds.add(OldFunds(index, r.first, r.third))
+                        }
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("WalletManager", "sendRvn: old funds fetch failed", e)
                 }
             }
-        } catch (e: Exception) {
-            android.util.Log.e("WalletManager", "Discovery failed", e)
         }
 
         val mergedAssets = mutableMapOf<String, MutableList<AssetUtxo>>()
