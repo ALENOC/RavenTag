@@ -283,7 +283,7 @@ fun WalletScreen(
             }
             Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                 Text(s.walletMyAssets, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = RavenMuted)
-                if (assetsLoading) CircularProgressIndicator(color = RavenOrange, modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                if (assetsLoading || walletInfo?.isLoading == true) CircularProgressIndicator(color = RavenOrange, modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
             }
             Spacer(modifier = Modifier.height(10.dp))
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -307,7 +307,7 @@ fun WalletScreen(
                     val ownerTokenMatch = showOwnerTokens || !asset.name.endsWith("!")
                     typeMatch && ownerTokenMatch
                 }
-                if (!assetsLoading && filteredAssets.isEmpty()) {
+                if (!assetsLoading && walletInfo?.isLoading != true && filteredAssets.isEmpty()) {
                     Card(colors = CardDefaults.cardColors(containerColor = RavenCard), border = BorderStroke(1.dp, RavenBorder), shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth()) {
                         Box(modifier = Modifier.padding(20.dp).fillMaxWidth(), contentAlignment = Alignment.Center) {
                             Text(s.walletNoAssets, style = MaterialTheme.typography.bodySmall, color = RavenMuted, textAlign = TextAlign.Center)
