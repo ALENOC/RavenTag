@@ -102,12 +102,13 @@ data class ElectrumAssetMeta(
  */
 data class TxHistoryEntry(
     val txid: String,
-    val height: Int,         // 0 = unconfirmed/mempool
+    val height: Int,           // 0 = unconfirmed/mempool
     val confirmations: Int,
-    val amountSat: Long,     // positive = received to our address
-    val sentSat: Long,       // positive = sent to other addresses
-    val isIncoming: Boolean, // true if amountSat > 0 (our address in vout)
-    val timestamp: Long = 0L // Unix timestamp in seconds (0 if unknown)
+    val amountSat: Long,       // positive = received to our address
+    val sentSat: Long,         // positive = sent to other addresses
+    val isIncoming: Boolean,   // true if amountSat > 0 (our address in vout)
+    val isSelfTransfer: Boolean = false, // true if this is an internal sweep (< 1% net loss)
+    val timestamp: Long = 0L   // Unix timestamp in seconds (0 if unknown)
 )
 
 /**
@@ -280,13 +281,18 @@ class RavencoinPublicNode {
         }
         val responses = callWithFailoverBatch(requests)
         var totalSat = 0L
+        var successCount = 0
         for (resp in responses) {
             if (resp != null && !resp.isJsonNull && resp.isJsonObject) {
                 val obj = resp.asJsonObject
                 totalSat += obj.get("confirmed")?.asLong ?: 0L
                 totalSat += obj.get("unconfirmed")?.asLong ?: 0L
+                successCount++
             }
         }
+        // If every single response failed, treat it as a network error rather than silently
+        // returning 0.0 — the caller can catch this and preserve the previously known balance.
+        if (successCount == 0) throw java.io.IOException("All balance queries failed (network unreachable)")
         return totalSat / 1e8
     }
 
@@ -708,13 +714,32 @@ class RavencoinPublicNode {
                 u.isUnknown -> {
                     // No "asset" tag: check raw tx scriptPubKey for OP_RVN_ASSET marker "88acc0"
                     val tx = txCache[u.txHash]
-                    val scriptHex = try {
+                    val vout = try {
                         tx?.getAsJsonArray("vout")?.get(u.txPos)?.asJsonObject
-                            ?.getAsJsonObject("scriptPubKey")?.get("hex")?.asString
+                    } catch (_: Exception) { null }
+                    val scriptHex = try {
+                        vout?.getAsJsonObject("scriptPubKey")?.get("hex")?.asString
                     } catch (_: Exception) { null }
                     if (scriptHex != null && "88acc0" in scriptHex) {
                         assetOutpoints.add(outpoint)
-                        // Asset but we don't know the name: exclude from RVN UTXOs only
+                        // Parse asset name and amount directly from the script so the UTXO
+                        // is properly included in assetUtxosMap (not just silently dropped).
+                        val parsed = parseAssetFromScript(scriptHex)
+                        if (parsed != null) {
+                            val (assetName, rawAmount) = parsed
+                            val satoshis = try {
+                                ((vout?.get("value")?.asDouble ?: 0.0) * 100_000_000.0).toLong()
+                            } catch (_: Exception) { 0L }
+                            val utxo = Utxo(u.txHash, u.txPos, satoshis, scriptHex, u.height)
+                            assetUtxosMap.getOrPut(assetName) { mutableListOf() }
+                                .add(AssetUtxo(utxo, assetName, rawAmount))
+                        } else {
+                            // Recognition failed but it has an asset marker: treat as RVN so it's at least swept
+                            val satoshis = try {
+                                ((vout?.get("value")?.asDouble ?: 0.0) * 100_000_000.0).toLong()
+                            } catch (_: Exception) { u.valueField ?: 0L }
+                            rvnUtxos.add(Utxo(u.txHash, u.txPos, satoshis, scriptHex, u.height))
+                        }
                     } else {
                         // Confirmed RVN or unknown (treat as RVN to avoid locking up funds)
                         val satoshis = u.valueField ?: continue
@@ -1082,6 +1107,75 @@ class RavencoinPublicNode {
                 else -> false
             }
         }.getOrDefault(false)
+    }
+
+    /**
+     * Parse asset name and raw amount from an on-chain OP_RVN_ASSET scriptPubKey hex.
+     *
+     * Works on transfer scripts ("rvnt" marker, has 8-byte LE amount) and owner-token
+     * scripts ("rvno" marker, no amount field, always 100_000_000 raw units).
+     * Returns null if the script is not a recognised asset script or if parsing fails.
+     *
+     * Hex layout after the P2PKH prefix (...88acc0):
+     *   <push_byte>  "rvnt"|"rvno"  <1-byte name len>  <name bytes>  [<amount LE64>]
+     */
+    private fun parseAssetFromScript(scriptHex: String): Pair<String, Long>? {
+        return try {
+            val idx = scriptHex.indexOf("88acc0")
+            if (idx < 0 || idx % 2 != 0) return null
+            // Byte position just after the 3-byte marker
+            var pos = idx / 2 + 3
+            if (pos * 2 + 2 > scriptHex.length) return null
+            val pushByte = scriptHex.substring(pos * 2, pos * 2 + 2).toInt(16)
+            pos++
+            val payloadLen = when {
+                pushByte in 1..75 -> pushByte
+                pushByte == 0x4c -> {   // OP_PUSHDATA1
+                    if (pos * 2 + 2 > scriptHex.length) return null
+                    val len = scriptHex.substring(pos * 2, pos * 2 + 2).toInt(16)
+                    pos++
+                    len
+                }
+                pushByte == 0x4d -> {   // OP_PUSHDATA2
+                    if (pos * 2 + 4 > scriptHex.length) return null
+                    // 2 bytes LE
+                    val low = scriptHex.substring(pos * 2, pos * 2 + 2).toInt(16)
+                    val high = scriptHex.substring(pos * 2 + 2, pos * 2 + 4).toInt(16)
+                    pos += 2
+                    (high shl 8) or low
+                }
+                else -> return null
+            }
+            val dataEnd = pos + payloadLen
+            if (dataEnd * 2 > scriptHex.length || payloadLen < 6) return null
+            // 4-byte type marker
+            val marker = buildString {
+                for (i in 0..3) append(scriptHex.substring((pos + i) * 2, (pos + i) * 2 + 2).toInt(16).toChar())
+            }
+            val isTransfer = marker == "rvnt"
+            val isOwner    = marker == "rvno"
+            val isIssue    = marker == "rvnq"
+            val isReissue  = marker == "rvnr"
+            if (!isTransfer && !isOwner && !isIssue && !isReissue) return null
+            var p = pos + 4
+            // compact_size name length (1 byte; names are always < 253 chars)
+            val nameLen = scriptHex.substring(p * 2, p * 2 + 2).toInt(16)
+            p++
+            if ((p + nameLen) * 2 > scriptHex.length) return null
+            val assetName = buildString {
+                for (i in 0 until nameLen) append(scriptHex.substring((p + i) * 2, (p + i) * 2 + 2).toInt(16).toChar())
+            }
+            p += nameLen
+            val rawAmount: Long = if (isOwner) {
+                100_000_000L
+            } else {
+                if ((p + 8) * 2 > scriptHex.length) return null
+                var amt = 0L
+                for (i in 0..7) amt = amt or (scriptHex.substring((p + i) * 2, (p + i) * 2 + 2).toLong(16) shl (8 * i))
+                amt
+            }
+            Pair(assetName, rawAmount)
+        } catch (_: Exception) { null }
     }
 
     /**

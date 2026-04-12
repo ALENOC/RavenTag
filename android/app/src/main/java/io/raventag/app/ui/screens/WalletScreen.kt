@@ -9,9 +9,9 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -168,203 +168,228 @@ fun WalletScreen(
         )
     }
 
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .background(RavenBg)
-            .padding(horizontal = 20.dp)
-            .verticalScroll(rememberScrollState()),
+    val filteredAssets = remember(ownedAssets, assetFilter, showOwnerTokens) {
+        ownedAssets.orEmpty().filter { asset ->
+            val typeMatch = assetFilter == null || asset.type == assetFilter
+            val ownerTokenMatch = showOwnerTokens || !asset.name.endsWith("!")
+            typeMatch && ownerTokenMatch
+        }
+    }
+
+    LazyColumn(
+        modifier = modifier.fillMaxSize().background(RavenBg),
+        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, bottom = 24.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Spacer(modifier = Modifier.height(24.dp))
+        item(key = "top_spacer") { Spacer(modifier = Modifier.height(24.dp)) }
 
         // Header
-        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-            Column {
-                Text(if (isBrandApp) s.walletTitle else s.navWallet, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = Color.White)
-                if (isBrandApp) Text(s.walletSubtitle, style = MaterialTheme.typography.bodySmall, color = RavenMuted)
-                if (hasWallet) {
-                    Row(modifier = Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Security, contentDescription = null, tint = AuthenticGreen, modifier = Modifier.size(12.dp))
-                        Text("Android Keystore \u00b7 AES-256-GCM", style = MaterialTheme.typography.labelSmall, color = AuthenticGreen.copy(alpha = 0.8f))
-                    }
-                    if (isBrandApp && walletRole.isNotEmpty()) {
-                        val roleColor = if (isOperator) Color(0xFF60A5FA) else RavenOrange
-                        val roleLabel = if (isOperator) s.walletRoleOperator else s.walletRoleAdmin
-                        Row(modifier = Modifier.padding(top = 2.dp), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Icon(if (isOperator) Icons.Default.ManageAccounts else Icons.Default.AdminPanelSettings, contentDescription = null, tint = roleColor, modifier = Modifier.size(11.dp))
-                            Text(roleLabel, style = MaterialTheme.typography.labelSmall, color = roleColor)
+        item(key = "header") {
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                Column {
+                    Text(if (isBrandApp) s.walletTitle else s.navWallet, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = Color.White)
+                    if (isBrandApp) Text(s.walletSubtitle, style = MaterialTheme.typography.bodySmall, color = RavenMuted)
+                    if (hasWallet) {
+                        Row(modifier = Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Security, contentDescription = null, tint = AuthenticGreen, modifier = Modifier.size(12.dp))
+                            Text("Android Keystore \u00b7 AES-256-GCM", style = MaterialTheme.typography.labelSmall, color = AuthenticGreen.copy(alpha = 0.8f))
+                        }
+                        if (isBrandApp && walletRole.isNotEmpty()) {
+                            val roleColor = if (isOperator) Color(0xFF60A5FA) else RavenOrange
+                            val roleLabel = if (isOperator) s.walletRoleOperator else s.walletRoleAdmin
+                            Row(modifier = Modifier.padding(top = 2.dp), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Icon(if (isOperator) Icons.Default.ManageAccounts else Icons.Default.AdminPanelSettings, contentDescription = null, tint = roleColor, modifier = Modifier.size(11.dp))
+                                Text(roleLabel, style = MaterialTheme.typography.labelSmall, color = roleColor)
+                            }
+                        }
+                        // ElectrumX status badge
+                        ElectrumStatusBadge(electrumStatus, s)
+
+                        // Block height counter (Always occupy space to avoid layout shift)
+                        val showBlockHeight = blockHeight != null && electrumStatus == MainViewModel.ElectrumStatus.ONLINE
+                        Box(modifier = Modifier.alpha(if (showBlockHeight) 1f else 0f)) {
+                            BlockHeightBadge(blockHeight ?: 0)
+                        }
+
+                        // Network hashrate (Always occupy space to avoid layout shift)
+                        val showHashrate = networkHashrate != null && electrumStatus == MainViewModel.ElectrumStatus.ONLINE
+                        Box(modifier = Modifier.alpha(if (showHashrate) 1f else 0f)) {
+                            HashrateRow(networkHashrate ?: 0.0)
                         }
                     }
-                    // ElectrumX status badge
-                    ElectrumStatusBadge(electrumStatus, s)
-
-                    // Block height counter (Always occupy space to avoid layout shift)
-                    val showBlockHeight = blockHeight != null && electrumStatus == MainViewModel.ElectrumStatus.ONLINE
-                    Box(modifier = Modifier.alpha(if (showBlockHeight) 1f else 0f)) {
-                        BlockHeightBadge(blockHeight ?: 0)
-                    }
-
-                    // Network hashrate (Always occupy space to avoid layout shift)
-                    val showHashrate = networkHashrate != null && electrumStatus == MainViewModel.ElectrumStatus.ONLINE
-                    Box(modifier = Modifier.alpha(if (showHashrate) 1f else 0f)) {
-                        HashrateRow(networkHashrate ?: 0.0)
-                    }
                 }
-            }
-            Row {
-                if (hasWallet) {
-                    IconButton(onClick = onRefreshBalance) {
-                        Icon(Icons.Default.Refresh, contentDescription = "Refresh", tint = RavenOrange)
-                    }
-                    IconButton(onClick = { showDeleteDialog = true }) {
-                        Icon(Icons.Default.DeleteForever, contentDescription = "Delete wallet", tint = NotAuthenticRed)
+                Row {
+                    if (hasWallet) {
+                        IconButton(onClick = onRefreshBalance) {
+                            Icon(Icons.Default.Refresh, contentDescription = "Refresh", tint = RavenOrange)
+                        }
+                        IconButton(onClick = { showDeleteDialog = true }) {
+                            Icon(Icons.Default.DeleteForever, contentDescription = "Delete wallet", tint = NotAuthenticRed)
+                        }
                     }
                 }
             }
         }
 
-        Spacer(modifier = Modifier.height(24.dp))
+        item(key = "header_spacer") { Spacer(modifier = Modifier.height(24.dp)) }
 
         if (!hasWallet) {
-            WalletSetupCard(
-                strings = s,
-                showRestore = showRestore,
-                restoreWords = restoreWords,
-                isGenerating = isGenerating,
-                isBrandApp = isBrandApp,
-                controlKey = controlKey,
-                controlKeyValidating = controlKeyValidating,
-                controlKeyError = controlKeyError,
-                onControlKeyChange = { controlKey = it },
-                onWordChange = { idx, word ->
-                    restoreWords = restoreWords.toMutableList().also { it[idx] = word }
-                },
-                onGenerate = { showRestore = false; restoreWords = List(12) { "" }; onRestoreModeChange(false); onGenerateWallet(controlKey) },
-                onToggleRestore = { val next = !showRestore; showRestore = next; restoreWords = List(12) { "" }; onRestoreModeChange(next) },
-                onRestore = { onRestoreWallet(restoreWords.joinToString(" "), controlKey) }
-            )
+            item(key = "setup") {
+                WalletSetupCard(
+                    strings = s,
+                    showRestore = showRestore,
+                    restoreWords = restoreWords,
+                    isGenerating = isGenerating,
+                    isBrandApp = isBrandApp,
+                    controlKey = controlKey,
+                    controlKeyValidating = controlKeyValidating,
+                    controlKeyError = controlKeyError,
+                    onControlKeyChange = { controlKey = it },
+                    onWordChange = { idx, word ->
+                        restoreWords = restoreWords.toMutableList().also { it[idx] = word }
+                    },
+                    onGenerate = { showRestore = false; restoreWords = List(12) { "" }; onRestoreModeChange(false); onGenerateWallet(controlKey) },
+                    onToggleRestore = { val next = !showRestore; showRestore = next; restoreWords = List(12) { "" }; onRestoreModeChange(next) },
+                    onRestore = { onRestoreWallet(restoreWords.joinToString(" "), controlKey) }
+                )
+            }
         } else if (walletInfo != null) {
-            BalanceCard(s, walletInfo, rvnPrice = rvnPrice, onCopyAddress = { clipboard.setText(AnnotatedString(walletInfo.address)) })
-            Spacer(modifier = Modifier.height(16.dp))
-            walletInfo.mnemonic?.let { mnemonic ->
-                MnemonicCard(s, mnemonic, visible = showMnemonic, onToggle = { showMnemonic = !showMnemonic })
-                Spacer(modifier = Modifier.height(16.dp))
+            item(key = "balance") { BalanceCard(s, walletInfo, rvnPrice = rvnPrice, onCopyAddress = { clipboard.setText(AnnotatedString(walletInfo.address)) }) }
+            item(key = "balance_spacer") { Spacer(modifier = Modifier.height(16.dp)) }
+            if (walletInfo.mnemonic != null) {
+                item(key = "mnemonic") { MnemonicCard(s, walletInfo.mnemonic, visible = showMnemonic, onToggle = { showMnemonic = !showMnemonic }) }
+                item(key = "mnemonic_spacer") { Spacer(modifier = Modifier.height(16.dp)) }
             }
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Button(onClick = onReceive, modifier = Modifier.weight(1f).height(48.dp), colors = ButtonDefaults.buttonColors(containerColor = RavenCard), border = BorderStroke(1.dp, AuthenticGreen.copy(alpha = 0.4f)), shape = RoundedCornerShape(12.dp)) {
-                    Icon(Icons.Default.CallReceived, contentDescription = null, tint = AuthenticGreen, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(s.walletReceiveBtn, color = AuthenticGreen, fontWeight = FontWeight.SemiBold)
-                }
-                Button(onClick = { if (!isOperator) onSend() }, modifier = Modifier.weight(1f).height(48.dp), colors = ButtonDefaults.buttonColors(containerColor = RavenCard), border = BorderStroke(1.dp, (if (isOperator) RavenMuted else NotAuthenticRed).copy(alpha = 0.4f)), shape = RoundedCornerShape(12.dp)) {
-                    Icon(if (isOperator) Icons.Default.Lock else Icons.Default.Send, contentDescription = null, tint = if (isOperator) RavenMuted else NotAuthenticRed, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(s.walletSendBtn, color = if (isOperator) RavenMuted else NotAuthenticRed, fontWeight = FontWeight.SemiBold)
-                }
-            }
-            walletInfo.error?.let { err ->
-                Spacer(modifier = Modifier.height(16.dp))
-                Card(colors = CardDefaults.cardColors(containerColor = NotAuthenticRedBg), border = BorderStroke(1.dp, NotAuthenticRed.copy(alpha = 0.3f)), shape = RoundedCornerShape(12.dp)) {
-                    Row(modifier = Modifier.padding(16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Error, contentDescription = null, tint = NotAuthenticRed, modifier = Modifier.size(18.dp))
-                        Text(err, style = MaterialTheme.typography.bodySmall, color = NotAuthenticRed)
+            item(key = "actions") {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Button(onClick = onReceive, modifier = Modifier.weight(1f).height(48.dp), colors = ButtonDefaults.buttonColors(containerColor = RavenCard), border = BorderStroke(1.dp, AuthenticGreen.copy(alpha = 0.4f)), shape = RoundedCornerShape(12.dp)) {
+                        Icon(Icons.Default.CallReceived, contentDescription = null, tint = AuthenticGreen, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(s.walletReceiveBtn, color = AuthenticGreen, fontWeight = FontWeight.SemiBold)
+                    }
+                    Button(onClick = { if (!isOperator) onSend() }, modifier = Modifier.weight(1f).height(48.dp), colors = ButtonDefaults.buttonColors(containerColor = RavenCard), border = BorderStroke(1.dp, (if (isOperator) RavenMuted else NotAuthenticRed).copy(alpha = 0.4f)), shape = RoundedCornerShape(12.dp)) {
+                        Icon(if (isOperator) Icons.Default.Lock else Icons.Default.Send, contentDescription = null, tint = if (isOperator) RavenMuted else NotAuthenticRed, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(s.walletSendBtn, color = if (isOperator) RavenMuted else NotAuthenticRed, fontWeight = FontWeight.SemiBold)
                     }
                 }
             }
-            Spacer(modifier = Modifier.height(16.dp))
+            if (walletInfo.error != null) {
+                item(key = "error_spacer") { Spacer(modifier = Modifier.height(16.dp)) }
+                item(key = "error") {
+                    Card(colors = CardDefaults.cardColors(containerColor = NotAuthenticRedBg), border = BorderStroke(1.dp, NotAuthenticRed.copy(alpha = 0.3f)), shape = RoundedCornerShape(12.dp)) {
+                        Row(modifier = Modifier.padding(16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Error, contentDescription = null, tint = NotAuthenticRed, modifier = Modifier.size(18.dp))
+                            Text(walletInfo.error, style = MaterialTheme.typography.bodySmall, color = NotAuthenticRed)
+                        }
+                    }
+                }
+            }
+            item(key = "after_actions_spacer") { Spacer(modifier = Modifier.height(16.dp)) }
             if (!isBrandApp && walletBalance < 0.01 && hasWallet && !assetsLoading && !ownedAssets.isNullOrEmpty()) {
-                Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF2D1A00)), border = BorderStroke(1.dp, RavenOrange.copy(alpha = 0.5f)), shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp)) {
-                    Row(modifier = Modifier.padding(12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Warning, contentDescription = null, tint = RavenOrange, modifier = Modifier.size(16.dp))
-                        Text(s.assetsLowRvnWarning, style = MaterialTheme.typography.bodySmall, color = RavenOrange.copy(alpha = 0.9f))
+                item(key = "low_rvn") {
+                    Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF2D1A00)), border = BorderStroke(1.dp, RavenOrange.copy(alpha = 0.5f)), shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp)) {
+                        Row(modifier = Modifier.padding(12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Warning, contentDescription = null, tint = RavenOrange, modifier = Modifier.size(16.dp))
+                            Text(s.assetsLowRvnWarning, style = MaterialTheme.typography.bodySmall, color = RavenOrange.copy(alpha = 0.9f))
+                        }
                     }
                 }
             }
-            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(s.walletMyAssets, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = RavenMuted)
-                if (assetsLoading || walletInfo?.isLoading == true) CircularProgressIndicator(color = RavenOrange, modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-            }
-            Spacer(modifier = Modifier.height(10.dp))
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf(null to s.walletFilterAll, AssetType.ROOT to s.walletAssetRoot, AssetType.SUB to s.walletAssetSub, AssetType.UNIQUE to s.walletAssetUnique).forEach { (type, label) ->
-                    val selected = assetFilter == type
-                    val typeColor = when(type) { AssetType.ROOT -> RavenOrange; AssetType.SUB -> Color(0xFF60A5FA); AssetType.UNIQUE -> AuthenticGreen; else -> RavenMuted }
-                    FilterChip(selected = selected, onClick = { assetFilter = type }, label = { Text(label, style = MaterialTheme.typography.labelSmall) }, colors = FilterChipDefaults.filterChipColors(selectedContainerColor = typeColor.copy(alpha = 0.15f), selectedLabelColor = typeColor, containerColor = RavenCard, labelColor = RavenMuted), border = FilterChipDefaults.filterChipBorder(enabled = true, selected = selected, selectedBorderColor = typeColor.copy(alpha = 0.4f), borderColor = RavenBorder))
+            item(key = "assets_header") {
+                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(s.walletMyAssets, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = RavenMuted)
+                    if (assetsLoading || walletInfo.isLoading) CircularProgressIndicator(color = RavenOrange, modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
                 }
             }
-            Spacer(modifier = Modifier.height(4.dp))
+            item(key = "assets_header_spacer") { Spacer(modifier = Modifier.height(10.dp)) }
+            item(key = "asset_filters") {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(null to s.walletFilterAll, AssetType.ROOT to s.walletAssetRoot, AssetType.SUB to s.walletAssetSub, AssetType.UNIQUE to s.walletAssetUnique).forEach { (type, label) ->
+                        val selected = assetFilter == type
+                        val typeColor = when(type) { AssetType.ROOT -> RavenOrange; AssetType.SUB -> Color(0xFF60A5FA); AssetType.UNIQUE -> AuthenticGreen; else -> RavenMuted }
+                        FilterChip(selected = selected, onClick = { assetFilter = type }, label = { Text(label, style = MaterialTheme.typography.labelSmall) }, colors = FilterChipDefaults.filterChipColors(selectedContainerColor = typeColor.copy(alpha = 0.15f), selectedLabelColor = typeColor, containerColor = RavenCard, labelColor = RavenMuted), border = FilterChipDefaults.filterChipBorder(enabled = true, selected = selected, selectedBorderColor = typeColor.copy(alpha = 0.4f), borderColor = RavenBorder))
+                    }
+                }
+            }
+            item(key = "asset_filters_spacer") { Spacer(modifier = Modifier.height(4.dp)) }
             if (!assetsLoading && assetsLoadError) {
-                Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF1A0D00)), border = BorderStroke(1.dp, RavenOrange.copy(alpha = 0.3f)), shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth()) {
-                    Row(modifier = Modifier.padding(16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.CloudOff, contentDescription = null, tint = RavenOrange, modifier = Modifier.size(18.dp))
-                        Text(s.walletAssetsNotVerifiable, style = MaterialTheme.typography.bodySmall, color = RavenOrange)
+                item(key = "assets_load_error") {
+                    Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF1A0D00)), border = BorderStroke(1.dp, RavenOrange.copy(alpha = 0.3f)), shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth()) {
+                        Row(modifier = Modifier.padding(16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.CloudOff, contentDescription = null, tint = RavenOrange, modifier = Modifier.size(18.dp))
+                            Text(s.walletAssetsNotVerifiable, style = MaterialTheme.typography.bodySmall, color = RavenOrange)
+                        }
                     }
                 }
-            } else {
-                val filteredAssets = ownedAssets.orEmpty().filter { asset ->
-                    val typeMatch = assetFilter == null || asset.type == assetFilter
-                    val ownerTokenMatch = showOwnerTokens || !asset.name.endsWith("!")
-                    typeMatch && ownerTokenMatch
-                }
-                if (!assetsLoading && walletInfo?.isLoading != true && filteredAssets.isEmpty()) {
+            } else if (!assetsLoading && !walletInfo.isLoading && filteredAssets.isEmpty()) {
+                item(key = "assets_empty") {
                     Card(colors = CardDefaults.cardColors(containerColor = RavenCard), border = BorderStroke(1.dp, RavenBorder), shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth()) {
                         Box(modifier = Modifier.padding(20.dp).fillMaxWidth(), contentAlignment = Alignment.Center) {
                             Text(s.walletNoAssets, style = MaterialTheme.typography.bodySmall, color = RavenMuted, textAlign = TextAlign.Center)
                         }
                     }
-                } else {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        filteredAssets.forEach { asset ->
-                            key(asset.name) {
-                                // Operators can only transfer UNIQUE tokens; ROOT/SUB transfers are admin-only.
-                                val canTransferThis = onTransferAsset != null && (!isOperator || asset.type == AssetType.UNIQUE)
-                                AssetCard(s = s, asset = asset, onPreview = if (asset.imageUrl != null || asset.ipfsHash != null) ({ previewAsset = asset }) else null, onTransfer = if (canTransferThis) { { if (asset.type != AssetType.UNIQUE) { pendingTransferAsset = asset } else { onTransferAsset!!.invoke(asset) } } } else null)
-                            }
+                }
+            } else {
+                // Operators can only transfer UNIQUE tokens; ROOT/SUB transfers are admin-only.
+                items(filteredAssets, key = { it.name }) { asset ->
+                    val canTransferThis = onTransferAsset != null && (!isOperator || asset.type == AssetType.UNIQUE)
+                    Box(modifier = Modifier.padding(bottom = 8.dp)) {
+                        AssetCard(s = s, asset = asset, onPreview = if (asset.imageUrl != null || asset.ipfsHash != null) ({ previewAsset = asset }) else null, onTransfer = if (canTransferThis) { { if (asset.type != AssetType.UNIQUE) { pendingTransferAsset = asset } else { onTransferAsset!!.invoke(asset) } } } else null)
+                    }
+                }
+            }
+            item(key = "owner_tokens_spacer") { Spacer(modifier = Modifier.height(8.dp)) }
+            item(key = "owner_tokens") {
+                Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+                    Text(text = s.walletShowOwnerTokens, style = MaterialTheme.typography.labelSmall, color = RavenMuted, modifier = Modifier.padding(end = 12.dp))
+                    Switch(checked = showOwnerTokens, onCheckedChange = { showOwnerTokens = it }, colors = SwitchDefaults.colors(checkedThumbColor = RavenOrange, checkedTrackColor = RavenOrange.copy(alpha = 0.3f), uncheckedThumbColor = RavenMuted, uncheckedTrackColor = RavenMuted.copy(alpha = 0.3f)), modifier = Modifier.size(width = 40.dp, height = 24.dp))
+                }
+            }
+            item(key = "tx_section_spacer") { Spacer(modifier = Modifier.height(16.dp)) }
+            item(key = "tx_header") {
+                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(s.walletTxHistory, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = RavenMuted)
+                    if (txHistoryLoading) CircularProgressIndicator(color = RavenOrange, modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                }
+            }
+            item(key = "tx_header_spacer") { Spacer(modifier = Modifier.height(10.dp)) }
+            if (!txHistoryLoading && txHistory.isEmpty()) {
+                item(key = "tx_empty") {
+                    Card(colors = CardDefaults.cardColors(containerColor = RavenCard), border = BorderStroke(1.dp, RavenBorder), shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth()) {
+                        Box(modifier = Modifier.padding(20.dp).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                            Text(s.walletNoTxHistory, style = MaterialTheme.typography.bodySmall, color = RavenMuted, textAlign = TextAlign.Center)
+                        }
+                    }
+                }
+            } else {
+                items(txHistory, key = { it.txid }) { tx ->
+                    Box(modifier = Modifier.padding(bottom = 6.dp)) {
+                        TxCard(s, tx)
+                    }
+                }
+                // Show "Load More" button if there are more transactions to load
+                if (!txHistoryLoading && txHistoryLoadedCount < txHistoryTotal) {
+                    item(key = "load_more_spacer") { Spacer(modifier = Modifier.height(8.dp)) }
+                    item(key = "load_more") {
+                        Button(
+                            onClick = onLoadMoreTransactions,
+                            colors = ButtonDefaults.buttonColors(containerColor = RavenCard),
+                            border = BorderStroke(1.dp, RavenBorder),
+                            modifier = Modifier.fillMaxWidth().height(44.dp)
+                        ) {
+                            Icon(Icons.Default.MoreHoriz, contentDescription = null, tint = RavenOrange, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(s.walletLoadMore, color = RavenOrange, fontWeight = FontWeight.SemiBold)
                         }
                     }
                 }
             }
-            Spacer(modifier = Modifier.height(8.dp))
-            Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
-                Text(text = s.walletShowOwnerTokens, style = MaterialTheme.typography.labelSmall, color = RavenMuted, modifier = Modifier.padding(end = 12.dp))
-                Switch(checked = showOwnerTokens, onCheckedChange = { showOwnerTokens = it }, colors = SwitchDefaults.colors(checkedThumbColor = RavenOrange, checkedTrackColor = RavenOrange.copy(alpha = 0.3f), uncheckedThumbColor = RavenMuted, uncheckedTrackColor = RavenMuted.copy(alpha = 0.3f)), modifier = Modifier.size(width = 40.dp, height = 24.dp))
-            }
-            Spacer(modifier = Modifier.height(16.dp))
-            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(s.walletTxHistory, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = RavenMuted)
-                if (txHistoryLoading) CircularProgressIndicator(color = RavenOrange, modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-            }
-            Spacer(modifier = Modifier.height(10.dp))
-            if (!txHistoryLoading && txHistory.isEmpty()) {
-                Card(colors = CardDefaults.cardColors(containerColor = RavenCard), border = BorderStroke(1.dp, RavenBorder), shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth()) {
-                    Box(modifier = Modifier.padding(20.dp).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                        Text(s.walletNoTxHistory, style = MaterialTheme.typography.bodySmall, color = RavenMuted, textAlign = TextAlign.Center)
-                    }
-                }
-            } else {
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    txHistory.forEach { tx -> TxCard(s, tx) }
-                }
-                // Show "Load More" button if there are more transactions to load
-                if (!txHistoryLoading && txHistoryLoadedCount < txHistoryTotal) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Button(
-                        onClick = onLoadMoreTransactions,
-                        colors = ButtonDefaults.buttonColors(containerColor = RavenCard),
-                        border = BorderStroke(1.dp, RavenBorder),
-                        modifier = Modifier.fillMaxWidth().height(44.dp)
-                    ) {
-                        Icon(Icons.Default.MoreHoriz, contentDescription = null, tint = RavenOrange, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(s.walletLoadMore, color = RavenOrange, fontWeight = FontWeight.SemiBold)
-                    }
-                }
-            }
         } else {
-            Box(modifier = Modifier.fillMaxWidth().height(200.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = RavenOrange) }
+            item(key = "wallet_loading") {
+                Box(modifier = Modifier.fillMaxWidth().height(200.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = RavenOrange) }
+            }
         }
-        Spacer(modifier = Modifier.height(24.dp))
     }
 }
 
@@ -521,21 +546,29 @@ private fun BalanceCard(s: AppStrings, info: WalletInfo, rvnPrice: Double? = nul
 
 @Composable
 private fun TxCard(s: AppStrings, tx: TxHistoryEntry) {
-    val isIncoming = tx.isIncoming
-    val dotColor = when { tx.confirmations == 0 -> NotAuthenticRed; tx.confirmations < 6 -> Color(0xFFF59E0B); else -> AuthenticGreen }
-    val confLabel = when { tx.confirmations == 0 -> s.walletTxUnconfirmed; tx.confirmations < 6 -> "${tx.confirmations} ${s.walletTxConfs}"; else -> s.walletTxConfirmed }
-    val amountRvn = if (isIncoming) tx.amountSat / 1e8 else tx.sentSat / 1e8
-    val sign = if (isIncoming) "+" else "-"
-    val full = String.format(java.util.Locale.US, "%.8f", amountRvn)
+    val isSelf     = tx.isSelfTransfer
+    val isIncoming = tx.isIncoming && !isSelf
+    val dotColor   = when { tx.confirmations == 0 -> NotAuthenticRed; tx.confirmations < 6 -> Color(0xFFF59E0B); else -> AuthenticGreen }
+    val confLabel  = when { tx.confirmations == 0 -> s.walletTxUnconfirmed; tx.confirmations < 6 -> "${tx.confirmations} ${s.walletTxConfs}"; else -> s.walletTxConfirmed }
+    // Self-transfers: show the amount that moved internally (amountSat stores totalToUs).
+    // Outgoing: sentSat is the net amount that left the wallet.
+    // Incoming: amountSat is the net amount received.
+    val amountRvn = when {
+        isSelf     -> tx.amountSat / 1e8
+        isIncoming -> tx.amountSat / 1e8
+        else       -> tx.sentSat   / 1e8
+    }
+    val sign       = if (isIncoming) "+" else ""
+    val amtColor   = when { isSelf -> RavenOrange; isIncoming -> AuthenticGreen; else -> NotAuthenticRed }
+    val iconVec    = when { isSelf -> Icons.Default.Autorenew; isIncoming -> Icons.Default.CallReceived; else -> Icons.Default.CallMade }
+    val full   = String.format(java.util.Locale.US, "%.8f", amountRvn)
     val dotIdx = full.indexOf('.')
     val intPart = full.substring(0, dotIdx)
     val decPart = full.substring(dotIdx + 1).trimEnd('0')
     val amountAnnotated = buildAnnotatedString {
         append("$sign$intPart")
         if (decPart.isNotEmpty()) {
-            withStyle(SpanStyle(fontSize = 10.sp)) {
-                append(",$decPart RVN")
-            }
+            withStyle(SpanStyle(fontSize = 10.sp)) { append(",$decPart RVN") }
         } else {
             append(" RVN")
         }
@@ -545,10 +578,10 @@ private fun TxCard(s: AppStrings, tx: TxHistoryEntry) {
         Row(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             val scale = if (tx.confirmations == 0) { rememberInfiniteTransition(label = "").animateFloat(initialValue = 0.8f, targetValue = 1.2f, animationSpec = infiniteRepeatable(tween(800), RepeatMode.Reverse), label = "").value } else 1f
             Box(modifier = Modifier.size(10.dp).scale(scale).background(dotColor, androidx.compose.foundation.shape.CircleShape))
-            Icon(imageVector = if (isIncoming) Icons.Default.CallReceived else Icons.Default.CallMade, contentDescription = null, tint = if (isIncoming) AuthenticGreen else NotAuthenticRed, modifier = Modifier.size(16.dp))
+            Icon(imageVector = iconVec, contentDescription = null, tint = amtColor, modifier = Modifier.size(16.dp))
             Text("${tx.txid.take(8)}\u2026${tx.txid.takeLast(6)}", style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace), color = RavenMuted, modifier = Modifier.weight(1f))
             Column(horizontalAlignment = Alignment.End) {
-                Text(amountAnnotated, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold, color = if (isIncoming) AuthenticGreen else NotAuthenticRed)
+                Text(amountAnnotated, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold, color = amtColor)
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) { if (dateText.isNotEmpty()) { Text(dateText, style = MaterialTheme.typography.labelSmall, color = RavenMuted, fontSize = 9.sp) } ; Text("\u2022", style = MaterialTheme.typography.labelSmall, color = RavenMuted, fontSize = 9.sp) ; Text(confLabel, style = MaterialTheme.typography.labelSmall, color = dotColor, fontSize = 9.sp) }
             }
         }
