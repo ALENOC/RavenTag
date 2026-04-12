@@ -1885,4 +1885,120 @@ class WalletManager(private val context: Context) {
             privKey.fill(0)
         }
     }
+
+    /**
+     * Consolidate all funds (RVN + assets) from addresses 0..currentIndex to a fresh virgin address.
+     *
+     * This function:
+     * 1. Scans all addresses 0..currentIndex for RVN and assets
+     * 2. Creates a transaction that moves everything to currentIndex + 1 (virgin address)
+     * 3. Advances the index to currentIndex + 1
+     *
+     * Used when the portfolio scan detects funds scattered across old addresses.
+     *
+     * @return Transaction ID of the consolidation, or null if no funds to consolidate.
+     */
+    suspend fun consolidateAllFundsToFreshAddress(): String? = withContext(Dispatchers.IO) {
+        val currentIndex = getCurrentAddressIndex()
+        if (currentIndex <= 0) {
+            android.util.Log.i("WalletManager", "consolidAllFundsToFreshAddress: currentIndex is 0, nothing to consolidate")
+            return@withContext null
+        }
+
+        val node = RavencoinPublicNode()
+        val addresses = getAddressBatch(0, 0..currentIndex).values.toList()
+        
+        // Check if there are any funds to consolidate
+        val totalRvn = try { node.getTotalBalance(addresses) } catch (_: Exception) { 0.0 }
+        val totalAssets = try { node.getTotalAssetBalances(addresses) } catch (_: Exception) { emptyMap() }
+        
+        if (totalRvn < 0.0001 && totalAssets.isEmpty()) {
+            android.util.Log.i("WalletManager", "consolidAllFundsToFreshAddress: no funds found")
+            return@withContext null
+        }
+
+        android.util.Log.i("WalletManager", "consolidAllFundsToFreshAddress: found ${totalRvn} RVN and ${totalAssets.size} assets, consolidating to fresh address")
+
+        // Derive the fresh target address (currentIndex + 1)
+        val targetAddress = getAddress(0, currentIndex + 1) 
+            ?: error("Cannot derive address at index ${currentIndex + 1}")
+
+        // Collect all UTXOs and assets from all addresses with their key pairs
+        data class AddressFunds(
+            val index: Int, 
+            val rvnUtxos: List<Utxo>, 
+            val assetUtxos: Map<String, List<AssetUtxo>>,
+            val privKey: ByteArray,
+            val pubKey: ByteArray
+        )
+        val allFunds = mutableListOf<AddressFunds>()
+
+        for ((index, addr) in getAddressBatch(0, 0..currentIndex)) {
+            try {
+                val (rvnUtxos, _, assetUtxosMap) = node.getUtxosAndAllAssetUtxosBatch(addr)
+                
+                if (rvnUtxos.isNotEmpty() || assetUtxosMap.isNotEmpty()) {
+                    val keyPair = getKeyPair(0, index) 
+                        ?: throw IllegalStateException("No key for index $index")
+                    allFunds.add(AddressFunds(index, rvnUtxos, assetUtxosMap, keyPair.first, keyPair.second))
+                    
+                    android.util.Log.i("WalletManager", "consolid: index $index has ${rvnUtxos.size} RVN UTXOs and ${assetUtxosMap.size} asset types")
+                }
+            } catch (e: Exception) {
+                android.util.Log.w("WalletManager", "consolid: failed to fetch UTXOs for index $index", e)
+            }
+        }
+
+        if (allFunds.isEmpty()) {
+            android.util.Log.i("WalletManager", "consolidAllFundsToFreshAddress: no UTXOs found after scanning")
+            return@withContext null
+        }
+
+        // Estimate fee
+        val satPerByte = try { node.getMinRelayFeeRateSatPerByte() } catch (_: FeeUnavailableException) { 200L }
+        val totalInputs = allFunds.sumOf { it.rvnUtxos.size + it.assetUtxos.values.sumOf { utxos -> utxos.size } }
+        val totalAssetOutputs = allFunds.sumOf { it.assetUtxos.size }
+        val estimatedBytes = 10 + 148 * totalInputs + 70 * (1 + totalAssetOutputs) + 34
+        val feeSat = estimatedBytes * satPerByte
+
+        android.util.Log.i("WalletManager", "consolid: building transaction with $totalInputs inputs, fee=$feeSat sat")
+
+        // Build keyed UTXOs
+        val keyedRvnUtxos = allFunds.flatMap { funds ->
+            funds.rvnUtxos.map { utxo ->
+                RavencoinTxBuilder.KeyedUtxo(utxo, funds.privKey, funds.pubKey)
+            }
+        }
+
+        val keyedAssetUtxos = mutableMapOf<String, MutableList<RavencoinTxBuilder.KeyedAssetUtxo>>()
+        allFunds.forEach { funds ->
+            funds.assetUtxos.forEach { (name, utxos) ->
+                utxos.forEach { utxo ->
+                    keyedAssetUtxos.getOrPut(name) { mutableListOf() }.add(
+                        RavencoinTxBuilder.KeyedAssetUtxo(utxo, funds.privKey, funds.pubKey)
+                    )
+                }
+            }
+        }
+
+        // Use buildAndSignMultiAddressSend to consolidate everything to the fresh address
+        val tx = RavencoinTxBuilder.buildAndSignMultiAddressSend(
+            currentRvnInputs = keyedRvnUtxos,
+            extraRvnInputs = emptyList(),
+            assetInputsByName = keyedAssetUtxos,
+            toAddress = targetAddress,  // Send RVN to target (we'll send 0 and let change handle it)
+            amountSat = 0L,  // Not sending to external, just consolidating
+            feeSat = feeSat,
+            changeAddress = targetAddress
+        )
+
+        val txid = node.broadcast(tx.hex)
+        android.util.Log.i("WalletManager", "consolidAllFundsToFreshAddress: broadcast txid=$txid")
+
+        // Advance to the fresh address
+        setCurrentAddressIndex(currentIndex + 1)
+        android.util.Log.i("WalletManager", "consolidAllFundsToFreshAddress: advanced index to ${currentIndex + 1}")
+
+        txid
+    }
 }
