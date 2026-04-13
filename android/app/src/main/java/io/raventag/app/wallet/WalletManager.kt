@@ -440,6 +440,78 @@ class WalletManager(private val context: Context) {
         finalResult
     }
 
+    /**
+     * Lightweight index sync for refresh: checks whether the stored currentIndex is stale
+     * (e.g. another app flavor sent a tx and advanced the index) without running a full
+     * address discovery scan.
+     *
+     * Algorithm (3 batch network calls max):
+     * 1. Check status of currentIndex address. If not HAS_OUTGOING, index is fine.
+     * 2. Scan forward up to 10 addresses for status in one batch.
+     * 3. Find the highest funded address forward; advance currentIndex accordingly.
+     *
+     * @return true if currentIndex was updated, false if already correct.
+     */
+    suspend fun syncCurrentIndex(): Boolean = withContext(Dispatchers.IO) {
+        val node = RavencoinPublicNode()
+        val storedIndex = getCurrentAddressIndex()
+        val currentAddr = getAddress(0, storedIndex) ?: return@withContext false
+
+        // Step 1: one call to check if current address key is exposed
+        val currentStatus = try {
+            node.getAddressStatusBatch(listOf(currentAddr))[currentAddr]
+        } catch (_: Exception) { return@withContext false }
+
+        if (currentStatus != RavencoinPublicNode.AddressStatus.HAS_OUTGOING) {
+            android.util.Log.i("WalletManager", "syncCurrentIndex: index $storedIndex is current (status=$currentStatus)")
+            return@withContext false
+        }
+
+        // Step 2: scan forward up to 10 addresses for status
+        val forwardRange = (storedIndex + 1)..(storedIndex + 10)
+        val forwardAddrs = getAddressBatch(0, forwardRange)
+        val forwardList = forwardRange.mapNotNull { i -> forwardAddrs[i]?.let { i to it } }
+
+        val fwdStatusMap = try {
+            node.getAddressStatusBatch(forwardList.map { it.second })
+        } catch (_: Exception) { emptyMap<String, RavencoinPublicNode.AddressStatus>() }
+
+        val withHistory = forwardList.filter { (_, addr) ->
+            fwdStatusMap[addr] != RavencoinPublicNode.AddressStatus.NO_HISTORY
+        }
+
+        if (withHistory.isEmpty()) {
+            // No history forward: storedIndex+1 is the fresh address
+            val newIndex = storedIndex + 1
+            setCurrentAddressIndex(newIndex)
+            android.util.Log.i("WalletManager", "syncCurrentIndex: no history forward, advanced to $newIndex")
+            return@withContext true
+        }
+
+        // Step 3: check which of those addresses still hold funds
+        val withFunds = try {
+            node.getAddressesWithFunds(withHistory.map { it.second })
+        } catch (_: Exception) { emptySet<String>() }
+
+        val lastFunded = withHistory.filter { (_, addr) -> addr in withFunds }.maxByOrNull { it.first }
+
+        val newIndex = when {
+            lastFunded != null -> {
+                val st = fwdStatusMap[lastFunded.second] ?: RavencoinPublicNode.AddressStatus.NO_HISTORY
+                if (st == RavencoinPublicNode.AddressStatus.HAS_OUTGOING) lastFunded.first + 1
+                else lastFunded.first
+            }
+            else -> withHistory.maxOf { it.first } + 1
+        }
+
+        if (newIndex > storedIndex) {
+            setCurrentAddressIndex(newIndex)
+            android.util.Log.i("WalletManager", "syncCurrentIndex: advanced $storedIndex -> $newIndex")
+            return@withContext true
+        }
+        false
+    }
+
     suspend fun sweepOldAddresses(): List<String> {
         if (sweepRunning) return emptyList()
         sweepRunning = true
