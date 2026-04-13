@@ -17,10 +17,12 @@
  */
 package io.raventag.app.wallet
 
+import android.content.Context
 import android.util.Log
 import com.google.gson.Gson
 import com.google.gson.JsonObject
 import io.raventag.app.BuildConfig
+import io.raventag.app.security.AdminKeyStorage
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -169,15 +171,25 @@ data class DerivedChipKeys(
  * All write operations (issue, revoke, transfer) require a valid admin key sent via the
  * X-Admin-Key header. The revocation check endpoint is public (no auth required).
  *
- * @param apiBaseUrl  Base URL of the RavenTag backend, from BuildConfig.API_BASE_URL.
- * @param adminKey    Brand admin key (ADMIN_KEY env var on backend side).
+ * @param context       Application context used to access encrypted admin key storage.
+ * @param apiBaseUrl    Base URL of the RavenTag backend, from BuildConfig.API_BASE_URL.
+ * @param adminKeyStorage Encrypted storage wrapper for the admin key.
  */
 class AssetManager(
+    private val context: Context,
     private val apiBaseUrl: String = BuildConfig.API_BASE_URL,
-    private val adminKey: String = ""
+    private val adminKeyStorage: AdminKeyStorage
 ) {
     private val gson = Gson()
     private val json = "application/json".toMediaType()
+
+    /**
+     * Admin key retrieved from encrypted storage.
+     * Throws IllegalStateException if the admin key is not configured.
+     */
+    private val adminKey: String
+        get() = adminKeyStorage.getAdminKey()
+            ?: throw IllegalStateException("Admin key not configured. Configure in Settings.")
 
     /** OkHttp client with generous timeouts for blockchain operations that may take several seconds. */
     private val http = OkHttpClient.Builder()
