@@ -750,7 +750,7 @@ object TransactionNotificationHelper {
 
 **If this table is empty:** All claims in this research were verified or cited — no user confirmation needed.
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **How should send operation cancellation work when user navigates away?**
    - **What we know:** Current UI shows loading state (isLoading parameter) but background coroutine continues. User can navigate back or dismiss app.
