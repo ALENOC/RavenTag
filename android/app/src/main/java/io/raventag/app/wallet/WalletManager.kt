@@ -363,7 +363,7 @@ class WalletManager(private val context: Context) {
     fun ensureCurrentAddressClean() {}
 
     suspend fun discoverCurrentIndex(): Int = withContext(Dispatchers.IO) {
-        val node = RavencoinPublicNode()
+        val node = RavencoinPublicNode(context)
         val currentStoredIndex = getCurrentAddressIndex()
         val searchLimit = maxOf(currentStoredIndex + 50, 100)
 
@@ -453,7 +453,7 @@ class WalletManager(private val context: Context) {
      * @return true if currentIndex was updated, false if already correct.
      */
     suspend fun syncCurrentIndex(): Boolean = withContext(Dispatchers.IO) {
-        val node = RavencoinPublicNode()
+        val node = RavencoinPublicNode(context)
         val storedIndex = getCurrentAddressIndex()
         val currentAddr = getAddress(0, storedIndex) ?: return@withContext false
 
@@ -598,7 +598,7 @@ class WalletManager(private val context: Context) {
         val currentIndex = getCurrentAddressIndex()
         if (currentIndex == 0) return emptyList()
 
-        val node = RavencoinPublicNode()
+        val node = RavencoinPublicNode(context)
 
         data class SweepTarget(
             val index: Int,
@@ -997,7 +997,7 @@ class WalletManager(private val context: Context) {
 
     suspend fun getLocalBalance(): Double? = withContext(Dispatchers.IO) {
         try {
-            val node = RavencoinPublicNode()
+            val node = RavencoinPublicNode(context)
             val currentIndex = getCurrentAddressIndex()
             val addresses = getAddressBatch(0, 0..currentIndex).values.toList()
             node.getTotalBalance(addresses)
@@ -1007,7 +1007,7 @@ class WalletManager(private val context: Context) {
     suspend fun sendRvnLocal(toAddress: String, amountRvn: Double): String = withContext(Dispatchers.IO) {
         var currentIndex = getCurrentAddressIndex()
         var address = getAddress(0, currentIndex) ?: error("No wallet")
-        val node = RavencoinPublicNode()
+        val node = RavencoinPublicNode(context)
 
         val (utxoResult, satPerByte) = coroutineScope {
             val utxosDeferred = async { node.getUtxosAndAllAssetUtxosBatch(address) }
@@ -1191,7 +1191,7 @@ class WalletManager(private val context: Context) {
     ): String = withContext(Dispatchers.IO) {
         val currentIndex = getCurrentAddressIndex()
         val nextAddress = getAddress(0, currentIndex + 1) ?: error("Cannot derive next address")
-        val node = RavencoinPublicNode()
+        val node = RavencoinPublicNode(context)
 
         val rawQtyRequested = Math.round(qty * 100_000_000.0)
         require(rawQtyRequested > 0) { "Transfer quantity must be greater than zero" }
@@ -1309,7 +1309,7 @@ class WalletManager(private val context: Context) {
 
         val actualToAddress = if (toAddress == address) nextAddress else toAddress
 
-        val node = RavencoinPublicNode()
+        val node = RavencoinPublicNode(context)
 
         val (utxoResult, satPerByte) = coroutineScope {
             val utxosDeferred = async { node.getUtxosAndAllAssetUtxosBatch(address) }
@@ -1554,7 +1554,7 @@ class WalletManager(private val context: Context) {
         val keyPair = getKeyPair(0, index) ?: return@withContext
         val privKey = keyPair.first
         val pubKey = keyPair.second
-        val node = RavencoinPublicNode()
+        val node = RavencoinPublicNode(context)
 
         try {
             val r = node.getUtxosAndAllAssetUtxosBatch(addr)

@@ -1,10 +1,12 @@
 package io.raventag.app.wallet
 
+import android.content.Context
 import android.util.Log
 import com.google.gson.Gson
 import com.google.gson.JsonElement
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
+import io.raventag.app.security.TofuFingerprintDao
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.io.PrintWriter
@@ -147,7 +149,7 @@ private data class ElectrumServer(val host: String, val port: Int)
  *   assets:    blockchain.scripthash.listunspent + blockchain.scripthash.get_balance
  *              with the Ravencoin ElectrumX asset extensions
  */
-class RavencoinPublicNode {
+class RavencoinPublicNode(private val context: Context) {
 
     companion object {
         private const val TAG = "ElectrumX"
@@ -1469,7 +1471,7 @@ class RavencoinPublicNode {
             return requests.chunked(BATCH_CHUNK_SIZE).flatMap { callBatch(server, it) }
         }
         val sslCtx = SSLContext.getInstance("TLS")
-        sslCtx.init(null, arrayOf(TofuTrustManager(server.host)), SecureRandom())
+        sslCtx.init(null, arrayOf(TofuTrustManager(context, server.host)), SecureRandom())
         val rawSocket = java.net.Socket()
         rawSocket.connect(InetSocketAddress(server.host, server.port), CONNECT_TIMEOUT_MS)
         val sslSocket = sslCtx.socketFactory.createSocket(rawSocket, server.host, server.port, true) as SSLSocket
@@ -1555,7 +1557,7 @@ class RavencoinPublicNode {
     private fun call(server: ElectrumServer, method: String, params: List<Any>): com.google.gson.JsonElement {
         // Create a TLS context with TOFU certificate validation for this server
         val sslCtx = SSLContext.getInstance("TLS")
-        sslCtx.init(null, arrayOf(TofuTrustManager(server.host)), SecureRandom())
+        sslCtx.init(null, arrayOf(TofuTrustManager(context, server.host)), SecureRandom())
 
         // Connect TCP first with the connect timeout, then upgrade to TLS
         val rawSocket = java.net.Socket()
@@ -1594,19 +1596,24 @@ class RavencoinPublicNode {
      * commonly use self-signed certificates. TOFU provides a practical security model:
      *
      * - First connection to a host: the server's SHA-256 fingerprint is computed from
-     *   the raw DER-encoded certificate bytes and stored in the in-process [certCache].
-     *   The connection is allowed.
+     *   the raw DER-encoded certificate bytes and stored in both the in-process [certCache]
+     *   and the persistent SQLite database via [TofuFingerprintDao]. The connection is allowed.
      * - Subsequent connections to the same host: the fingerprint is verified against
-     *   the cached value. If it differs, the connection is rejected with an exception
-     *   to protect against man-in-the-middle attacks.
+     *   the SQLite-persisted value first, then against the in-memory cache. If it differs
+     *   from either, the connection is rejected with an exception to protect against
+     *   man-in-the-middle attacks.
      *
-     * Limitation: the cache is not persisted, so a certificate change across process
-     * restarts is silently accepted (pinned fresh). This is an acceptable trade-off
-     * for a mobile wallet that rotates processes frequently.
+     * Certificate fingerprints are persisted in SQLite database (L2 cache) and survive app restarts.
+     * Dual-layer cache: in-memory ConcurrentHashMap (L1, fast access) + SQLite (L2, persistent).
      *
+     * @param context Application context for SQLite database access.
      * @param host Hostname of the ElectrumX server, used as the cache key.
      */
-    private class TofuTrustManager(private val host: String) : X509TrustManager {
+    private class TofuTrustManager(private val context: Context, private val host: String) : X509TrustManager {
+        init {
+            TofuFingerprintDao.init(context)
+        }
+
         override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
         override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
         override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {
@@ -1614,13 +1621,33 @@ class RavencoinPublicNode {
             // Compute SHA-256 fingerprint of the raw DER-encoded certificate
             val fingerprint = MessageDigest.getInstance("SHA-256").digest(cert.encoded)
                 .joinToString("") { "%02x".format(it) }
-            // putIfAbsent returns the existing value if already pinned, or null if this is the first pin
-            val existing = certCache.putIfAbsent(host, fingerprint)
-            if (existing != null && existing != fingerprint) {
-                // Certificate changed since last pin: possible MITM, reject immediately
-                throw Exception("Certificate mismatch for $host: expected $existing, got $fingerprint")
+
+            // Check SQLite-persisted fingerprint first (L2: persistent TOFU)
+            val persisted = TofuFingerprintDao.getFingerprint(host)
+            if (persisted != null && persisted != fingerprint) {
+                throw Exception("Certificate mismatch for $host: expected $persisted, got $fingerprint")
             }
-            if (existing == null) Log.i(TAG, "TOFU: pinned $host")
+
+            // Fallback to in-memory cache (L1) for first connection
+            val inMemory = certCache.putIfAbsent(host, fingerprint)
+            if (inMemory == fingerprint) {
+                if (persisted == null) {
+                    Log.i(TAG, "TOFU: pinning new certificate for $host")
+                    TofuFingerprintDao.pinFingerprint(host, fingerprint) // Persist to L2
+                }
+                return // Certificate matches
+            }
+
+            if (persisted == null) {
+                // First connection to this host: accept and pin to both L1 and L2
+                certCache.putIfAbsent(host, fingerprint)
+                TofuFingerprintDao.pinFingerprint(host, fingerprint)
+                Log.i(TAG, "TOFU: pinned new certificate for $host")
+                return
+            }
+
+            // Certificate differs from both L1 and L2: reject (MITM detected)
+            throw Exception("Certificate mismatch for $host: expected $persisted, got $fingerprint")
         }
     }
 }
