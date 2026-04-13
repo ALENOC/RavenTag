@@ -2426,6 +2426,9 @@ class MainActivity : FragmentActivity() {
         }
     }
 
+    /** Set when the activity goes to background; cleared on resume after triggering refresh. */
+    private var resumeRefreshNeeded = false
+
     /** Re-enables NFC dispatch when returning from background.
      *  Enabled if on Scan tab OR if the tag-write flow is waiting for a tap. */
     override fun onResume() {
@@ -2435,6 +2438,12 @@ class MainActivity : FragmentActivity() {
         }
         if (viewModel.isScanTabActive && viewModel.verifyStep == null) {
             viewModel.scanState = ScanState.SCANNING
+        }
+        // Refresh wallet immediately when returning from background so address, balance,
+        // and asset list are up to date (e.g. the other app flavor sent a tx while away).
+        if (resumeRefreshNeeded && viewModel.hasWallet) {
+            resumeRefreshNeeded = false
+            viewModel.refreshBalance()
         }
     }
 
@@ -2446,6 +2455,7 @@ class MainActivity : FragmentActivity() {
         super.onPause()
         nfcAdapter?.disableForegroundDispatch(this)
         Log.d("NFC", "Foreground dispatch disabled")
+        resumeRefreshNeeded = true
     }
 
     /**
