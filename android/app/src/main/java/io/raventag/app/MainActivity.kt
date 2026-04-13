@@ -323,7 +323,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         electrumStatus = ElectrumStatus.CHECKING
         viewModelScope.launch {
             val ok = withContext(Dispatchers.IO) {
-                try { io.raventag.app.wallet.RavencoinPublicNode().ping() } catch (_: Exception) { false }
+                try { io.raventag.app.wallet.RavencoinPublicNode(this@MainActivity).ping() } catch (_: Exception) { false }
             }
             electrumStatus = if (ok) ElectrumStatus.ONLINE else ElectrumStatus.OFFLINE
         }
@@ -338,7 +338,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun fetchBlockHeight() {
         viewModelScope.launch {
             val h = withContext(Dispatchers.IO) {
-                try { io.raventag.app.wallet.RavencoinPublicNode().getBlockHeight() }
+                try { io.raventag.app.wallet.RavencoinPublicNode(this@MainActivity).getBlockHeight() }
                 catch (_: Exception) { null }
             }
             if (h != null) blockHeight = h
@@ -648,8 +648,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val basic = withContext(Dispatchers.IO) {
                     val currentIndex = wm.getCurrentAddressIndex()
                     val addresses = wm.getAddressBatch(0, 0..currentIndex).values.toList()
-                    val node = io.raventag.app.wallet.RavencoinPublicNode()
-                    
+                    val node = io.raventag.app.wallet.RavencoinPublicNode(this@MainActivity)
+
                     // Fetch both asset balances and RVN balance in parallel
                     val (totals, _) = coroutineScope {
                         val assetsDeferred = async { node.getTotalAssetBalances(addresses) }
@@ -704,7 +704,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
                 // Pre-fetch IPFS hashes for un-enriched assets in one batch RPC call.
                 val withHashes = withContext(Dispatchers.IO) {
-                    val node = io.raventag.app.wallet.RavencoinPublicNode()
+                    val node = io.raventag.app.wallet.RavencoinPublicNode(this@MainActivity)
                     val names = needsEnrichment.map { it.name }
                     val metaBatch = try { node.getAssetMetaBatch(names) } catch (_: Exception) { emptyMap() }
                     needsEnrichment.map { asset ->
@@ -764,7 +764,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             try {
                 val currentIndex = wm.getCurrentAddressIndex()
-                val node = io.raventag.app.wallet.RavencoinPublicNode()
+                val node = io.raventag.app.wallet.RavencoinPublicNode(this@MainActivity)
 
                 // One Keystore decrypt for all addresses, then parallel ElectrumX queries.
                 val allHistory = withContext(Dispatchers.IO) {
@@ -811,7 +811,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             try {
                 val history = withContext(Dispatchers.IO) {
-                    io.raventag.app.wallet.RavencoinPublicNode().getTransactionHistory(
+                    io.raventag.app.wallet.RavencoinPublicNode(this@MainActivity).getTransactionHistory(
                         address,
                         limit = txHistoryPageSize,
                         offset = txHistoryLoadedCount

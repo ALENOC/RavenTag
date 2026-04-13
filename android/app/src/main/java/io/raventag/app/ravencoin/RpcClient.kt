@@ -134,7 +134,7 @@ class RpcClient(
      */
     fun getAssetData(assetName: String): AssetData? {
         val meta = try {
-            io.raventag.app.wallet.RavencoinPublicNode().getAssetMeta(assetName.uppercase())
+            context?.let { io.raventag.app.wallet.RavencoinPublicNode(it).getAssetMeta(assetName.uppercase()) }
         } catch (_: Exception) { null }
         if (meta != null) {
             return AssetData(
@@ -213,7 +213,8 @@ class RpcClient(
      * List all Ravencoin assets owned by a given address via ElectrumX (no backend required).
      */
     fun listAssetsByAddress(address: String): List<OwnedAsset> {
-        val node = io.raventag.app.wallet.RavencoinPublicNode()
+        val node = context?.let { io.raventag.app.wallet.RavencoinPublicNode(it) }
+            ?: return emptyList()
         val assetBalances = node.getAssetBalances(address)
         
         // Parallelize metadata fetching using a fixed thread pool or coroutines scope
