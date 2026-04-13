@@ -2,8 +2,9 @@
  * HTTP request logger middleware (logger.ts)
  *
  * Provides three exports:
- *   - requestLogger: Express middleware that logs each request to console (with ANSI
- *     color coding by status code) and persists it to the SQLite request_logs table.
+ *   - requestLogger (metadata-only logging): Express middleware that logs each request to
+ *     console (with ANSI color coding by status code) and persists it to the SQLite
+ *     request_logs table.
  *   - logRateLimitEvent: Persists a rate-limit hit to the rate_limit_events table.
  *   - getRequestStats: Aggregates request metrics for the last N hours (used by
  *     the /api/metrics endpoint).
@@ -12,6 +13,13 @@
  * skipped so the logger never causes a request to fail.
  *
  * The /health and /favicon.ico paths are intentionally excluded to avoid log spam.
+ *
+ * SECURITY: Request logger NEVER logs request bodies or response bodies.
+ * Only metadata is logged: method, path, status code, duration, IP address.
+ * This prevents sensitive data (e.g., tag_uid, chip keys, admin keys) from being
+ * persisted in log aggregation services (DataDog, CloudWatch, etc.) or log files.
+ * Endpoints with sensitive payloads (e.g., /api/brand/derive-chip-key) are safe because
+ * the logger only logs method/path/status, never the request body.
  */
 import { Request, Response, NextFunction } from 'express'
 import { getDb } from './cache.js'
@@ -26,7 +34,7 @@ const SKIP_PATHS = new Set(['/health', '/favicon.ico'])
  * so that the final status code is available. This avoids logging before the
  * response is complete.
  *
- * Console format: [ISO-timestamp] METHOD /path STATUS duration_ms IP
+ * Console format: [ISO-timestamp] METHOD /path STATUS duration_ms IP (never request body)
  * Colors: green for 2xx, yellow for 4xx, red for 5xx.
  */
 export function requestLogger(req: Request, res: Response, next: NextFunction): void {
