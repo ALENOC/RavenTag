@@ -126,7 +126,16 @@ export function listRevokedAssets(): Array<{
   asset_name: string; reason: string | null; burned_on_chain: number; burn_txid: string | null; revoked_at: number
 }> {
   const database = getDb()
-  return database.prepare('SELECT * FROM revoked_assets ORDER BY revoked_at DESC').all() as Array<{
+  return database.prepare(`
+    SELECT
+        asset_name,
+        reason,
+        burned_on_chain,
+        burn_txid,
+        revoked_at
+    FROM revoked_assets
+    ORDER BY revoked_at DESC
+  `).all() as Array<{
     asset_name: string; reason: string | null; burned_on_chain: number; burn_txid: string | null; revoked_at: number
   }>
 }
@@ -246,7 +255,15 @@ export function deleteChip(assetName: string): boolean {
  */
 export function listChips(): Array<{ asset_name: string; tag_uid: string; nfc_pub_id: string; registered_at: number }> {
   const database = getDb()
-  return database.prepare('SELECT * FROM chip_registry ORDER BY registered_at DESC').all() as Array<{
+  return database.prepare(`
+    SELECT
+        asset_name,
+        tag_uid,
+        nfc_pub_id,
+        registered_at
+    FROM chip_registry
+    ORDER BY registered_at DESC
+  `).all() as Array<{
     asset_name: string; tag_uid: string; nfc_pub_id: string; registered_at: number
   }>
 }
