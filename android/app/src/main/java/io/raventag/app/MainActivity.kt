@@ -97,6 +97,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import android.Manifest
 import android.content.pm.PackageManager
@@ -441,6 +443,38 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 AdminKeyStatus.INVALID
             }
             adminKeyStatus = result
+        }
+    }
+
+    /**
+     * Validate the admin key against the backend using OkHttp.
+     *
+     * Makes an actual API call to the backend validation endpoint and returns
+     * the validation status. This is a suspend function intended to be called
+     * from coroutines.
+     *
+     * @param key The admin key to validate.
+     * @param apiBaseUrl The backend API base URL.
+     * @return The validation status (VALID, INVALID, WRONG_TYPE, or INVALID on error).
+     */
+    suspend fun validateAdminKey(key: String, apiBaseUrl: String): AdminKeyStatus {
+        adminKeyStatus = AdminKeyStatus.CHECKING
+        return try {
+            val client = OkHttpClient()
+            val request = Request.Builder()
+                .url("$apiBaseUrl/api/admin/validate-key")
+                .header("X-Admin-Key", key)
+                .get()
+                .build()
+            val response = client.newCall(request).execute()
+            when (response.code) {
+                200 -> AdminKeyStatus.VALID
+                401 -> AdminKeyStatus.INVALID
+                403 -> AdminKeyStatus.WRONG_TYPE
+                else -> AdminKeyStatus.INVALID
+            }
+        } catch (e: Exception) {
+            AdminKeyStatus.INVALID
         }
     }
 
