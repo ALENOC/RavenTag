@@ -50,7 +50,7 @@ class WalletPollingWorker(
             walletManager.getCurrentAddress() ?: return@withContext Result.success()
             val currentIndex = walletManager.getCurrentAddressIndex()
 
-            val node = RavencoinPublicNode()
+            val node = RavencoinPublicNode(applicationContext)
 
             // Derive all addresses with a single Keystore decrypt
             val addresses = walletManager.getAddressBatch(0, 0..currentIndex).values.toList()
