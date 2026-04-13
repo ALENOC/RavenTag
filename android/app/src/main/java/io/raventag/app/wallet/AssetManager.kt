@@ -452,9 +452,10 @@ class AssetManager(
      *
      * @param tagUidHex  7-byte chip UID as lowercase hex string.
      */
+    // SECURITY: tagUid parameter is NOT logged to prevent exfiltration via log aggregation services
+    // Only nfcPubId (public identifier) is logged on success
     fun deriveChipKeys(tagUidHex: String): DerivedChipKeys? {
         return try {
-            Log.i("AssetManager", "deriveChipKeys request tagUid=$tagUidHex")
             val body = mapOf("tag_uid" to tagUidHex.lowercase())
             val resp = adminRequest("POST", "/api/brand/derive-chip-key", body)
             fun hexToBytes(hex: String) = ByteArray(hex.length / 2) { i ->
@@ -465,10 +466,10 @@ class AssetManager(
             val sdmEncKey = hexToBytes(resp["sdm_enc_key"]?.asString ?: return null)
             val sdmMacKey = hexToBytes(resp["sdm_mac_key"]?.asString ?: return null)
             val nfcPubId = resp["nfc_pub_id"]?.asString ?: return null
-            Log.i("AssetManager", "deriveChipKeys success tagUid=$tagUidHex nfcPubId=$nfcPubId")
+            Log.i("AssetManager", "deriveChipKeys success nfcPubId=$nfcPubId")
             DerivedChipKeys(appMasterKey, sdmmacInputKey, sdmEncKey, sdmMacKey, nfcPubId)
         } catch (e: Exception) {
-            Log.e("AssetManager", "deriveChipKeys failed tagUid=$tagUidHex error=${e.message}", e)
+            Log.e("AssetManager", "deriveChipKeys failed error=${e.message}", e)
             null
         }
     }
