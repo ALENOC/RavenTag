@@ -88,6 +88,7 @@ import io.raventag.app.wallet.AssetManager
 import io.raventag.app.wallet.BurnParams
 import io.raventag.app.wallet.SubAssetIssueParams
 import io.raventag.app.wallet.WalletManager
+import io.raventag.app.security.AdminKeyStorage
 import io.raventag.app.config.AppConfig
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
@@ -2054,6 +2055,9 @@ class MainActivity : FragmentActivity() {
     /** EncryptedSharedPreferences for admin/operator/master keys (AES256-GCM, Keystore-backed). */
     private lateinit var securePrefs: android.content.SharedPreferences
 
+    /** AdminKeyStorage for encrypted admin key persistence (AES256-GCM, Keystore-backed). */
+    private lateinit var adminKeyStorage: AdminKeyStorage
+
     /**
      * Compose state that gates rendering until [securePrefs] is initialised.
      * Kept as a mutableStateOf so the Compose tree re-renders when it flips to true.
@@ -2140,11 +2144,14 @@ class MainActivity : FragmentActivity() {
 
         nfcAdapter = NfcAdapter.getDefaultAdapter(this)
 
+        // Initialize AdminKeyStorage (does not require securePrefs, uses its own Keystore)
+        adminKeyStorage = AdminKeyStorage(applicationContext)
+
         // Process any NFC intent that launched or re-launched this activity
         handleIntent(intent)
 
         val walletManager = WalletManager(applicationContext)
-        val assetManager = AssetManager(adminKey = BuildConfig.ADMIN_KEY)
+        val assetManager = AssetManager(context = applicationContext, adminKeyStorage = adminKeyStorage)
         viewModel.initWallet(walletManager, assetManager)
 
         // Create notification channel (safe to call on every start, system ignores duplicates)
@@ -2195,7 +2202,7 @@ class MainActivity : FragmentActivity() {
 
             // Persisted user preferences (read from SharedPreferences, updated on save)
             var langCode by remember { mutableStateOf(prefs.getString("language", "en") ?: "en") }
-            var savedAdminKey by remember { mutableStateOf(securePrefs.getString("admin_key", "") ?: "") }
+            var savedAdminKey by remember { mutableStateOf(adminKeyStorage.getAdminKey() ?: "") }
             var savedInitialMasterKey by remember { mutableStateOf(securePrefs.getString("initial_master_key", "") ?: "") }
             var savedOperatorKey by remember { mutableStateOf(securePrefs.getString("operator_key", "") ?: "") }
             var walletRole by remember { mutableStateOf(prefs.getString("wallet_role", "") ?: "") }
@@ -3053,6 +3060,8 @@ fun RavenTagApp(
                                 viewModel.checkPinataJwt(savedPinataJwt)
                             if (viewModel.kuboNodeStatus == MainViewModel.AdminKeyStatus.UNKNOWN)
                                 viewModel.checkKuboNode(savedKuboNodeUrl)
+                            if (viewModel.adminKeyStatus == MainViewModel.AdminKeyStatus.UNKNOWN && savedAdminKey.isNotEmpty())
+                                viewModel.checkAdminKey(viewModel.currentVerifyUrl, savedAdminKey)
                         }
                     }
                     SettingsScreen(
@@ -3068,6 +3077,17 @@ fun RavenTagApp(
                         currentKuboNodeUrl = savedKuboNodeUrl,
                         onPinataJwtSave = onPinataJwtSave,
                         onKuboNodeUrlSave = onKuboNodeUrlSave,
+                        currentAdminKey = savedAdminKey,
+                        onAdminKeySave = { key ->
+                            lifecycleScope.launch {
+                                val status = viewModel.validateAdminKey(key, viewModel.currentVerifyUrl)
+                                if (status is MainViewModel.AdminKeyStatus.VALID) {
+                                    adminKeyStorage.setAdminKey(key)
+                                    savedAdminKey = key
+                                }
+                            }
+                        },
+                        adminKeyStatus = viewModel.adminKeyStatus,
                         serverStatus = viewModel.serverStatus,
                         pinataJwtStatus = viewModel.pinataJwtStatus,
                         kuboNodeStatus = viewModel.kuboNodeStatus,
