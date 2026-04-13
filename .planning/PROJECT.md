@@ -1,5 +1,16 @@
 # RavenTag
 
+## Current Milestone: v1.0 Security, Performance & Reliability
+
+**Goal:** Hardening sicurezza, ottimizzazione performance Android, e affidabilita' end-to-end del wallet Ravencoin.
+
+**Target features:**
+- Sicurezza: ADMIN_KEY rimosso da APK, TLS ElectrumX abilitato, fingerprint TOFU persistenti, SELECT * fix
+- Android performance: blocking OkHttp → suspend functions, wallet restore ottimizzato, invio RVN non-bloccante
+- Wallet: saldo RVN affidabile, invio/ricezione, sincronizzazione UTXO
+- Emissione asset (Brand): gestione errori RPC, feedback utente chiaro
+- Backend: unhandledRejection handler, Promise.all per gerarchia, paginazione listassets, cleanup retention, backup SQLite sicuro
+
 ## What This Is
 
 Framework open-source trustless (RTP-1) che collega tag NFC NTAG 424 DNA ad asset Ravencoin. Tre deployment target: backend Node.js/Express, frontend Next.js 14, e app Android Kotlin/Compose. La verifica crittografica gira interamente client-side, senza fidarsi del server.
