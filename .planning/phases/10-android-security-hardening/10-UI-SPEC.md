@@ -56,6 +56,8 @@ Exceptions: none (existing codebase follows 8-point scale)
 
 ## Color
 
+**60/30/10 split:** Dominant #0F0F0F (60%), Secondary #000000 (30%), Accent #EF7536 (10%)
+
 | Role | Value | Usage |
 |------|-------|-------|
 | Dominant (60%) | #0F0F0F (RavenCard) | Cards, surfaces, input field backgrounds |
@@ -63,7 +65,7 @@ Exceptions: none (existing codebase follows 8-point scale)
 | Accent (10%) | #EF7536 (RavenOrange) | CTA buttons, selected states, save buttons when saved |
 | Destructive | #F87171 (NotAuthenticRed) | Warning banners, error states, delete actions |
 
-Accent reserved for: Save button "Saved" state, selected language chips, enabled toggle tracks, primary interactive elements
+Accent reserved for: Save button "Saved" state, selected language chips, enabled toggle tracks, focus rings
 
 ---
 
