@@ -39,7 +39,6 @@ android {
             "\"https://ipfs.io/ipfs/,https://cloudflare-ipfs.com/ipfs/,https://gateway.pinata.cloud/ipfs/\""
         )
         buildConfigField("String", "API_BASE_URL", "\"https://api.raventag.com\"")
-        buildConfigField("String", "ADMIN_KEY", "\"\"")
     }
 
     flavorDimensions += "variant"
