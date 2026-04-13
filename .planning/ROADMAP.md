@@ -33,10 +33,10 @@ Phase 50: Backend Stability
 - derive-chip-key payload never logged
 
 **Plans:**
-- [ ] 10-01-PLAN.md — Migrate admin key to EncryptedSharedPreferences with Settings UI
+3/4 plans complete
 - [ ] 10-02-PLAN.md — Persist TOFU fingerprints in SQLite for MITM protection across restarts
-- [ ] 10-03-PLAN.md — Replace SELECT * queries with explicit column lists in backend
-- [ ] 10-04-PLAN.md — Verify and prevent logging of derive-chip-key payloads
+- [x] 10-03-PLAN.md — Replace SELECT * queries with explicit column lists in backend
+- [x] 10-04-PLAN.md — Verify and prevent logging of derive-chip-key payloads
 
 ---
 
