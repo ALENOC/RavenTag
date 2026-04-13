@@ -249,14 +249,17 @@ class RavencoinPublicNode {
         }
         val responses = callWithFailoverBatch(requests)
         val totals = mutableMapOf<String, Long>()
-        for (resp in responses) {
-            if (resp == null || !resp.isJsonObject) continue
+        addresses.forEachIndexed { i, addr ->
+            val resp = responses.getOrNull(i) ?: return@forEachIndexed
+            if (resp == null || !resp.isJsonObject) return@forEachIndexed
             for ((name, value) in resp.asJsonObject.entrySet()) {
                 if (name == "rvn" || name == "RVN") continue
                 try {
                     val obj = value.asJsonObject
                     val sat = (obj.get("confirmed")?.asLong ?: 0L) + (obj.get("unconfirmed")?.asLong ?: 0L)
-                    if (sat > 0) totals[name] = (totals[name] ?: 0L) + sat
+                    if (sat > 0) {
+                                        totals[name] = (totals[name] ?: 0L) + sat
+                    }
                 } catch (_: Exception) {}
             }
         }
@@ -283,11 +286,18 @@ class RavencoinPublicNode {
         addresses.forEachIndexed { i, addr ->
             val resp = responses.getOrNull(i) ?: return@forEachIndexed
             if (resp == null || !resp.isJsonObject) return@forEachIndexed
-            for ((_, value) in resp.asJsonObject.entrySet()) {
+            val obj = resp.asJsonObject
+            // Top-level RVN balance: {"confirmed": N, "unconfirmed": M} — primitives, not objects
+            val rvnSat = try { obj.get("confirmed")?.asLong ?: 0L } catch (_: Exception) { 0L } +
+                         try { obj.get("unconfirmed")?.asLong ?: 0L } catch (_: Exception) { 0L }
+            if (rvnSat > 0) { result.add(addr); return@forEachIndexed }
+            // Asset balances: {"ASSET_NAME": {"confirmed": N, "unconfirmed": M}} — nested objects
+            for ((key, value) in obj.entrySet()) {
+                if (key == "confirmed" || key == "unconfirmed") continue
                 try {
-                    val obj = value.asJsonObject
-                    val sat = (obj.get("confirmed")?.asLong ?: 0L) +
-                              (obj.get("unconfirmed")?.asLong ?: 0L)
+                    val assetObj = value.asJsonObject
+                    val sat = (assetObj.get("confirmed")?.asLong ?: 0L) +
+                              (assetObj.get("unconfirmed")?.asLong ?: 0L)
                     if (sat > 0) { result.add(addr); break }
                 } catch (_: Exception) {}
             }
@@ -784,6 +794,27 @@ class RavencoinPublicNode {
                     rvnUtxos.add(Utxo(u.txHash, u.txPos, satoshis, rvnScript, u.height))
                 }
             }
+        }
+
+        // Secondary asset check: some ElectrumX servers (e.g. Ravencoin mainnet nodes) do not
+        // include asset UTXOs in blockchain.scripthash.listunspent. If listunspent returned no
+        // assets but get_balance?asset=true shows some, fetch them explicitly via getAssetUtxosFull.
+        if (assetUtxosMap.isEmpty()) {
+            try {
+                val assetBalances = getAssetBalances(address)
+                for (ab in assetBalances) {
+                    try {
+                        val utxos = getAssetUtxosFull(address, ab.name)
+                        if (utxos.isNotEmpty()) {
+                            assetUtxosMap.getOrPut(ab.name) { mutableListOf() }.addAll(utxos)
+                            assetOutpoints.addAll(utxos.map { "${it.utxo.txid}:${it.utxo.outputIndex}" })
+                            android.util.Log.i("RavencoinPublicNode", "  secondary: ${utxos.size} UTXOs for ${ab.name} via getAssetUtxosFull")
+                        }
+                    } catch (e: Exception) {
+                        android.util.Log.w("RavencoinPublicNode", "  secondary: getAssetUtxosFull failed for ${ab.name}: ${e.message}")
+                    }
+                }
+            } catch (_: Exception) {}
         }
 
         return Triple(rvnUtxos, assetOutpoints, assetUtxosMap)
