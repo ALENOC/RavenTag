@@ -1060,20 +1060,36 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (isRefreshing.getAndSet(true)) return
 
         val wm = walletManager ?: run { isRefreshing.set(false); return }
-        loadWalletBalance()
-        loadOwnedAssets()
-        loadTransactionHistory()
 
         viewModelScope.launch(Dispatchers.IO) {
             try {
+                // Sync index first: detects if another app flavor advanced currentIndex
+                // (e.g. consumer sent a tx while brand was open). Fast: 1-3 batch calls.
+                val indexChanged = try { wm.syncCurrentIndex() } catch (_: Exception) { false }
+                if (indexChanged) {
+                    val newAddress = wm.getCurrentAddress() ?: ""
+                    withContext(Dispatchers.Main) {
+                        walletInfo = walletInfo?.copy(address = newAddress)
+                    }
+                    Log.i("MainActivity", "refreshBalance: index synced, new address=$newAddress")
+                }
+            } catch (e: Exception) {
+                Log.e("MainActivity", "syncCurrentIndex failed", e)
+            }
+
+            withContext(Dispatchers.Main) {
+                loadWalletBalance()
+                loadOwnedAssets()
+                loadTransactionHistory()
+            }
+
+            try {
                 Log.i("MainActivity", "Starting sweep sequence")
-                // Sequential sweep: avoids opening many parallel TCP connections to ElectrumX
-                // servers simultaneously, which caused connection resets.
                 val txids = wm.sweepOldAddresses()
                 if (txids.isNotEmpty()) {
                     Log.i("MainViewModel", "Auto-sweep completed: ${txids.size} transactions")
-                    withContext(Dispatchers.Main) { 
-                        loadWalletBalance() 
+                    withContext(Dispatchers.Main) {
+                        loadWalletBalance()
                         loadOwnedAssets()
                         loadTransactionHistory()
                     }
