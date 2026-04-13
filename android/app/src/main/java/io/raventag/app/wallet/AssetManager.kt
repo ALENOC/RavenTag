@@ -537,18 +537,19 @@ class AssetManager(
      * @param assetName  Ravencoin asset name (uppercased before submission).
      * @param tagUid     7-byte chip UID in hex (uppercased before submission).
      */
+    // SECURITY: tagUid parameter is NOT logged to prevent exfiltration via log aggregation services
     fun registerChip(assetName: String, tagUid: String): AssetOperationResult {
         return try {
-            Log.i("AssetManager", "registerChip request asset=$assetName tagUid=$tagUid")
+            Log.i("AssetManager", "registerChip request asset=$assetName")
             val body = mapOf("asset_name" to assetName.uppercase(), "tag_uid" to tagUid.uppercase())
             val resp = adminRequest("POST", "/api/brand/register-chip", body)
-            Log.i("AssetManager", "registerChip success asset=$assetName tagUid=$tagUid")
+            Log.i("AssetManager", "registerChip success asset=$assetName")
             AssetOperationResult(
                 success = resp["success"]?.asBoolean == true,
                 assetName = resp["asset_name"]?.asString
             )
         } catch (e: Exception) {
-            Log.e("AssetManager", "registerChip failed asset=$assetName tagUid=$tagUid error=${e.message}", e)
+            Log.e("AssetManager", "registerChip failed asset=$assetName error=${e.message}", e)
             AssetOperationResult(success = false, error = e.message)
         }
     }
