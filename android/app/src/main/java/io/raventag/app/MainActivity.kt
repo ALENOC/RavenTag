@@ -594,16 +594,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         viewModelScope.launch {
-            assetsLoading = true
             assetsLoadError = false
 
-            // Show cached assets immediately while fresh data loads from the network.
-            // Only used when the list is empty (first load after startup).
+            // Show the spinner only when there is nothing to display yet.
+            // If assets are already on screen (from cache or a previous load), refresh
+            // silently in the background so the list never flashes or shows a spinner.
             if (ownedAssets.isNullOrEmpty()) {
                 val cached = withContext(Dispatchers.IO) { loadAssetsCache() }
                 if (!cached.isNullOrEmpty()) {
                     ownedAssets = cached
-                    assetsLoading = false
+                } else {
+                    assetsLoading = true
                 }
             }
 
