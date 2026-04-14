@@ -131,7 +131,7 @@ class RpcClient(
         val params: List<Any>
     )
 
-    private fun rpcCall(method: String, params: List<Any> = emptyList()): JsonObject {
+    private suspend fun rpcCall(method: String, params: List<Any> = emptyList()): JsonObject {
         val payload = RpcPayload(method = method, params = params)
         val body = gson.toJson(payload).toRequestBody(json)
         val request = Request.Builder()
@@ -139,7 +139,7 @@ class RpcClient(
             .post(body)
             .build()
 
-        val response = http.newCall(request).execute()
+        val response = http.newCall(request).executeSuspend()
         if (!response.isSuccessful) {
             throw IOException("RPC HTTP error: ${response.code}")
         }
@@ -158,7 +158,7 @@ class RpcClient(
      * Get raw asset data via ElectrumX blockchain.asset.get_meta (no backend required).
      * Falls back to backend proxy if ElectrumX call fails.
      */
-    fun getAssetData(assetName: String): AssetData? {
+    suspend fun getAssetData(assetName: String): AssetData? {
         val meta = try {
             context?.let { io.raventag.app.wallet.RavencoinPublicNode(it).getAssetMeta(assetName.uppercase()) }
         } catch (_: Exception) { null }
@@ -177,7 +177,7 @@ class RpcClient(
             val request = Request.Builder()
                 .url("$rpcUrl/api/assets/${assetName.uppercase()}")
                 .get().build()
-            val response = http.newCall(request).execute()
+            val response = http.newCall(request).executeSuspend()
             if (!response.isSuccessful) return null
             val obj = gson.fromJson(response.body?.string(), JsonObject::class.java)
             AssetData(
