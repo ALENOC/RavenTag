@@ -109,6 +109,7 @@ import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import io.raventag.app.worker.NotificationHelper
+import io.raventag.app.worker.TransactionNotificationHelper
 import io.raventag.app.worker.WalletPollingWorker
 import java.util.concurrent.TimeUnit
 
@@ -129,6 +130,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // Stores the last seen NFC tap counter per nfc_pub_id in local storage.
     // A counter that does not increase is a sign of tag cloning.
     private val nfcCounterCache = NfcCounterCache(application)
+
+    /** Encrypted storage for the admin key; injected via [initWallet]. */
+    internal var adminKeyStorage: AdminKeyStorage? = null
 
     /** AES-128 key used to decrypt the SUN encrypted UID field (sdmmac input key). */
     var sdmmacKey: ByteArray = ByteArray(16)
@@ -323,7 +327,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         electrumStatus = ElectrumStatus.CHECKING
         viewModelScope.launch {
             val ok = withContext(Dispatchers.IO) {
-                try { io.raventag.app.wallet.RavencoinPublicNode(this@MainActivity).ping() } catch (_: Exception) { false }
+                try { io.raventag.app.wallet.RavencoinPublicNode(getApplication()).ping() } catch (_: Exception) { false }
             }
             electrumStatus = if (ok) ElectrumStatus.ONLINE else ElectrumStatus.OFFLINE
         }
@@ -338,7 +342,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun fetchBlockHeight() {
         viewModelScope.launch {
             val h = withContext(Dispatchers.IO) {
-                try { io.raventag.app.wallet.RavencoinPublicNode(this@MainActivity).getBlockHeight() }
+                try { io.raventag.app.wallet.RavencoinPublicNode(getApplication()).getBlockHeight() }
                 catch (_: Exception) { null }
             }
             if (h != null) blockHeight = h
@@ -648,7 +652,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val basic = withContext(Dispatchers.IO) {
                     val currentIndex = wm.getCurrentAddressIndex()
                     val addresses = wm.getAddressBatch(0, 0..currentIndex).values.toList()
-                    val node = io.raventag.app.wallet.RavencoinPublicNode(this@MainActivity)
+                    val node = io.raventag.app.wallet.RavencoinPublicNode(getApplication())
 
                     // Fetch both asset balances and RVN balance in parallel
                     val (totals, _) = coroutineScope {
@@ -704,7 +708,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
                 // Pre-fetch IPFS hashes for un-enriched assets in one batch RPC call.
                 val withHashes = withContext(Dispatchers.IO) {
-                    val node = io.raventag.app.wallet.RavencoinPublicNode(this@MainActivity)
+                    val node = io.raventag.app.wallet.RavencoinPublicNode(getApplication())
                     val names = needsEnrichment.map { it.name }
                     val metaBatch = try { node.getAssetMetaBatch(names) } catch (_: Exception) { emptyMap() }
                     needsEnrichment.map { asset ->
@@ -764,7 +768,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             try {
                 val currentIndex = wm.getCurrentAddressIndex()
-                val node = io.raventag.app.wallet.RavencoinPublicNode(this@MainActivity)
+                val node = io.raventag.app.wallet.RavencoinPublicNode(getApplication())
 
                 // One Keystore decrypt for all addresses, then parallel ElectrumX queries.
                 val allHistory = withContext(Dispatchers.IO) {
@@ -811,7 +815,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             try {
                 val history = withContext(Dispatchers.IO) {
-                    io.raventag.app.wallet.RavencoinPublicNode(this@MainActivity).getTransactionHistory(
+                    io.raventag.app.wallet.RavencoinPublicNode(getApplication()).getTransactionHistory(
                         address,
                         limit = txHistoryPageSize,
                         offset = txHistoryLoadedCount
@@ -893,9 +897,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * Inject wallet and asset managers after they are created in [MainActivity.onCreate].
      * If a wallet already exists, immediately loads balance and owned assets.
      */
-    fun initWallet(wm: WalletManager, am: AssetManager) {
+    fun initWallet(wm: WalletManager, am: AssetManager, aks: AdminKeyStorage) {
         walletManager = wm
         assetManager = am
+        adminKeyStorage = aks
         hasWallet = wm.hasWallet()
         // Only start loading if the ViewModel has no data yet (first launch or process restart).
         // On Activity re-creation (screen rotation, system config change) the ViewModel survives
@@ -1253,7 +1258,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * on-chain burn cannot be undone; only the database flag is cleared.
      */
     fun unrevokeAsset(assetName: String, adminKey: String) {
-        val am = AssetManager(adminKey = adminKey)
+        val am = AssetManager(context = getApplication(), adminKeyStorage = adminKeyStorage!!)
         viewModelScope.launch {
             issueLoading = true
             try {
@@ -1280,7 +1285,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * Soft revocation is sufficient to mark assets as invalid.
      */
     fun revokeAsset(assetName: String, reason: String, adminKey: String) {
-        val am = AssetManager(adminKey = adminKey)
+        val am = AssetManager(context = getApplication(), adminKeyStorage = adminKeyStorage!!)
         viewModelScope.launch {
             issueLoading = true
             try {
@@ -1345,7 +1350,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * Calls POST /api/brand/chips with the asset name and tag UID.
      */
     fun registerChip(assetName: String, tagUid: String, adminKey: String) {
-        val am = AssetManager(adminKey = adminKey)
+        val am = AssetManager(context = getApplication(), adminKeyStorage = adminKeyStorage!!)
         viewModelScope.launch {
             issueLoading = true
             try {
@@ -1649,7 +1654,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      */
     private suspend fun processStandaloneWrite(tag: android.nfc.Tag, uid: ByteArray): Result<WriteTagKeys> {
         val uidHex = uid.toHex()
-        val am = AssetManager(adminKey = writeTagAdminKey)
+        val am = AssetManager(context = getApplication(), adminKeyStorage = adminKeyStorage!!)
         Log.i("IssueWriteFlow", "processStandaloneWrite start uid=$uidHex asset=$writeTagAssetName")
         val currentMasterKey = resolveInitialMasterKey()
             .getOrElse { return Result.failure(it) }
@@ -1706,7 +1711,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private suspend fun processIssueAndWrite(tag: android.nfc.Tag, uid: ByteArray): Result<WriteTagKeys> {
         val args = pendingWriteArgs ?: return Result.failure(Exception("Parametri di emissione mancanti"))
         val uidHex = uid.toHex()
-        val am = AssetManager(adminKey = writeTagAdminKey)
+        val am = AssetManager(context = getApplication(), adminKeyStorage = adminKeyStorage!!)
         val fullName = args.fullAssetName
         Log.i("IssueWriteFlow", "processIssueAndWrite start asset=$fullName uid=$uidHex kind=${args.assetKind}")
         val currentMasterKey = resolveInitialMasterKey()
@@ -1866,7 +1871,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } catch (_: Exception) { currentVerifyUrl }
 
             val healthy = withContext(Dispatchers.IO) {
-                io.raventag.app.wallet.AssetManager(apiBaseUrl = tagBaseUrl).checkHealth()
+                io.raventag.app.wallet.AssetManager(context = getApplication(), apiBaseUrl = tagBaseUrl, adminKeyStorage = adminKeyStorage!!).checkHealth()
             }
 
             if (!healthy) {
@@ -1893,7 +1898,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (asset != null) {
                 verifyStep = VerifyStep.CHECKING_BLOCKCHAIN
                 val response = withContext(Dispatchers.IO) {
-                    io.raventag.app.wallet.AssetManager(apiBaseUrl = currentVerifyUrl)
+                    io.raventag.app.wallet.AssetManager(context = getApplication(), apiBaseUrl = currentVerifyUrl, adminKeyStorage = adminKeyStorage!!)
                         .verifyTag(asset, e, m)
                 }
                 // CRIT-1: update client-side counter cache for defense-in-depth replay detection
@@ -1975,7 +1980,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
                 // Check revocation status from the backend database
                 val revocationStatus = withContext(Dispatchers.IO) {
-                    io.raventag.app.wallet.AssetManager(apiBaseUrl = currentVerifyUrl).checkRevocationStatus(assetName)
+                    io.raventag.app.wallet.AssetManager(context = getApplication(), apiBaseUrl = currentVerifyUrl, adminKeyStorage = adminKeyStorage!!).checkRevocationStatus(assetName)
                 }
                 val revoked = revocationStatus.revoked
 
@@ -2152,10 +2157,13 @@ class MainActivity : FragmentActivity() {
 
         val walletManager = WalletManager(applicationContext)
         val assetManager = AssetManager(context = applicationContext, adminKeyStorage = adminKeyStorage)
-        viewModel.initWallet(walletManager, assetManager)
+        viewModel.initWallet(walletManager, assetManager, adminKeyStorage)
 
         // Create notification channel (safe to call on every start, system ignores duplicates)
         NotificationHelper.createChannel(this)
+
+        // Create transaction progress notification channel
+        TransactionNotificationHelper.createChannel(applicationContext)
 
 
         // Schedule periodic wallet polling every 15 minutes.
@@ -3079,11 +3087,10 @@ fun RavenTagApp(
                         onKuboNodeUrlSave = onKuboNodeUrlSave,
                         currentAdminKey = savedAdminKey,
                         onAdminKeySave = { key ->
-                            lifecycleScope.launch {
+                            viewModel.viewModelScope.launch {
                                 val status = viewModel.validateAdminKey(key, viewModel.currentVerifyUrl)
-                                if (status is MainViewModel.AdminKeyStatus.VALID) {
-                                    adminKeyStorage.setAdminKey(key)
-                                    savedAdminKey = key
+                                if (status == MainViewModel.AdminKeyStatus.VALID) {
+                                    viewModel.adminKeyStorage?.setAdminKey(key)
                                 }
                             }
                         },
