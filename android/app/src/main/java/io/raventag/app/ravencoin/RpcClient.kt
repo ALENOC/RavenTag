@@ -17,17 +17,29 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import io.raventag.app.BuildConfig
 import io.raventag.app.network.NetworkModule
+import kotlinx.coroutines.suspendCancellableCoroutine
 import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
 /**
  * Suspend extension function for OkHttp Call.
- * Converts blocking execute() to suspend by using withContext(Dispatchers.IO).
- * This allows the blocking network call to run on IO dispatcher without blocking the caller.
+ * Converts blocking execute() to suspend using suspendCancellableCoroutine.
+ * Automatically handles coroutine cancellation by cancelling the call.
  */
-suspend fun Call.executeSuspend(): Response = withContext(Dispatchers.IO) {
-    execute()
+suspend fun Call.executeSuspend(): Response = suspendCancellableCoroutine { continuation ->
+    enqueue(object : Callback {
+        override fun onFailure(call: Call, e: IOException) {
+            continuation.resumeWithException(e)
+        }
+
+        override fun onResponse(call: Call, response: Response) {
+            continuation.resume(response)
+        }
+    })
+    continuation.invokeOnCancellation {
+        cancel()
+    }
 }
 
 data class RaventagMetadata(
