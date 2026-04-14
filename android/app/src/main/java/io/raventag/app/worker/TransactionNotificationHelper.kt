@@ -144,7 +144,7 @@ object TransactionNotificationHelper {
             .setOngoing(false)
             .setAutoCancel(true)
             .addAction(
-                R.drawable.ic_refresh,
+                R.mipmap.ic_launcher,
                 "Retry",
                 retryPendingIntent
             )
