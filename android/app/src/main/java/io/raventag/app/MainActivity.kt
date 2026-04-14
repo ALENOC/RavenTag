@@ -185,6 +185,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** Error from the last failed wallet restore (invalid mnemonic, network failure). */
     var restoreError by mutableStateOf<String?>(null)
 
+
+    // ── Transaction details (per D-04) ────────────────────────────────────────
+
+    /** Transaction ID for transaction details screen (per D-04) */
+    var viewingTxid by mutableStateOf<String?>(null)
+
+    /** True when viewing transaction details overlay */
+    var isViewingTransaction by mutableStateOf(false)
+
     // ── Issue / revoke / register / transfer state ────────────────────────────
 
     /** Currently active issue/revoke/transfer mode (null = no overlay shown). */
@@ -232,6 +241,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val prefs = getApplication<Application>().getSharedPreferences("raventag_app", Application.MODE_PRIVATE)
         val langCode = prefs.getString("language", "en") ?: "en"
         return appStringsFor(langCode)
+    }
+
+    fun handleViewTransactionIntent(txid: String) {
+        viewingTxid = txid
+        isViewingTransaction = true
     }
 
     /** Admin or operator key passed to the backend during chip registration. */
@@ -2542,6 +2556,14 @@ class MainActivity : FragmentActivity() {
      * @param intent The NFC or deep-link intent to handle
      */
     private fun handleIntent(intent: Intent) {
+        // Handle VIEW_TRANSACTION intent from notification (per D-04)
+        if (intent.action == TransactionNotificationHelper.ACTION_VIEW_TRANSACTION_EXT) {
+            val txid = intent.getStringExtra(TransactionNotificationHelper.EXTRA_TXID_EXT)
+            if (txid != null) {
+                viewModel.handleViewTransactionIntent(txid)
+            }
+        }
+
         // Extract the Tag object in an API-level-safe way (getParcelableExtra deprecated in API 33)
         val tag = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
             intent.getParcelableExtra(NfcAdapter.EXTRA_TAG, android.nfc.Tag::class.java)
@@ -2814,6 +2836,15 @@ fun RavenTagApp(
     }
 
     // Register chip is now integrated into the "Program NFC Tag" flow, no separate overlay needed.
+
+    // ── Transaction details overlay (per D-04) ────────────────────────────────
+    if (viewModel.isViewingTransaction && viewModel.viewingTxid != null) {
+        TransactionDetailsScreen(
+            txid = viewModel.viewingTxid!!,
+            onClose = { viewModel.isViewingTransaction = false }
+        )
+        return
+    }
 
     // ── Transfer overlay ──────────────────────────────────────────────────────
     // Handles token transfers, root-asset transfers, and sub-asset transfers.
