@@ -6,15 +6,29 @@ import com.google.gson.Gson
 import com.google.gson.JsonObject
 import com.google.gson.annotations.SerializedName
 import io.raventag.app.ipfs.IpfsResolver
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
 import io.raventag.app.BuildConfig
 import io.raventag.app.network.NetworkModule
 import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+
+/**
+ * Suspend extension function for OkHttp Call.
+ * Converts blocking execute() to suspend by using withContext(Dispatchers.IO).
+ * This allows the blocking network call to run on IO dispatcher without blocking the caller.
+ */
+suspend fun Call.executeSuspend(): Response = withContext(Dispatchers.IO) {
+    execute()
+}
 
 data class RaventagMetadata(
     @SerializedName("raventag_version") val raventagVersion: String,
