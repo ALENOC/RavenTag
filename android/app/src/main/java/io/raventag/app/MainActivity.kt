@@ -1584,27 +1584,54 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             sendLoading = true
             sendFeeUnavailable = false
+
             try {
-                val result = withContext(Dispatchers.IO) { wm.sendRvnLocal(toAddress, amount) }
+                // Show broadcasting notification (D-03, D-05)
+                TransactionNotificationHelper.showBroadcasting(applicationContext)
+
+                // Execute send with retry (D-06)
+                val result = RetryUtils.retryWithBackoff {
+                    withContext(Dispatchers.IO) { wm.sendRvnLocal(toAddress, amount) }
+                }
+
                 val txid = result.substringBefore("|fee:")
                 val feeRvn = result.substringAfter("|fee:", "0").toLongOrNull()?.let { it / 1e8 } ?: 0.0
-                val s = getStrings()
+
+                // Show confirming notification (waiting for blocks)
+                TransactionNotificationHelper.showConfirming(applicationContext, 1, 1)
+
+                // Brief delay to allow user to see confirming state, then show completed
+                kotlinx.coroutines.delay(2000)
+
+                // Show completed notification (D-03, D-04, D-05)
+                TransactionNotificationHelper.showCompleted(applicationContext, txid)
+
+                // Update UI state
                 sendLoading = false
                 sendSuccess = true
                 sendResult = s.walletSendResult.replace("%1", amount.toString())
                     .replace("%2", "%.5f".format(feeRvn))
                     .replace("%3", "${txid.take(20)}...")
+
                 // Update displayed address (rotated after send)
                 walletInfo = walletInfo?.copy(address = wm.getCurrentAddress() ?: walletInfo?.address ?: "")
+
+                // Refresh balance after send
                 loadWalletBalance()
             } catch (e: io.raventag.app.wallet.FeeUnavailableException) {
                 sendLoading = false
                 sendFeeUnavailable = true
+                TransactionNotificationHelper.showFailed(applicationContext, "Fee unavailable: ${e.message}")
             } catch (e: Throwable) {
+                // Show failed notification (D-05, D-06)
+                TransactionNotificationHelper.showFailed(applicationContext, "Send failed: ${e.message}")
+
                 val s = getStrings()
                 sendLoading = false
                 sendSuccess = false
-                sendResult = e.message ?: s.walletSendFailed
+                sendResult = s.walletSendError.replace("%1", e.message ?: "Unknown error")
+
+                android.util.Log.e("MainActivity", "sendRvn failed", e)
             }
         }
     }
@@ -1654,19 +1681,49 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val wm = walletManager ?: run { issueSuccess = false; issueResult = s.walletNoWallet; return }
         viewModelScope.launch {
             issueLoading = true
+
             try {
-                val txid = withContext(Dispatchers.IO) { wm.transferAssetLocal(assetName, toAddress, qty.toDouble()) }
+                // Show broadcasting notification (D-03, D-05)
+                TransactionNotificationHelper.showBroadcasting(applicationContext)
+
+                // Execute transfer with retry (D-06)
+                val txid = RetryUtils.retryWithBackoff {
+                    withContext(Dispatchers.IO) {
+                        wm.transferAssetLocal(assetName, toAddress, qty.toDouble())
+                    }
+                }
+
+                // Show confirming notification (waiting for blocks)
+                TransactionNotificationHelper.showConfirming(applicationContext, 1, 1)
+
+                // Brief delay to allow user to see confirming state, then show completed
+                kotlinx.coroutines.delay(2000)
+
+                // Show completed notification (D-03, D-04, D-05)
+                TransactionNotificationHelper.showCompleted(applicationContext, txid)
+
+                // Update UI state
                 val s = getStrings()
                 issueLoading = false
                 issueSuccess = true
                 issueResult = s.walletTransferResult.replace("%1", assetName).replace("%2", "${txid.take(20)}...")
+
                 // Update displayed address (rotated after transfer)
                 walletInfo = walletInfo?.copy(address = wm.getCurrentAddress() ?: walletInfo?.address ?: "")
+
+                // Reload balance and assets after transfer
+                loadWalletBalance()
+                loadOwnedAssets()
             } catch (e: Throwable) {
+                // Show failed notification (D-05, D-06)
+                TransactionNotificationHelper.showFailed(applicationContext, "Transfer failed: ${e.message}")
+
                 val s = getStrings()
                 issueLoading = false
                 issueSuccess = false
-                issueResult = e.message ?: s.walletTransferFailed
+                issueResult = s.walletTransferError.replace("%1", e.message ?: "Unknown error")
+
+                android.util.Log.e("MainActivity", "transferAssetConsumer failed", e)
             }
         }
     }
