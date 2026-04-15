@@ -6,41 +6,18 @@ import com.google.gson.Gson
 import com.google.gson.JsonObject
 import com.google.gson.annotations.SerializedName
 import io.raventag.app.ipfs.IpfsResolver
+import io.raventag.app.network.executeSuspend
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import okhttp3.Call
-import okhttp3.Callback
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
-import okhttp3.Response
 import io.raventag.app.BuildConfig
 import io.raventag.app.network.NetworkModule
-import kotlinx.coroutines.suspendCancellableCoroutine
 import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
-
-/**
- * Suspend extension function for OkHttp Call.
- * Converts blocking execute() to suspend using suspendCancellableCoroutine.
- * Automatically handles coroutine cancellation by cancelling the call.
- */
-suspend fun Call.executeSuspend(): Response = suspendCancellableCoroutine { continuation ->
-    enqueue(object : Callback {
-        override fun onFailure(call: Call, e: IOException) {
-            continuation.resumeWithException(e)
-        }
-
-        override fun onResponse(call: Call, response: Response) {
-            continuation.resume(response)
-        }
-    })
-    continuation.invokeOnCancellation {
-        cancel()
-    }
-}
 
 data class RaventagMetadata(
     @SerializedName("raventag_version") val raventagVersion: String,
@@ -194,7 +171,7 @@ class RpcClient(
     /**
      * Fetch metadata JSON from IPFS gateway.
      */
-    fun fetchIpfsMetadata(ipfsUri: String): RaventagMetadata? {
+    suspend fun fetchIpfsMetadata(ipfsUri: String): RaventagMetadata? {
         val urls = IpfsResolver.candidateUrls(ipfsUri).ifEmpty {
             when {
                 ipfsUri.startsWith("ipfs://") -> listOf(ipfsGateway + ipfsUri.removePrefix("ipfs://"))
@@ -205,7 +182,7 @@ class RpcClient(
         urls.forEach { url ->
             runCatching {
                 val request = Request.Builder().url(url).get().build()
-                val response = http.newCall(request).execute()
+                val response = http.newCall(request).executeSuspend()
                 if (!response.isSuccessful) {
                     Log.w(TAG, "fetchIpfsMetadata $ipfsUri via $url http=${response.code}")
                     return@runCatching null
@@ -222,12 +199,12 @@ class RpcClient(
     /**
      * Search assets by name pattern via backend proxy.
      */
-    fun searchAssets(query: String): List<String> {
+    suspend fun searchAssets(query: String): List<String> {
         return try {
             val request = Request.Builder()
                 .url("$rpcUrl/api/assets?search=${query.uppercase()}")
                 .get().build()
-            val response = http.newCall(request).execute()
+            val response = http.newCall(request).executeSuspend()
             if (!response.isSuccessful) return emptyList()
             val obj = gson.fromJson(response.body?.string(), JsonObject::class.java)
             val arr = obj["assets"]?.asJsonArray ?: return emptyList()
@@ -270,7 +247,7 @@ class RpcClient(
      * IPFS metadata is cached by IPFS hash to avoid redundant network calls
      * while ensuring each asset gets its own correct metadata.
      */
-    fun enrichWithIpfsData(asset: OwnedAsset): OwnedAsset {
+    suspend fun enrichWithIpfsData(asset: OwnedAsset): OwnedAsset {
         // Use ipfsHash already fetched in listAssetsByAddress when available,
         // falling back to a fresh getAssetData call only if needed.
         val hash = asset.ipfsHash ?: run {
@@ -294,7 +271,7 @@ class RpcClient(
             data class Result(val imageUrl: String?, val description: String?)
             val found: Result? = try {
                 val req = Request.Builder().url(url).get().build()
-                http.newCall(req).execute().use { resp ->
+                http.newCall(req).executeSuspend().use { resp ->
                     if (!resp.isSuccessful) {
                         Log.w(TAG, "enrichWithIpfsData ${asset.name} HTTP ${resp.code} via $url")
                         return@use null
@@ -338,7 +315,7 @@ class RpcClient(
     /**
      * Get asset with RTP-1 metadata.
      */
-    fun getAssetWithMetadata(assetName: String): Pair<AssetData, RaventagMetadata?>? {
+    suspend fun getAssetWithMetadata(assetName: String): Pair<AssetData, RaventagMetadata?>? {
         val asset = getAssetData(assetName) ?: return null
         val metadata = asset.ipfsHash?.let {
             try { fetchIpfsMetadata("ipfs://$it") } catch (e: Exception) { null }
