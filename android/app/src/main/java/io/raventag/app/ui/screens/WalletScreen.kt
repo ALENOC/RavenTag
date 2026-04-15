@@ -490,7 +490,7 @@ private fun AssetCard(s: AppStrings, asset: OwnedAsset, onPreview: (() -> Unit)?
 }
 
 @Composable
-private fun IpfsPreviewImage(
+internal fun IpfsPreviewImage(
     urls: List<String>,
     contentDescription: String,
     modifier: Modifier = Modifier,
@@ -528,18 +528,39 @@ private fun IpfsPreviewImage(
                         return@LaunchedEffect
                     }
 
-                    // Step 2: all direct URLs failed, try JSON metadata parsing on each gateway
+                    // Step 2: all direct URLs failed, try JSON metadata parsing on each gateway.
+                    // The JSON may contain an image field that is either:
+                    //   - a full HTTP URL
+                    //   - a bare CID (which needs to be resolved against all gateways)
                     val result = withContext(Dispatchers.IO) {
+                        val client = NetworkModule.getHttpClient(context)
                         urls.firstNotNullOfOrNull { url ->
                             try {
                                 val req = Request.Builder().url(url).header("Accept", "application/json").get().build()
-                                NetworkModule.getHttpClient(context).newCall(req).execute().use { resp ->
+                                client.newCall(req).execute().use { resp ->
                                     if (!resp.isSuccessful) return@use null
                                     val body = resp.body?.string() ?: ""
                                     val json = com.google.gson.JsonParser.parseString(body).asJsonObject
                                     val img = listOf("image", "image_url", "icon", "logo")
                                         .firstNotNullOfOrNull { k -> json[k]?.takeIf { !it.isJsonNull }?.asString }
-                                    img?.let { if (it.startsWith("http")) it else IpfsResolver.primaryUrl(it) }
+                                    img?.let { rawImg ->
+                                        when {
+                                            rawImg.startsWith("http") -> rawImg
+                                            else -> {
+                                                // rawImg is a bare CID, ipfs://..., or /ipfs/...
+                                                // Resolve it against ALL gateways and try each one
+                                                val candidates = IpfsResolver.candidateUrls(rawImg)
+                                                candidates.firstNotNullOfOrNull { candidateUrl ->
+                                                    try {
+                                                        val imgReq = Request.Builder().url(candidateUrl).get().build()
+                                                        client.newCall(imgReq).execute().use { imgResp ->
+                                                            if (imgResp.isSuccessful) candidateUrl else null
+                                                        }
+                                                    } catch (_: Exception) { null }
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             } catch (_: Exception) { null }
                         }
