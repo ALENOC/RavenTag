@@ -57,12 +57,20 @@ object IpfsResolver {
      * ALL configured gateways. This provides resilience even if the brand
      * metadata pointed to a specific dead gateway.
      *
+     * If the input is already a direct HTTP URL that does NOT contain an IPFS
+     * path segment, it is returned as the sole candidate (for non-IPFS images).
+     *
      * @param ipfsRef The IPFS reference to resolve.
      * @return Ordered list of candidate HTTP URLs; callers should try them in sequence.
      */
     fun candidateUrls(ipfsRef: String): List<String> {
         val normalized = ipfsRef.trim()
         if (normalized.isEmpty()) return emptyList()
+
+        // If it's already a direct HTTP URL with no IPFS path, use it as-is
+        if (normalized.startsWith("http") && !normalized.contains("/ipfs/") && !normalized.contains(".ipfs.")) {
+            return listOf(normalized)
+        }
 
         // Extract the raw CID from various known formats.
         val cid = when {

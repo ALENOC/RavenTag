@@ -290,8 +290,8 @@ class RpcClient(
                         when {
                             img.startsWith("http") -> img
                             img.startsWith("ipfs://") -> img
-                            img.startsWith("/ipfs/") -> "ipfs://${img.removePrefix("/ipfs/")}"
-                            else -> "ipfs://$img"
+                            img.startsWith("/ipfs/") -> img.removePrefix("/ipfs/")
+                            else -> img  // Already a bare CID
                         }
                     }
                     val description = json["description"]?.takeIf { !it.isJsonNull }?.asString
