@@ -20,12 +20,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.runtime.remember
-import androidx.compose.ui.platform.LocalContext
-import coil.compose.SubcomposeAsyncImage
 import io.raventag.app.BuildConfig
 import io.raventag.app.ipfs.IpfsResolver
-import io.raventag.app.network.NetworkModule
 import io.raventag.app.ravencoin.RaventagMetadata
 import io.raventag.app.ui.theme.*
 
@@ -214,10 +210,8 @@ private fun AssetInfoCard(result: VerifyResult, s: AppStrings) {
     val meta = result.metadata ?: return
     val hierarchy = listOfNotNull(meta.parentAsset, meta.subAsset, meta.variantAsset).joinToString(" / ")
 
-    val imageUrl = meta.image?.let { IpfsResolver.primaryUrl(it) }
+    val imageCandidates = meta.image?.let { IpfsResolver.candidateUrls(it) } ?: emptyList()
     val description = meta.description ?: meta.brandInfo?.description
-    val context = LocalContext.current
-    val imageLoader = remember(context) { NetworkModule.getImageLoader(context) }
 
     Card(
         colors = CardDefaults.cardColors(containerColor = RavenCard),
@@ -231,16 +225,16 @@ private fun AssetInfoCard(result: VerifyResult, s: AppStrings) {
                 Text(s.verifyAssetInfo, fontWeight = FontWeight.SemiBold, color = Color.White)
             }
 
-            if (imageUrl != null) {
-                SubcomposeAsyncImage(
-                    model = imageUrl,
-                    imageLoader = imageLoader,
+            if (imageCandidates.isNotEmpty()) {
+                IpfsPreviewImage(
+                    urls = imageCandidates,
                     contentDescription = "Token image",
-                    contentScale = ContentScale.Crop,
                     modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(max = 220.dp)
                         .clip(RoundedCornerShape(12.dp)),
+                    contentScale = ContentScale.Crop,
+                    fallback = { /* silent: no image shown on load error */ },
                     loading = {
                         Box(
                             modifier = Modifier
@@ -251,8 +245,7 @@ private fun AssetInfoCard(result: VerifyResult, s: AppStrings) {
                         ) {
                             CircularProgressIndicator(color = RavenOrange, modifier = Modifier.size(28.dp), strokeWidth = 2.dp)
                         }
-                    },
-                    error = { /* silent: no image shown on load error */ }
+                    }
                 )
             }
 
