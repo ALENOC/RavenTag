@@ -23,6 +23,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
+import io.raventag.app.ravencoin.OwnedAsset
 
 class WalletManager(private val context: Context) {
 
@@ -2007,6 +2008,94 @@ suspend fun consolidateAllFundsToFreshAddress(): String? = withContext(Dispatche
         null
     } finally {
         keyPairs.values.forEach { (priv, _) -> priv.fill(0) }
+    }
+}
+
+/**
+ * Get owned assets for all wallet addresses.
+ *
+ * Uses ElectrumX batch API to fetch asset balances for all addresses.
+ * Returns list of assets sorted by type and name.
+ *
+ * @return List of owned assets with name, balance, and type
+ */
+suspend fun getOwnedAssets(): List<OwnedAsset> = withContext(Dispatchers.IO) {
+    val node = RavencoinPublicNode(context)
+    val currentIndex = getCurrentAddressIndex()
+    val addresses = getAddressBatch(0, 0..currentIndex).values.toList()
+
+    if (addresses.isEmpty()) return@withContext emptyList()
+
+    android.util.Log.i("WalletManager", "Fetching owned assets for ${addresses.size} addresses")
+
+    try {
+        val totals = node.getTotalAssetBalances(addresses)
+
+        totals.map { (name, amount) ->
+            val type = when {
+                name.contains('#') -> io.raventag.app.ravencoin.AssetType.UNIQUE
+                name.contains('/') -> io.raventag.app.ravencoin.AssetType.SUB
+                else -> io.raventag.app.ravencoin.AssetType.ROOT
+            }
+            io.raventag.app.ravencoin.OwnedAsset(
+                name = name,
+                balance = amount,
+                type = type,
+                ipfsHash = null
+            )
+        }.sortedWith(compareBy({ it.type.ordinal }, { it.name }))
+    } catch (e: Exception) {
+        android.util.Log.e("WalletManager", "Failed to fetch owned assets", e)
+        emptyList()
+    }
+}
+
+/**
+ * Get transaction history for all wallet addresses.
+ *
+ * Uses ElectrumX blockchain.address.subscribe to fetch transaction history.
+ * Returns list of transactions sorted by height (descending, newest first).
+ *
+ * @return List of transaction history entries with txid, amount, confirmations
+ */
+suspend fun getTransactionHistory(): List<TxHistoryEntry> = withContext(Dispatchers.IO) {
+    val node = RavencoinPublicNode(context)
+    val currentIndex = getCurrentAddressIndex()
+    val addresses = getAddressBatch(0, 0..currentIndex).values.toList()
+
+    if (addresses.isEmpty()) return@withContext emptyList()
+
+    android.util.Log.i("WalletManager", "Fetching transaction history for ${addresses.size} addresses")
+
+    try {
+        val historyEntries = mutableListOf<TxHistoryEntry>()
+
+        // Fetch history for each address using ElectrumX
+        for (address in addresses) {
+            try {
+                val history = node.getTransactionHistory(address)
+                historyEntries.addAll(history)
+            } catch (e: Exception) {
+                android.util.Log.w("WalletManager", "Failed to fetch history for $address", e)
+                // Continue with next address
+            }
+        }
+
+        // Deduplicate by txid (same tx may appear in multiple address histories)
+        val deduped = historyEntries.distinctBy { it.txid }
+
+        // Sort by block height descending (newest first)
+        val sorted = deduped.sortedWith(
+            compareByDescending<TxHistoryEntry> {
+                if (it.height <= 0) Int.MAX_VALUE else it.height
+            }.thenByDescending { it.timestamp }
+        )
+
+        android.util.Log.i("WalletManager", "Loaded ${sorted.size} transactions from history")
+        sorted
+    } catch (e: Exception) {
+        android.util.Log.e("WalletManager", "Failed to fetch transaction history", e)
+        emptyList()
     }
 }
 
