@@ -50,6 +50,7 @@ fun SendRvnScreen(
     resultMessage: String?,
     resultSuccess: Boolean?,
     feeUnavailable: Boolean = false,
+    estimatedFee: Double = 0.0,
     prefillAddress: String = "",
     donateMode: Boolean = false,
     walletBalance: Double = 0.0,
@@ -113,15 +114,27 @@ fun SendRvnScreen(
             title = { Text(s.walletSendDialogTitle, color = Color.White, fontWeight = FontWeight.Bold) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    // Replace %1 with the formatted amount and %2 with the address.
-                    Text(
-                        s.walletSendDialogMsg
-                            .replace("%1", "%.8f".format(parsedAmount))
-                            .replace("%2", toAddress),
-                        color = RavenMuted,
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                    // Irreversibility warning in red.
+                    // Amount row
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Amount:", color = RavenMuted, style = MaterialTheme.typography.bodyMedium)
+                        Text("%.8f RVN".format(parsedAmount), color = Color.White, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                    }
+                    // Recipient address row
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("To:", color = RavenMuted, style = MaterialTheme.typography.bodyMedium)
+                        Text(toAddress.take(16) + if (toAddress.length > 16) "..." else "", color = Color.White, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                    }
+                    // Network fee row (per D-07)
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Network fee:", color = RavenMuted, style = MaterialTheme.typography.bodyMedium)
+                        if (feeUnavailable) {
+                            Text("Unavailable", color = RavenOrange, style = MaterialTheme.typography.bodySmall)
+                        } else {
+                            Text("%.8f RVN".format(estimatedFee), color = Color.White, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    // Irreversibility warning in red
                     Text(s.walletSendWarning, color = NotAuthenticRed.copy(alpha = 0.8f), style = MaterialTheme.typography.bodySmall)
                 }
             },

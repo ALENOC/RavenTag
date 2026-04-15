@@ -1550,6 +1550,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** True when the fee estimate is unavailable (ElectrumX offline or no UTXOs). */
     var sendFeeUnavailable by mutableStateOf(false)
 
+    /** Estimated network fee for the pending send operation, in RVN. */
+    var estimatedFee by mutableStateOf(0.0)
+
     /** True when the Receive QR-code overlay is shown. */
     var showReceive by mutableStateOf(false)
 
@@ -2948,6 +2951,7 @@ fun RavenTagApp(
             resultMessage = viewModel.sendResult,
             resultSuccess = viewModel.sendSuccess,
             feeUnavailable = viewModel.sendFeeUnavailable,
+            estimatedFee = viewModel.estimatedFee,
             prefillAddress = if (viewModel.donateMode) viewModel.donateAddress else "",
             donateMode = viewModel.donateMode,
             walletBalance = viewModel.walletInfo?.balanceRvn ?: 0.0,
@@ -2957,6 +2961,7 @@ fun RavenTagApp(
                 viewModel.sendResult = null
                 viewModel.sendSuccess = null
                 viewModel.sendFeeUnavailable = false
+                viewModel.estimatedFee = 0.0
             },
             onSend = viewModel::sendRvn
         )
