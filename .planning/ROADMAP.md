@@ -33,8 +33,9 @@ Phase 50: Backend Stability
 - derive-chip-key payload never logged
 
 **Plans:**
-3/4 plans complete
-- [ ] 10-02-PLAN.md — Persist TOFU fingerprints in SQLite for MITM protection across restarts
+4/4 plans complete
+- [x] 10-01-PLAN.md — Admin Key Migration (BuildConfig → EncryptedSharedPreferences)
+- [x] 10-02-PLAN.md — Persist TOFU fingerprints in SQLite for MITM protection across restarts
 - [x] 10-03-PLAN.md — Replace SELECT * queries with explicit column lists in backend
 - [x] 10-04-PLAN.md — Verify and prevent logging of derive-chip-key payloads
 
@@ -55,6 +56,15 @@ Phase 50: Backend Stability
 - Send operations show loading state, not blocking UI
 - No ANRs during normal operations
 
+**Plans:**
+3/6 plans executed
+- [x] 20-01-PLAN.md — Convert OkHttp execute() calls to suspend functions using suspendCancellableCoroutine
+- [x] 20-02-PLAN.md — Create TransactionNotificationHelper for send operation progress notifications
+- [x] 20-03-PLAN.md — Create retryWithBackoff utility with exponential backoff for transient failures
+- [ ] 20-04-PLAN.md — Implement parallel wallet restore with async/awaitAll for ~3x speedup
+- [ ] 20-05-PLAN.md — Integrate notifications into send operations (RVN and asset transfers) with retry
+- [ ] 20-06-PLAN.md — Implement loading UI patterns (full-screen spinner, button spinner) and error handling
+
 ---
 
 ## Phase 30: Wallet Reliability
@@ -73,6 +83,9 @@ Phase 50: Backend Stability
 - Mnemonic can be safely exported/imported
 - Keystore protected from extraction
 
+**Plans:**
+Not yet planned
+
 ---
 
 ## Phase 40: Asset Emission UX
@@ -87,6 +100,9 @@ Phase 50: Backend Stability
 - Asset issuance failures have actionable error messages
 - User feedback for success/failure is clear
 - No silent failures during issuance
+
+**Plans:**
+Not yet planned
 
 ---
 
@@ -107,6 +123,9 @@ Phase 50: Backend Stability
 - listassets has enforced pagination
 - Database tables don't grow unbounded
 - SQLite backups use proper API, not file copies
+
+**Plans:**
+Not yet planned
 
 ---
 
@@ -132,4 +151,4 @@ Phase 50: Backend Stability
 **Target Release:** TBD
 
 *Created: 2026-04-13*
-*Updated: 2026-04-13 — Phase 10 plans created*
+*Updated: 2026-04-13 — Phase 20 plans created*
