@@ -28,6 +28,7 @@ import android.content.Intent
 import android.nfc.NfcAdapter
 import android.os.Bundle
 import android.util.Log
+import io.raventag.app.utils.RetryUtils
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
@@ -1017,13 +1018,35 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 walletInfo = WalletInfo(address = address, balanceRvn = 0.0, isLoading = true)
                 hasWallet = true
 
-                // Now load balance, assets, and history in parallel
-                loadWalletBalance()
-                loadOwnedAssets()
-                loadTransactionHistory()
+                // Parallel restore: load balance, assets, and history simultaneously
+                coroutineScope {
+                    val balanceDeferred = async(Dispatchers.IO) {
+                        RetryUtils.retryWithBackoff {
+                            loadWalletBalanceInternal(wm)
+                        }
+                    }
+
+                    val assetsDeferred = async(Dispatchers.IO) {
+                        RetryUtils.retryWithBackoff {
+                            loadOwnedAssetsInternal(wm)
+                        }
+                    }
+
+                    val historyDeferred = async(Dispatchers.IO) {
+                        RetryUtils.retryWithBackoff {
+                            loadTransactionHistoryInternal(wm)
+                        }
+                    }
+
+                    // Wait for all three operations to complete
+                    awaitAll(balanceDeferred, assetsDeferred, historyDeferred)
+                }
+
+                walletInfo = walletInfo?.copy(isLoading = false)
             } catch (e: Throwable) {
                 restoreError = "Restore failed: ${e.message}"
-                walletInfo = null
+                walletInfo = walletInfo?.copy(isLoading = false)
+                Log.e("MainViewModel", "Wallet restore failed", e)
             } finally {
                 walletGenerating = false
             }
@@ -1116,43 +1139,69 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         val wm = walletManager ?: run { isRefreshing.set(false); return }
 
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch {
             try {
-                // Sync index first: detects if another app flavor advanced currentIndex
-                // (e.g. consumer sent a tx while brand was open). Fast: 1-3 batch calls.
-                val indexChanged = try { wm.syncCurrentIndex() } catch (_: Exception) { false }
+                walletInfo = walletInfo?.copy(isLoading = true)
+
+                // Sync index first (sequential dependency)
+                val indexChanged = try {
+                    wm.syncCurrentIndex()
+                } catch (e: Exception) {
+                    Log.e("MainActivity", "syncCurrentIndex failed", e)
+                    false
+                }
+
                 if (indexChanged) {
                     val newAddress = wm.getCurrentAddress() ?: ""
                     withContext(Dispatchers.Main) {
                         walletInfo = walletInfo?.copy(address = newAddress)
                     }
-                    Log.i("MainActivity", "refreshBalance: index synced, new address=$newAddress")
                 }
-            } catch (e: Exception) {
-                Log.e("MainActivity", "syncCurrentIndex failed", e)
-            }
 
-            withContext(Dispatchers.Main) {
-                loadWalletBalance()
-                loadOwnedAssets()
-                loadTransactionHistory()
-            }
-
-            try {
-                Log.i("MainActivity", "Starting sweep sequence")
-                val txids = wm.sweepOldAddresses()
-                if (txids.isNotEmpty()) {
-                    Log.i("MainViewModel", "Auto-sweep completed: ${txids.size} transactions")
-                    withContext(Dispatchers.Main) {
-                        loadWalletBalance()
-                        loadOwnedAssets()
-                        loadTransactionHistory()
+                // Parallel refresh: balance, assets, and history simultaneously
+                coroutineScope {
+                    val balanceDeferred = async(Dispatchers.IO) {
+                        RetryUtils.retryWithBackoff {
+                            loadWalletBalanceInternal(wm)
+                        }
                     }
+
+                    val assetsDeferred = async(Dispatchers.IO) {
+                        RetryUtils.retryWithBackoff {
+                            loadOwnedAssetsInternal(wm)
+                        }
+                    }
+
+                    val historyDeferred = async(Dispatchers.IO) {
+                        RetryUtils.retryWithBackoff {
+                            loadTransactionHistoryInternal(wm)
+                        }
+                    }
+
+                    awaitAll(balanceDeferred, assetsDeferred, historyDeferred)
+                }
+
+                walletInfo = walletInfo?.copy(isLoading = false)
+
+                // Sweep after parallel refresh (still sequential as before)
+                try {
+                    val txids = wm.sweepOldAddresses()
+                    if (txids.isNotEmpty()) {
+                        Log.i("MainViewModel", "Auto-sweep completed: ${txids.size} transactions")
+                        withContext(Dispatchers.Main) {
+                            loadWalletBalanceInternal(wm)
+                            loadOwnedAssetsInternal(wm)
+                            loadTransactionHistoryInternal(wm)
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.e("MainActivity", "Auto-sweep failed", e)
                 }
             } catch (e: Exception) {
-                Log.e("MainActivity", "Heal/sweep sequence failed", e)
+                Log.e("MainActivity", "refreshBalance failed", e)
             } finally {
                 isRefreshing.set(false)
+                walletInfo = walletInfo?.copy(isLoading = false)
             }
         }
     }
@@ -1185,6 +1234,111 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
             } catch (_: Throwable) {
                 walletInfo = walletInfo?.copy(isLoading = false)
+            }
+        }
+    }
+
+    // Extract existing load functions to internal versions for use in parallel restore
+    private suspend fun loadWalletBalanceInternal(wm: WalletManager) {
+        val balance = wm.getLocalBalance()
+        if (balance != null) {
+            withContext(Dispatchers.Main) {
+                walletInfo = walletInfo?.copy(balanceRvn = balance)
+            }
+        }
+    }
+
+    private suspend fun loadOwnedAssetsInternal(wm: WalletManager) {
+        assetsLoading = true
+        val currentIndex = wm.getCurrentAddressIndex()
+        val addresses = wm.getAddressBatch(0, 0..currentIndex).values.toList()
+        val node = io.raventag.app.wallet.RavencoinPublicNode(getApplication())
+
+        try {
+            // One Keystore decrypt + one pipelined batch for all asset balances
+            val totals = withContext(Dispatchers.IO) {
+                val (assets, _) = coroutineScope {
+                    val assetsDeferred = async { node.getTotalAssetBalances(addresses) }
+                    val rvnDeferred = async {
+                        try { node.getTotalBalance(addresses) } catch (_: Exception) { 0.0 }
+                    }
+
+                    Pair(assetsDeferred.await(), rvnDeferred.await())
+                }
+
+                assets.map { (name, amount) ->
+                    val type = when {
+                        name.contains('#') -> io.raventag.app.ravencoin.AssetType.UNIQUE
+                        name.contains('/') -> io.raventag.app.ravencoin.AssetType.SUB
+                        else -> io.raventag.app.ravencoin.AssetType.ROOT
+                    }
+                    io.raventag.app.ravencoin.OwnedAsset(
+                        name = name,
+                        balance = amount,
+                        type = type,
+                        ipfsHash = null
+                    )
+                }.sortedWith(compareBy({ it.type.ordinal }, { it.name }))
+            }
+
+            // Merge balances with already-loaded metadata so images never disappear on refresh
+            val previous = ownedAssets?.associateBy { it.name } ?: emptyMap()
+            val merged = totals.map { asset ->
+                val prev = previous[asset.name]
+                if (prev?.imageUrl != null) {
+                    asset.copy(ipfsHash = prev.ipfsHash, imageUrl = prev.imageUrl, description = prev.description)
+                } else {
+                    asset
+                }
+            }
+            withContext(Dispatchers.Main) {
+                ownedAssets = merged
+                assetsLoading = false
+            }
+            saveAssetsCache(merged)
+        } catch (_: Throwable) {
+            withContext(Dispatchers.Main) {
+                assetsLoadError = true
+                assetsLoading = false
+            }
+        }
+    }
+
+    private suspend fun loadTransactionHistoryInternal(wm: WalletManager) {
+        txHistoryLoading = true
+        val currentIndex = wm.getCurrentAddressIndex()
+        val node = io.raventag.app.wallet.RavencoinPublicNode(getApplication())
+
+        try {
+            // One Keystore decrypt for all addresses, then parallel ElectrumX queries
+            val allHistory = withContext(Dispatchers.IO) {
+                val addresses = wm.getAddressBatch(0, 0..currentIndex)
+                val deferreds = addresses.values.map { addr ->
+                    async {
+                        try { node.getTransactionHistory(addr, limit = txHistoryPageSize) }
+                        catch (_: Throwable) { emptyList() }
+                    }
+                }
+                deferreds.awaitAll().flatten()
+            }
+
+            // Deduplicate by txid (same tx may appear in multiple address histories)
+            val deduped = allHistory.distinctBy { it.txid }
+                .sortedWith(
+                    compareByDescending<io.raventag.app.wallet.TxHistoryEntry> {
+                        if (it.height <= 0) Int.MAX_VALUE else it.height
+                    }.thenByDescending { it.timestamp }
+                )
+
+            withContext(Dispatchers.Main) {
+                txHistory = deduped
+                txHistoryTotal = deduped.size
+                txHistoryLoadedCount = deduped.size
+                txHistoryLoading = false
+            }
+        } catch (_: Throwable) {
+            withContext(Dispatchers.Main) {
+                txHistoryLoading = false
             }
         }
     }
