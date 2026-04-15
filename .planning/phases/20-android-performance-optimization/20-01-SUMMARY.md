@@ -98,6 +98,14 @@ None - no new security surfaces introduced by this change. All threat mitigation
 - [x] All network operations are now suspend functions
 - [x] Android project builds successfully
 - [x] SUMMARY.md created in plan directory
+- [x] STATE.md updated with plan completion
+- [x] ROADMAP.md updated with phase progress
+- [x] Files created: OkHttpExtensions.kt, 20-01-SUMMARY.md
+- [x] Commits: b7509c5 (feat), a018ca0 (docs)
+
+## Next Steps
+
+The UI components that call these suspend functions need to wrap them with appropriate coroutine scopes (e.g., `viewModelScope.launch`, `LaunchedEffect`, or `rememberCoroutineScope`). This is handled in subsequent plans (20-02, 20-03, etc.).
 
 ## Next Steps
 
