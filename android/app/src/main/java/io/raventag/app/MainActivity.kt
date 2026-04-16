@@ -39,7 +39,10 @@ import androidx.fragment.app.FragmentActivity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -162,6 +165,55 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Human-readable error message for display in the UI (null = no error). */
     var errorMessage by mutableStateOf<String?>(null)
+
+    // ── Async error display state (per 20-UI-SPEC.md Error State Patterns) ─────
+    // These two properties back the top-level banner + dialog shown by
+    // [RavenTagApp]. Transient errors (timeout, network) auto-dismiss after a
+    // few seconds; critical errors are modal and require an explicit OK tap.
+
+    /** Transient error message shown as a dismissible banner with a Retry action. */
+    var transientError by mutableStateOf<String?>(null)
+
+    /** Critical error shown as a modal AlertDialog requiring user intervention. */
+    var criticalError by mutableStateOf<String?>(null)
+
+    /**
+     * Classify [throwable] via [RetryUtils.isTransientError] and surface it to the
+     * user through the appropriate UI pattern. Transient failures trigger a banner
+     * that auto-dismisses after 5 seconds; anything else becomes a modal dialog
+     * so the user explicitly acknowledges the failure.
+     */
+    fun reportAsyncError(throwable: Throwable, prefix: String? = null) {
+        val full = if (prefix != null) "$prefix: ${throwable.message ?: "Unknown error"}" else (throwable.message ?: "Unknown error")
+        val isTransient = throwable is Exception && RetryUtils.isTransientError(throwable)
+        if (isTransient) showTransientError(full) else showCriticalError(full)
+    }
+
+    /** Show a transient error banner that auto-dismisses after 5 seconds. */
+    fun showTransientError(message: String) {
+        transientError = message
+        viewModelScope.launch {
+            kotlinx.coroutines.delay(5000)
+            // Only clear if the user has not already dismissed (value could have
+            // changed to a newer message during the delay).
+            if (transientError == message) transientError = null
+        }
+    }
+
+    /** Show a critical error dialog that requires explicit dismissal. */
+    fun showCriticalError(message: String) {
+        criticalError = message
+    }
+
+    /** Clear the transient error banner (called from the banner Dismiss button). */
+    fun clearTransientError() {
+        transientError = null
+    }
+
+    /** Clear the critical error dialog (called from the dialog OK button). */
+    fun clearCriticalError() {
+        criticalError = null
+    }
 
     /** Backend base URL used for revocation checks and tag verification calls. */
     var currentVerifyUrl by mutableStateOf(BuildConfig.API_BASE_URL)
@@ -1631,6 +1683,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 sendSuccess = false
                 sendResult = s.walletSendError.replace("%1", e.message ?: "Unknown error")
 
+                // Classify error: transient (timeout, network) -> banner with auto-dismiss;
+                // non-transient (validation, wallet logic) -> modal dialog.
+                // Per 20-UI-SPEC.md Error State Patterns and Claude's discretion areas in 20-CONTEXT.md.
+                reportAsyncError(e, prefix = "Send failed")
+
                 android.util.Log.e("MainActivity", "sendRvn failed", e)
             }
         }
@@ -2952,6 +3009,37 @@ fun RavenTagApp(
         )
     }
 
+    // ── Critical error dialog (per 20-UI-SPEC.md Dialog Error pattern) ────────
+    // Shown for non-recoverable async failures (validation errors, wallet logic
+    // errors). The user must explicitly acknowledge before proceeding.
+    viewModel.criticalError?.let { msg ->
+        AlertDialog(
+            onDismissRequest = { viewModel.clearCriticalError() },
+            containerColor = Color(0xFF101020),
+            icon = {
+                Icon(
+                    imageVector = Icons.Default.Error,
+                    contentDescription = null,
+                    tint = Color(0xFFF87171)
+                )
+            },
+            title = { Text("Error", color = Color.White, fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    msg,
+                    color = RavenMuted,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = { viewModel.clearCriticalError() },
+                    colors = ButtonDefaults.buttonColors(containerColor = RavenOrange)
+                ) { Text("OK", fontWeight = FontWeight.Bold) }
+            }
+        )
+    }
+
     /**
      * Check the wallet balance before navigating to an issue screen.
      * If the balance is zero, show the no-funds warning dialog instead
@@ -3362,6 +3450,59 @@ fun RavenTagApp(
                         notificationsEnabled = notificationsEnabled,
                         onNotificationsEnabledChange = onNotificationsEnabledChange
                     )
+                }
+            }
+
+            // ── Transient error banner overlay ────────────────────────────────
+            // Drawn last inside the Box so it sits above all tab content.
+            // Auto-dismisses after 5s (see MainViewModel.showTransientError) or
+            // on explicit Dismiss tap. Used for recoverable errors (network
+            // timeout, transient failures) per 20-UI-SPEC.md Banner Error pattern.
+            viewModel.transientError?.let { msg ->
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(top = 16.dp, start = 16.dp, end = 16.dp),
+                    contentAlignment = androidx.compose.ui.Alignment.TopCenter
+                ) {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFF2D0A0A)),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFF87171).copy(alpha = 0.4f)),
+                        shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp)
+                    ) {
+                        androidx.compose.foundation.layout.Row(
+                            modifier = Modifier.fillMaxWidth().padding(16.dp),
+                            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                            horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(12.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Error,
+                                contentDescription = null,
+                                tint = Color(0xFFF87171),
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Text(
+                                text = msg,
+                                color = Color(0xFFF87171),
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Button(
+                                onClick = { viewModel.clearTransientError() },
+                                colors = ButtonDefaults.buttonColors(containerColor = RavenOrange),
+                                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                                modifier = Modifier.height(32.dp)
+                            ) {
+                                Text(
+                                    "Dismiss",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
