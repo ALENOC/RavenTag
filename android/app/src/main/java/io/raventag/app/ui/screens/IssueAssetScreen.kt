@@ -693,8 +693,15 @@ private fun RavenSwitch(label: String, checked: Boolean, onCheckedChange: (Boole
  * true to prevent double submission. The background color is dimmed to 30% opacity
  * when disabled to preserve the visual intent of the mode's accent color.
  *
+ * Implements the Button Loading Spinner pattern from 20-UI-SPEC.md (Phase 20 Plan 06):
+ *   - 20.dp white CircularProgressIndicator during IPFS upload or asset issuance
+ *     (loading = MainViewModel.issueLoading is forwarded in as the [loading] flag)
+ *   - 2.dp stroke width
+ *   - disabled container at 30% opacity (containerColor.copy(alpha = 0.3f))
+ *   - spinner replaces button label + icon while loading
+ *
  * @param text    Button label shown in the normal (non-loading) state.
- * @param loading Whether to show the spinner instead of the label.
+ * @param loading Whether to show the spinner instead of the label. Drives issueLoading.
  * @param enabled Whether the form is in a valid state for submission.
  * @param color   Accent color for this mode (orange for issue, green for unique, red for revoke).
  * @param onClick Invoked when the button is tapped in the enabled, non-loading state.
@@ -708,6 +715,8 @@ private fun SubmitButton(text: String, loading: Boolean, enabled: Boolean, color
         shape = RoundedCornerShape(14.dp)
     ) {
         if (loading) {
+            // Button Loading Spinner (per 20-UI-SPEC.md): 20.dp white spinner,
+            // 2.dp stroke, centered, visible while issueLoading is true.
             CircularProgressIndicator(color = Color.White, modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
         } else {
             Text(text, fontWeight = FontWeight.SemiBold)
