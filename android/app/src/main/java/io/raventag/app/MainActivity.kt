@@ -1587,7 +1587,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
             try {
                 // Show broadcasting notification (D-03, D-05)
-                TransactionNotificationHelper.showBroadcasting(applicationContext)
+                TransactionNotificationHelper.showBroadcasting(getApplication())
 
                 // Execute send with retry (D-06)
                 val result = RetryUtils.retryWithBackoff {
@@ -1598,13 +1598,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val feeRvn = result.substringAfter("|fee:", "0").toLongOrNull()?.let { it / 1e8 } ?: 0.0
 
                 // Show confirming notification (waiting for blocks)
-                TransactionNotificationHelper.showConfirming(applicationContext, 1, 1)
+                TransactionNotificationHelper.showConfirming(getApplication(), 1, 1)
 
                 // Brief delay to allow user to see confirming state, then show completed
                 kotlinx.coroutines.delay(2000)
 
                 // Show completed notification (D-03, D-04, D-05)
-                TransactionNotificationHelper.showCompleted(applicationContext, txid)
+                TransactionNotificationHelper.showCompleted(getApplication(), txid)
 
                 // Update UI state
                 sendLoading = false
@@ -1621,10 +1621,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } catch (e: io.raventag.app.wallet.FeeUnavailableException) {
                 sendLoading = false
                 sendFeeUnavailable = true
-                TransactionNotificationHelper.showFailed(applicationContext, "Fee unavailable: ${e.message}")
+                TransactionNotificationHelper.showFailed(getApplication(), "Fee unavailable: ${e.message}")
             } catch (e: Throwable) {
                 // Show failed notification (D-05, D-06)
-                TransactionNotificationHelper.showFailed(applicationContext, "Send failed: ${e.message}")
+                TransactionNotificationHelper.showFailed(getApplication(), "Send failed: ${e.message}")
 
                 val s = getStrings()
                 sendLoading = false
@@ -1684,7 +1684,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
             try {
                 // Show broadcasting notification (D-03, D-05)
-                TransactionNotificationHelper.showBroadcasting(applicationContext)
+                TransactionNotificationHelper.showBroadcasting(getApplication())
 
                 // Execute transfer with retry (D-06)
                 val txid = RetryUtils.retryWithBackoff {
@@ -1694,13 +1694,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
 
                 // Show confirming notification (waiting for blocks)
-                TransactionNotificationHelper.showConfirming(applicationContext, 1, 1)
+                TransactionNotificationHelper.showConfirming(getApplication(), 1, 1)
 
                 // Brief delay to allow user to see confirming state, then show completed
                 kotlinx.coroutines.delay(2000)
 
                 // Show completed notification (D-03, D-04, D-05)
-                TransactionNotificationHelper.showCompleted(applicationContext, txid)
+                TransactionNotificationHelper.showCompleted(getApplication(), txid)
 
                 // Update UI state
                 val s = getStrings()
@@ -1716,7 +1716,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 loadOwnedAssets()
             } catch (e: Throwable) {
                 // Show failed notification (D-05, D-06)
-                TransactionNotificationHelper.showFailed(applicationContext, "Transfer failed: ${e.message}")
+                TransactionNotificationHelper.showFailed(getApplication(), "Transfer failed: ${e.message}")
 
                 val s = getStrings()
                 issueLoading = false
