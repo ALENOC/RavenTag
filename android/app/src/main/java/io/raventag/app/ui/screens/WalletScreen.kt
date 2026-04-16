@@ -180,12 +180,90 @@ fun WalletScreen(
         }
     }
 
+    // Full-screen loading during wallet restore (per UI-SPEC.md).
+    // Shown when the wallet is being generated or an initial restore is in progress.
+    // Keeps the screen simple and gives a clear signal that heavy work is happening.
+    if (hasWallet && walletInfo?.isLoading == true && walletInfo.balanceRvn == 0.0 && ownedAssets.isNullOrEmpty()) {
+        Box(
+            modifier = modifier.fillMaxSize().background(RavenBg),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(40.dp),
+                    color = RavenOrange,
+                    strokeWidth = 3.dp
+                )
+                Text(
+                    text = s.walletLoading,
+                    color = RavenMuted,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
+        }
+        return
+    }
+
     LazyColumn(
         modifier = modifier.fillMaxSize().background(RavenBg),
         contentPadding = PaddingValues(start = 20.dp, end = 20.dp, bottom = 24.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         item(key = "top_spacer") { Spacer(modifier = Modifier.height(24.dp)) }
+
+        // Error banner for wallet restore errors (per UI-SPEC.md transient error pattern).
+        // Shown near the top so the user sees it immediately on return to the wallet tab.
+        // The existing WalletSetupCard also displays the error when no wallet exists yet;
+        // this banner covers the case where the wallet is present but a restore/refresh failed.
+        if (hasWallet && restoreError != null) {
+            item(key = "restore_error_banner") {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 12.dp),
+                    colors = CardDefaults.cardColors(containerColor = NotAuthenticRedBg),
+                    border = BorderStroke(1.dp, NotAuthenticRed.copy(alpha = 0.4f)),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Error,
+                            contentDescription = null,
+                            tint = NotAuthenticRed,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Text(
+                            text = restoreError,
+                            color = NotAuthenticRed,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Button(
+                            onClick = onRefreshBalance,
+                            colors = ButtonDefaults.buttonColors(containerColor = RavenOrange),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                            modifier = Modifier.height(32.dp)
+                        ) {
+                            Text(
+                                text = s.retry,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                        }
+                    }
+                }
+            }
+        }
 
         // Header
         item(key = "header") {
