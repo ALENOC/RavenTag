@@ -1619,7 +1619,7 @@ suspend fun consolidateAllFundsToFreshAddress(): String? = withContext(Dispatche
     val currentIndex = getCurrentAddressIndex()
     android.util.Log.i("WalletManager", "consolid: START - currentIndex=$currentIndex")
 
-    val node = RavencoinPublicNode()
+    val node = RavencoinPublicNode(context)
     val nextIndex = currentIndex + 1
 
     // STEP 1: Derive ALL addresses in ONE Keystore decrypt.
