@@ -249,6 +249,40 @@ class WalletManager(private val context: Context) {
             "worry","worth","wrap","wreck","wrestle","wrist","write","wrong","yard","year",
             "yellow","you","young","youth","zebra","zero","zone","zoo"
         )
+        // Wave 0 stubs for mnemonic safety tests (plan 30-06 will implement these)
+        @JvmStatic
+        fun checkRestorePreconditions(currentBalanceSat: Long, hasBackedUp: Boolean) {
+            if (currentBalanceSat > 0 && !hasBackedUp) {
+                throw BackupRequiredException()
+            }
+        }
+
+        @JvmStatic
+        fun computeSeedHmacForTest(seed: ByteArray, keyBytes: ByteArray): ByteArray {
+            val mac = org.bouncycastle.crypto.macs.HMac(org.bouncycastle.crypto.digests.SHA256Digest())
+            mac.init(org.bouncycastle.crypto.params.KeyParameter(keyBytes))
+            mac.update(seed, 0, seed.size)
+            val result = ByteArray(32)
+            mac.doFinal(result, 0)
+            return result
+        }
+
+        @JvmStatic
+        fun verifySeedHmac(seed: ByteArray, tag: ByteArray, keyBytes: ByteArray) {
+            val computed = computeSeedHmacForTest(seed, keyBytes)
+            if (!computed.contentEquals(tag)) {
+                throw IntegrityException()
+            }
+        }
+
+        @JvmStatic
+        inline fun <T> wrapKeystoreException(block: () -> T): T {
+            return try {
+                block()
+            } catch (e: android.security.keystore.KeyPermanentlyInvalidatedException) {
+                throw KeystoreInvalidatedException(e)
+            }
+        }
     }
 
     private fun getOrCreateAndroidKey(): SecretKey {

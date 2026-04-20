@@ -480,4 +480,73 @@ class RavencoinTxBuilderTest {
                 byteArrayOf(0x75)
         return script.joinToString("") { "%02x".format(it) }
     }
+
+    // ── Wave 0 extension: D-19 cycled-amount change-address assertion ───────
+
+    @Test
+    fun multiAddressSend_change_to_fresh_address() {
+        // Create a fresh change address by incrementing the test private key
+        val freshPrivKey = testPrivKey.copyOf()
+        freshPrivKey[freshPrivKey.size - 1] = (freshPrivKey[freshPrivKey.size - 1] + 1).toByte()
+        val freshPubKey = pubKeyFromPrivKey(freshPrivKey)
+        val freshHash160 = hash160(freshPubKey)
+        val freshChangeAddress = toBase58Check(0x3C.toByte(), freshHash160)
+
+        val utxos = listOf(
+            Utxo(
+                txid = "a".repeat(64),
+                outputIndex = 0,
+                satoshis = 2_000_000L,
+                script = senderScript,
+                height = 100
+            )
+        )
+        val result = RavencoinTxBuilder.buildAndSign(
+            utxos = utxos,
+            toAddress = senderAddress,
+            amountSat = 1_000_000L,
+            feeSat = 100_000L,
+            changeAddress = freshChangeAddress,
+            privKeyBytes = testPrivKey,
+            pubKeyBytes = testPubKey
+        )
+        assertNotNull(result)
+        // Parse the transaction to verify change output exists
+        val raw = result.hex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+        var offset = 4 // version
+        val inputCount = raw[offset].toInt() and 0xff
+        offset += 1
+        repeat(inputCount) {
+            offset += 32 // txid
+            offset += 4  // vout
+            val scriptLen = raw[offset].toInt() and 0xff
+            offset += 1 + scriptLen
+            offset += 4  // sequence
+        }
+        val outputCount = raw[offset].toInt() and 0xff
+        offset += 1
+        assertTrue("tx must have 2 outputs (to + change)", outputCount >= 2)
+        // Verify at least one output goes to the change address
+        var foundChangeOutput = false
+        repeat(outputCount) {
+            val valueBytes = raw.copyOfRange(offset, offset + 8)
+            val value = (0 until 8).sumOf { i ->
+                (valueBytes[i].toLong() and 0xFF) shl (8 * i)
+            }
+            offset += 8
+            val scriptLen = raw[offset].toInt() and 0xff
+            offset += 1
+            val script = raw.copyOfRange(offset, offset + scriptLen)
+            offset += scriptLen
+            // Check if this is a P2PKH output to freshChangeAddress
+            if (script.size >= 25 && script[0] == 0x76.toByte() && script[1] == 0xa9.toByte()) {
+                val hash160InScript = script.copyOfRange(3, 23)
+                if (hash160InScript.contentEquals(freshHash160)) {
+                    foundChangeOutput = true
+                    assertTrue("change output must have non-zero value", value > 0)
+                }
+            }
+        }
+        assertTrue("change output to fresh address must exist", foundChangeOutput)
+    }
 }
