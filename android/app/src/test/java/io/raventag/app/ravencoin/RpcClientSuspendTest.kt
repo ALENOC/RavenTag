@@ -1,5 +1,6 @@
 package io.raventag.app.ravencoin
 
+import io.raventag.app.network.executeSuspend
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
