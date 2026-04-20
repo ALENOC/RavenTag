@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: completed
-stopped_at: Phase 30 UI-SPEC approved
-last_updated: "2026-04-17T17:04:51.677Z"
-last_activity: 2026-04-17
+status: executing
+stopped_at: Plan 30-01 complete
+last_updated: "2026-04-20T19:23:06Z"
+last_activity: 2026-04-20 -- Plan 30-01 (Wave 0 test scaffolding) executed
 progress:
   total_phases: 5
   completed_phases: 2
-  total_plans: 10
-  completed_plans: 10
-  percent: 100
+  total_plans: 20
+  completed_plans: 11
+  percent: 55
 ---
 
 # Project State
@@ -26,14 +26,15 @@ progress:
 
 ## Current Position
 
-Phase: 20 (android-performance-optimization): COMPLETE
-Plan: 6 of 6 (all plans done)
-Status: Phase 20 complete, ready for next phase (30 Wallet Reliability)
-Last activity: 2026-04-17
+Phase: 30 (wallet-reliability) — EXECUTING
+Plan: 1 of 10 complete
+Status: Plan 30-01 complete, ready for 30-02
+Last activity: 2026-04-20 -- Plan 30-01 (Wave 0 test scaffolding) executed
 
 ## Progress
 
 `[██████████] 100%`: Phase 20 complete
+`[█         ] 10%`: Phase 30 plan 1/10 complete
 
 ## Recent Decisions
 
@@ -43,18 +44,23 @@ Last activity: 2026-04-17
 | Focus Android su suspend functions | Complete (20-01) |
 | Persistere TOFU fingerprint in SQLite | Pending |
 | Rimuovere BuildConfig.ADMIN_KEY | Pending |
+| Lambda-injectable FeeEstimator constructor | Complete (30-01) |
+| computeSpendableBalanceSat as pure function | Complete (30-01) |
 
 ## Pending Todos
 
-None captured yet.
+- Execute plan 30-02 (Wallet Cache DB DAOs)
+- Execute plan 30-03 (Scripthash Subscription)
+- Execute plans 30-04 through 30-10
 
 ## Blockers / Concerns
 
 - `consolidate_fix.kt` untracked file in project root (possible WIP)
+- Pre-existing RavencoinTxBuilderTest failures in 2 asset issuance tests (out of scope)
 
 ## Session Continuity
 
-Last session: 2026-04-17T17:04:51.673Z
-Stopped at: Phase 30 UI-SPEC approved
-Resume file: .planning/phases/30-wallet-reliability/30-UI-SPEC.md
-Next action: Plan Phase 30 (Wallet Reliability) or start next milestone
+Last session: 2026-04-20T19:23:06Z
+Stopped at: Plan 30-01 complete
+Resume file: .planning/phases/30-wallet-reliability/30-01-SUMMARY.md
+Next action: Execute plan 30-02 (Wallet Cache DB DAOs)
