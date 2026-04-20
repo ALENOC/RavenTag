@@ -57,13 +57,13 @@ Phase 50: Backend Stability
 - No ANRs during normal operations
 
 **Plans:**
-4/6 plans executed
+6/6 plans complete
 - [x] 20-01-PLAN.md — Convert OkHttp execute() calls to suspend functions using suspendCancellableCoroutine
 - [x] 20-02-PLAN.md — Create TransactionNotificationHelper for send operation progress notifications
 - [x] 20-03-PLAN.md — Create retryWithBackoff utility with exponential backoff for transient failures
 - [x] 20-04-PLAN.md — Implement parallel wallet restore with async/awaitAll for ~3x speedup
-- [ ] 20-05-PLAN.md — Integrate notifications into send operations (RVN and asset transfers) with retry
-- [ ] 20-06-PLAN.md — Implement loading UI patterns (full-screen spinner, button spinner) and error handling
+- [x] 20-05-PLAN.md — Integrate notifications into send operations (RVN and asset transfers) with retry
+- [x] 20-06-PLAN.md — Implement loading UI patterns (full-screen spinner, button spinner) and error handling
 
 ---
 
@@ -84,7 +84,17 @@ Phase 50: Backend Stability
 - Keystore protected from extraction
 
 **Plans:**
-Not yet planned
+1/10 plans executed
+- [x] 30-01-PLAN.md — Wave 0 test scaffolding (6 test files, 4 production stubs, behavior contracts for Wave 1-3)
+- [ ] 30-02-PLAN.md — Wallet Cache DB DAOs (WalletCacheDao, ReservedUtxoDao SQLite implementations)
+- [ ] 30-03-PLAN.md — Scripthash Subscription (ElectrumX real-time status notifications)
+- [ ] 30-04-PLAN.md — Fee Estimation (estimatefee with fallback)
+- [ ] 30-05-PLAN.md — Consolidation Reliability
+- [ ] 30-06-PLAN.md — Mnemonic Safety (backup gate, HMAC integrity, keystore exception handling)
+- [ ] 30-07-PLAN.md — Node Reliability (TOFU quarantine, fallback rotation)
+- [ ] 30-08-PLAN.md — WalletScreen Refresh and Receive UX
+- [ ] 30-09-PLAN.md — Tx History 3-Value (sent/cycled/fee breakdown)
+- [ ] 30-10-PLAN.md — Housekeeping
 
 ---
 
@@ -151,4 +161,4 @@ Not yet planned
 **Target Release:** TBD
 
 *Created: 2026-04-13*
-*Updated: 2026-04-13 — Phase 20 plans created*
+*Updated: 2026-04-20 — Phase 30 plan 30-01 executed*
