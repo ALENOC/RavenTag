@@ -2450,6 +2450,8 @@ class MainActivity : FragmentActivity() {
         // Create transaction progress notification channel
         TransactionNotificationHelper.createChannel(applicationContext)
 
+        // Initialize wallet reliability database (single call per process)
+        io.raventag.app.wallet.cache.WalletReliabilityDb.init(this)
 
         // Schedule periodic wallet polling every 15 minutes.
         // UPDATE policy: replaces any previously scheduled instance so app updates always
