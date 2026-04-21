@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 30-04-fee-estimation
-last_updated: "2026-04-21T05:36:02.447Z"
+stopped_at: Completed 30-05-consolidation-reliability
+last_updated: "2026-04-21T18:46:32Z"
 last_activity: 2026-04-21
 progress:
   total_phases: 5
   completed_phases: 2
   total_plans: 20
-  completed_plans: 13
-  percent: 65
+  completed_plans: 14
+  percent: 70
 ---
 
 # Project State
@@ -27,14 +27,14 @@ progress:
 ## Current Position
 
 Phase: 30 (wallet-reliability) — EXECUTING
-Plan: 3 of 10 complete
+Plan: 5 of 10 complete
 Status: Ready to execute
 Last activity: 2026-04-21
 
 ## Progress
 
 `[██████████] 100%`: Phase 20 complete
-`[██        ] 20%`: Phase 30 plan 2/10 complete
+`[█████     ] 50%`: Phase 30 plan 5/10 complete
 
 ## Recent Decisions
 
@@ -49,11 +49,12 @@ Last activity: 2026-04-21
 | All five tables co-located in wallet_reliability.db | Complete (30-02) |
 | Context-dependent DAO tests @Ignore until Robolectric | Complete (30-02) |
 | reserved_utxos.value_sat added for direct sum | Complete (30-02) |
+| issueAssetLocal and consolidation do NOT get reservation wiring (internal sends) | Complete (30-05) |
+| transferAssetLocal gets full reservation + rebroadcast wiring | Complete (30-05) |
 
 ## Pending Todos
 
-- Execute plan 30-03 (Scripthash Subscription)
-- Execute plans 30-04 through 30-10
+- Execute plans 30-06 through 30-10
 
 ## Blockers / Concerns
 
@@ -62,7 +63,7 @@ Last activity: 2026-04-21
 
 ## Session Continuity
 
-Last session: 2026-04-21T05:36:02.443Z
-Stopped at: Completed 30-04-fee-estimation
+Last session: 2026-04-21T18:46:32Z
+Stopped at: Completed 30-05-consolidation-reliability
 Resume file: None
-Next action: Execute plan 30-03 (Scripthash Subscription)
+Next action: Execute plan 30-06 (Mnemonic Safety)
