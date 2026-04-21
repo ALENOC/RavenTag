@@ -398,6 +398,16 @@ class RavencoinPublicNode(private val context: Context) {
         callWithFailover("blockchain.transaction.broadcast", listOf(rawHex)).asString
 
     /**
+     * Low-level RPC call with failover; returns null on any exception.
+     *
+     * Used by RebroadcastWorker for confirmation checks and other callers
+     * that need best-effort access to ElectrumX RPC without propagating errors.
+     */
+    fun callElectrumRawOrNull(method: String, params: List<Any>): com.google.gson.JsonElement? = try {
+        callWithFailover(method, params)
+    } catch (_: Exception) { null }
+
+    /**
      * Queries all known ElectrumX servers for "blockchain.relayfee" and returns a
      * safe fee rate to use when building transactions.
      *
