@@ -19,6 +19,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import io.raventag.app.ui.theme.*
+import io.raventag.app.wallet.fee.FeeEstimator
 
 /**
  * Screen for transferring a Ravencoin asset (unique token, sub-asset, or root asset) to a
@@ -60,6 +61,7 @@ fun TransferScreen(
     mode: IssueMode = IssueMode.TRANSFER,
     prefilledAssetName: String? = null,
     showLowRvnWarning: Boolean = false,
+    feeEstimator: FeeEstimator? = null,
     onBack: () -> Unit,
     onTransfer: (assetName: String, toAddress: String, qty: Long) -> Unit
 ) {
@@ -72,6 +74,15 @@ fun TransferScreen(
 
     // Controls whether the QR scanner overlay replaces this screen temporarily.
     var showScanner by remember { mutableStateOf(false) }
+
+    // Controls whether the pre-transfer confirmation dialog is visible.
+    var showConfirm by remember { mutableStateOf(false) }
+
+    // Fee estimation state: fetched lazily when the confirm dialog opens.
+    var feeSatPerKb by remember { mutableStateOf<Long?>(null) }
+    var feeUsedFallback by remember { mutableStateOf(false) }
+    var feeOverrideText by remember { mutableStateOf("") }
+    var feeEditOpen by remember { mutableStateOf(false) }
 
     // QR scanner overlay: takes over the full screen while active.
     if (showScanner) {
@@ -112,6 +123,85 @@ fun TransferScreen(
         IssueMode.TRANSFER_ROOT -> "FASHIONX"
         IssueMode.TRANSFER_SUB -> "FASHIONX/BAG01"
         else -> "FASHIONX/BAG001#SN0001"
+    }
+
+    // ----------------------------------------------------------------
+    // Pre-transfer confirmation dialog: shown after the user taps the transfer button.
+    // Summarizes asset, recipient, quantity, and shows dynamic fee with override.
+    // ----------------------------------------------------------------
+    if (showConfirm) {
+        LaunchedEffect(showConfirm) {
+            if (showConfirm && feeEstimator != null && feeSatPerKb == null) {
+                val result = feeEstimator.estimateSatPerKbWithSource(6)
+                feeSatPerKb = result.satPerKb
+                feeUsedFallback = result.usedFallback
+            }
+        }
+
+        AlertDialog(
+            onDismissRequest = {
+                showConfirm = false
+                feeSatPerKb = null
+                feeUsedFallback = false
+                feeOverrideText = ""
+                feeEditOpen = false
+            },
+            containerColor = Color(0xFF101020),
+            title = { Text(title, color = Color.White, fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    // Asset row
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("${s.fieldAssetName}:", color = RavenMuted, style = MaterialTheme.typography.bodyMedium)
+                        Text(assetName, color = Color.White, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                    }
+                    // Recipient row
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("To:", color = RavenMuted, style = MaterialTheme.typography.bodyMedium)
+                        Text(toAddress.take(16) + if (toAddress.length > 16) "..." else "", color = Color.White, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                    }
+                    // Dynamic fee section (D-22)
+                    TransferFeeSection(
+                        feeSatPerKb = feeSatPerKb,
+                        usedFallback = feeUsedFallback,
+                        overrideText = feeOverrideText,
+                        onOverrideChange = { feeOverrideText = it },
+                        onEditToggle = { feeEditOpen = !feeEditOpen },
+                        editOpen = feeEditOpen
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    if (isOwnershipTransfer) {
+                        Text(s.transferOwnershipWarning, color = RavenOrange.copy(alpha = 0.8f), style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showConfirm = false
+                        onTransfer(assetName, toAddress, qty.toLongOrNull() ?: 1L)
+                        feeSatPerKb = null
+                        feeUsedFallback = false
+                        feeOverrideText = ""
+                        feeEditOpen = false
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = RavenOrange)
+                ) { Text(title, fontWeight = FontWeight.Bold) }
+            },
+            dismissButton = {
+                OutlinedButton(
+                    onClick = {
+                        showConfirm = false
+                        feeSatPerKb = null
+                        feeUsedFallback = false
+                        feeOverrideText = ""
+                        feeEditOpen = false
+                    },
+                    border = BorderStroke(1.dp, RavenBorder),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)
+                ) { Text(s.walletCancelBtn) }
+            }
+        )
     }
 
     Column(
@@ -256,9 +346,9 @@ fun TransferScreen(
         Spacer(modifier = Modifier.height(24.dp))
 
         // Submit button: disabled while loading or when form validation fails.
-        // Falls back to qty = 1 if the quantity field cannot be parsed (e.g. empty string).
+        // Opens a confirmation dialog instead of calling onTransfer directly.
         Button(
-            onClick = { onTransfer(assetName, toAddress, qty.toLongOrNull() ?: 1L) },
+            onClick = { showConfirm = true },
             enabled = isValid && !isLoading,
             modifier = Modifier.fillMaxWidth().height(52.dp),
             colors = ButtonDefaults.buttonColors(containerColor = RavenOrange, disabledContainerColor = RavenOrange.copy(alpha = 0.3f)),
@@ -303,3 +393,53 @@ private fun transferFieldColors() = OutlinedTextFieldDefaults.colors(
     focusedContainerColor = RavenCard,
     unfocusedContainerColor = RavenCard
 )
+
+/**
+ * D-22 fee section composable for the transfer confirmation dialog.
+ *
+ * Same layout as SendRvnScreen.FeeSection: fallback warning, fee row with
+ * edit icon, and inline override field.
+ */
+@Composable
+private fun TransferFeeSection(
+    feeSatPerKb: Long?,
+    usedFallback: Boolean,
+    overrideText: String,
+    onOverrideChange: (String) -> Unit,
+    onEditToggle: () -> Unit,
+    editOpen: Boolean
+) {
+    val s = LocalStrings.current
+    Column {
+        if (usedFallback) {
+            Text(
+                text = s.sendFeeEstimateUnavailable,
+                style = MaterialTheme.typography.bodySmall,
+                color = RavenOrange,
+                modifier = Modifier.padding(bottom = 4.dp)
+            )
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            val feeRvn = (feeSatPerKb ?: FeeEstimator.FALLBACK_SAT_PER_KB) / 1e8
+            Text(
+                text = "${s.sendFeeLabel}: %.8f RVN · ${s.sendFeeTarget}".format(feeRvn),
+                style = MaterialTheme.typography.bodySmall,
+                color = RavenMuted,
+                modifier = Modifier.weight(1f)
+            )
+            IconButton(onClick = onEditToggle, modifier = Modifier.size(36.dp)) {
+                Icon(Icons.Default.Edit, contentDescription = s.sendFeeEditLabel, tint = RavenOrange)
+            }
+        }
+        if (editOpen) {
+            OutlinedTextField(
+                value = overrideText,
+                onValueChange = onOverrideChange,
+                label = { Text(s.sendFeeOverrideHint) },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+    }
+}

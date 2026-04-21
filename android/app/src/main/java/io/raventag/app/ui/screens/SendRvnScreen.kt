@@ -15,6 +15,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import io.raventag.app.ui.theme.*
+import io.raventag.app.wallet.fee.FeeEstimator
 
 /**
  * Screen for sending RVN (Ravencoin) to a recipient address.
@@ -51,6 +52,7 @@ fun SendRvnScreen(
     resultSuccess: Boolean?,
     feeUnavailable: Boolean = false,
     estimatedFee: Double = 0.0,
+    feeEstimator: FeeEstimator? = null,
     prefillAddress: String = "",
     donateMode: Boolean = false,
     walletBalance: Double = 0.0,
@@ -71,6 +73,12 @@ fun SendRvnScreen(
 
     // Controls whether the QR scanner overlay replaces this screen temporarily.
     var showScanner by remember { mutableStateOf(false) }
+
+    // Fee estimation state: fetched lazily when the confirm dialog opens.
+    var feeSatPerKb by remember { mutableStateOf<Long?>(null) }
+    var feeUsedFallback by remember { mutableStateOf(false) }
+    var feeOverrideText by remember { mutableStateOf("") }
+    var feeEditOpen by remember { mutableStateOf(false) }
 
     // Normalize the decimal separator (comma -> dot) to handle locales that use a comma.
     val parsedAmount = amount.replace(',', '.').toDoubleOrNull() ?: 0.0
@@ -105,11 +113,31 @@ fun SendRvnScreen(
 
     // ----------------------------------------------------------------
     // Pre-send confirmation dialog: shown after the user taps "Send".
-    // Summarizes the amount and recipient; warns that the action is irreversible.
+    // Summarizes the amount and recipient; shows dynamic fee with override.
     // ----------------------------------------------------------------
     if (showConfirm) {
+        // Fetch fee estimate lazily when the dialog opens
+        LaunchedEffect(showConfirm) {
+            if (showConfirm && feeEstimator != null && feeSatPerKb == null) {
+                val result = feeEstimator.estimateSatPerKbWithSource(6)
+                feeSatPerKb = result.satPerKb
+                feeUsedFallback = result.usedFallback
+            }
+        }
+
+        val effectiveFeeSatPerKb = feeOverrideText.toDoubleOrNull()
+            ?.let { (it * 100_000_000.0).toLong() }
+            ?: feeSatPerKb
+            ?: FeeEstimator.FALLBACK_SAT_PER_KB
+
         AlertDialog(
-            onDismissRequest = { showConfirm = false },
+            onDismissRequest = {
+                showConfirm = false
+                feeSatPerKb = null
+                feeUsedFallback = false
+                feeOverrideText = ""
+                feeEditOpen = false
+            },
             containerColor = Color(0xFF101020),
             title = { Text(s.walletSendDialogTitle, color = Color.White, fontWeight = FontWeight.Bold) },
             text = {
@@ -124,15 +152,15 @@ fun SendRvnScreen(
                         Text("To:", color = RavenMuted, style = MaterialTheme.typography.bodyMedium)
                         Text(toAddress.take(16) + if (toAddress.length > 16) "..." else "", color = Color.White, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
                     }
-                    // Network fee row (per D-07)
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("Network fee:", color = RavenMuted, style = MaterialTheme.typography.bodyMedium)
-                        if (feeUnavailable) {
-                            Text("Unavailable", color = RavenOrange, style = MaterialTheme.typography.bodySmall)
-                        } else {
-                            Text("%.8f RVN".format(estimatedFee), color = Color.White, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
-                        }
-                    }
+                    // Dynamic fee section (D-22)
+                    FeeSection(
+                        feeSatPerKb = feeSatPerKb,
+                        usedFallback = feeUsedFallback,
+                        overrideText = feeOverrideText,
+                        onOverrideChange = { feeOverrideText = it },
+                        onEditToggle = { feeEditOpen = !feeEditOpen },
+                        editOpen = feeEditOpen
+                    )
                     Spacer(modifier = Modifier.height(8.dp))
                     // Irreversibility warning in red
                     Text(s.walletSendWarning, color = NotAuthenticRed.copy(alpha = 0.8f), style = MaterialTheme.typography.bodySmall)
@@ -140,13 +168,26 @@ fun SendRvnScreen(
             },
             confirmButton = {
                 Button(
-                    onClick = { showConfirm = false; onSend(toAddress, parsedAmount) },
+                    onClick = {
+                        showConfirm = false
+                        onSend(toAddress, parsedAmount)
+                        feeSatPerKb = null
+                        feeUsedFallback = false
+                        feeOverrideText = ""
+                        feeEditOpen = false
+                    },
                     colors = ButtonDefaults.buttonColors(containerColor = RavenOrange)
                 ) { Text(s.walletSendConfirm, fontWeight = FontWeight.Bold) }
             },
             dismissButton = {
                 OutlinedButton(
-                    onClick = { showConfirm = false },
+                    onClick = {
+                        showConfirm = false
+                        feeSatPerKb = null
+                        feeUsedFallback = false
+                        feeOverrideText = ""
+                        feeEditOpen = false
+                    },
                     border = androidx.compose.foundation.BorderStroke(1.dp, RavenBorder),
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)
                 ) { Text(s.walletCancelBtn) }
@@ -353,3 +394,56 @@ private fun sndFieldColors() = OutlinedTextFieldDefaults.colors(
     focusedTextColor = Color.White, unfocusedTextColor = Color.White,
     cursorColor = RavenOrange, focusedContainerColor = RavenCard, unfocusedContainerColor = RavenCard
 )
+
+/**
+ * D-22 fee section composable for the send/transfer confirmation dialog.
+ *
+ * Displays the estimated fee with a middle-dot separator, an edit icon to
+ * override the fee, and a fallback warning when the estimate was unavailable.
+ */
+@Composable
+private fun FeeSection(
+    feeSatPerKb: Long?,
+    usedFallback: Boolean,
+    overrideText: String,
+    onOverrideChange: (String) -> Unit,
+    onEditToggle: () -> Unit,
+    editOpen: Boolean
+) {
+    val s = LocalStrings.current
+    Column {
+        // Fallback warning line (amber/orange bodySmall)
+        if (usedFallback) {
+            Text(
+                text = s.sendFeeEstimateUnavailable,
+                style = MaterialTheme.typography.bodySmall,
+                color = RavenOrange,
+                modifier = Modifier.padding(bottom = 4.dp)
+            )
+        }
+        // Fee row: label + value + edit icon
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            val feeRvn = (feeSatPerKb ?: FeeEstimator.FALLBACK_SAT_PER_KB) / 1e8
+            Text(
+                text = "${s.sendFeeLabel}: %.8f RVN · ${s.sendFeeTarget}".format(feeRvn),
+                style = MaterialTheme.typography.bodySmall,
+                color = RavenMuted,
+                modifier = Modifier.weight(1f)
+            )
+            IconButton(onClick = onEditToggle, modifier = Modifier.size(36.dp)) {
+                Icon(Icons.Default.Edit, contentDescription = s.sendFeeEditLabel, tint = RavenOrange)
+            }
+        }
+        // Inline override field (expanded on edit icon tap)
+        if (editOpen) {
+            OutlinedTextField(
+                value = overrideText,
+                onValueChange = onOverrideChange,
+                label = { Text(s.sendFeeOverrideHint) },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+    }
+}
