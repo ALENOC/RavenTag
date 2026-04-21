@@ -47,6 +47,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
@@ -3093,12 +3094,15 @@ fun RavenTagApp(
 
     // ── Send RVN overlay ──────────────────────────────────────────────────────
     if (viewModel.showSend) {
+        val sendCtx = LocalContext.current
+        val sendFeeEstimator = remember { io.raventag.app.wallet.fee.FeeEstimator(io.raventag.app.wallet.RavencoinPublicNode(sendCtx)) }
         SendRvnScreen(
             isLoading = viewModel.sendLoading,
             resultMessage = viewModel.sendResult,
             resultSuccess = viewModel.sendSuccess,
             feeUnavailable = viewModel.sendFeeUnavailable,
             estimatedFee = viewModel.estimatedFee,
+            feeEstimator = sendFeeEstimator,
             prefillAddress = if (viewModel.donateMode) viewModel.donateAddress else "",
             donateMode = viewModel.donateMode,
             walletBalance = viewModel.walletInfo?.balanceRvn ?: 0.0,
@@ -3155,6 +3159,8 @@ fun RavenTagApp(
     // ── Transfer overlay ──────────────────────────────────────────────────────
     // Handles token transfers, root-asset transfers, and sub-asset transfers.
     if (issueMode == IssueMode.TRANSFER || issueMode == IssueMode.TRANSFER_ROOT || issueMode == IssueMode.TRANSFER_SUB) {
+        val transferCtx = LocalContext.current
+        val transferFeeEstimator = remember { io.raventag.app.wallet.fee.FeeEstimator(io.raventag.app.wallet.RavencoinPublicNode(transferCtx)) }
         TransferScreen(
             isLoading = viewModel.issueLoading,
             resultMessage = viewModel.issueResult,
@@ -3162,6 +3168,7 @@ fun RavenTagApp(
             mode = issueMode,
             prefilledAssetName = viewModel.prefilledTransferAssetName,
             showLowRvnWarning = !AppConfig.IS_BRAND_APP && (viewModel.walletInfo?.balanceRvn ?: 0.0) < 0.01,
+            feeEstimator = transferFeeEstimator,
             onBack = { viewModel.issueMode = null; viewModel.clearIssueResult() },
             onTransfer = { assetName, toAddress, qty ->
                 viewModel.transferAssetConsumer(assetName, toAddress, qty)
