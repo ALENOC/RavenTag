@@ -2454,6 +2454,11 @@ class MainActivity : FragmentActivity() {
         // Initialize wallet reliability database (single call per process)
         io.raventag.app.wallet.cache.WalletReliabilityDb.init(this)
 
+        // Pitfall 6: prune stale reservations older than 48h on startup (D-20)
+        io.raventag.app.wallet.cache.ReservedUtxoDao.pruneOlderThan(
+            System.currentTimeMillis() - 48L * 3600_000L
+        )
+
         // Schedule periodic wallet polling every 15 minutes.
         // UPDATE policy: replaces any previously scheduled instance so app updates always
         // run the latest worker code without requiring a reinstall.
