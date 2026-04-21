@@ -24,6 +24,9 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import io.raventag.app.ravencoin.OwnedAsset
+import io.raventag.app.wallet.cache.ReservedUtxoDao
+import io.raventag.app.wallet.cache.PendingConsolidationDao
+import io.raventag.app.worker.RebroadcastWorker
 
 class WalletManager(private val context: Context) {
 
@@ -1136,6 +1139,8 @@ class WalletManager(private val context: Context) {
         return@withContext try {
             val txid: String
             var feeSatActual: Long = 0L
+            var consumedUtxos: List<Utxo> = emptyList()
+            var broadcastRawHex: String = ""
 
             if (hasAssets || hasOldFunds) {
                 if (oldFunds.isNotEmpty()) {
@@ -1177,6 +1182,10 @@ class WalletManager(private val context: Context) {
                     changeAddress     = nextAddress
                 )
                 txid = node.broadcast(tx.hex)
+                broadcastRawHex = tx.hex
+                consumedUtxos = rvnUtxos + oldFunds.flatMap { it.rvn } +
+                    assetUtxosMap.values.flatten().map { it.utxo } +
+                    oldFunds.flatMap { it.assets.values.flatten().map { au -> au.utxo } }
 
                 android.util.Log.i("WalletManager", "sendRvn atomic: sent $amountRvn RVN to $toAddress, " +
                     "all assets and remaining RVN to $nextAddress, txid=$txid")
@@ -1206,6 +1215,8 @@ class WalletManager(private val context: Context) {
                     pubKeyBytes = pubKey
                 )
                 txid = node.broadcast(tx.hex)
+                broadcastRawHex = tx.hex
+                consumedUtxos = rvnUtxos
 
                 android.util.Log.i("WalletManager", "sendRvn: sent $amountRvn RVN to $toAddress, " +
                     "remaining ${"%.8f".format(changeSat / 1e8)} RVN to $nextAddress, txid=$txid")
@@ -1213,10 +1224,62 @@ class WalletManager(private val context: Context) {
 
             setCurrentAddressIndex(currentIndex + 1)
 
+            // Reserved-UTXO + pending-consolidation bookkeeping (D-20, D-21).
+            val now = System.currentTimeMillis()
+            val reserved = consumedUtxos.map {
+                ReservedUtxoDao.ReservedUtxo(
+                    txidIn = it.txid,
+                    vout = it.outputIndex,
+                    valueSat = it.satoshis,
+                    submittedTxid = txid,
+                    submittedAt = now
+                )
+            }
+            ReservedUtxoDao.reserve(reserved)
+            PendingConsolidationDao.upsert(
+                PendingConsolidationDao.PendingConsolidation(
+                    submittedTxid = txid, submittedAt = now,
+                    lastRetryAt = null, retryCount = 0, lastError = null
+                )
+            )
+            // D-25 auto-rebroadcast in 30 minutes if still unconfirmed
+            RebroadcastWorker.schedule(
+                context = context,
+                txid = txid,
+                rawHex = broadcastRawHex,
+                attempt = 0,
+                initialDelayMinutes = 30L
+            )
+
             "$txid|fee:$feeSatActual"
         } finally {
             privKey?.fill(0)
         }
+    }
+
+    /**
+     * D-20/D-21 reconciliation: call from refresh flows after fetching confirmed + mempool
+     * history. Returns the submittedTxids whose reservations were just released.
+     */
+    suspend fun reconcileReservations(
+        confirmedTxids: Set<String>,
+        mempoolTxids: Set<String>
+    ): List<String> = withContext(Dispatchers.IO) {
+        val allReserved = ReservedUtxoDao.all()
+        val bySubmitted = allReserved.groupBy { it.submittedTxid }
+        val now = System.currentTimeMillis()
+        val released = mutableListOf<String>()
+        for ((subTxid, rows) in bySubmitted) {
+            val confirmed = confirmedTxids.contains(subTxid)
+            val inMempool = mempoolTxids.contains(subTxid)
+            val stale = rows.first().submittedAt < (now - 48L * 3600_000L)
+            if (confirmed || (!inMempool && stale)) {
+                ReservedUtxoDao.releaseFor(subTxid)
+                PendingConsolidationDao.clear(subTxid)
+                released += subTxid
+            }
+        }
+        released
     }
 
     suspend fun transferAssetLocal(
@@ -1319,6 +1382,28 @@ class WalletManager(private val context: Context) {
                 changeAddress      = nextAddress
             )
             val txid = node.broadcast(tx.hex)
+
+            // Reserved-UTXO + pending-consolidation bookkeeping (D-20, D-21).
+            val allConsumedUtxos = allFunds.flatMap { af ->
+                af.rvnUtxos + af.assetUtxos.values.flatten().map { it.utxo }
+            }
+            val xferNow = System.currentTimeMillis()
+            ReservedUtxoDao.reserve(allConsumedUtxos.map {
+                ReservedUtxoDao.ReservedUtxo(
+                    txidIn = it.txid, vout = it.outputIndex, valueSat = it.satoshis,
+                    submittedTxid = txid, submittedAt = xferNow
+                )
+            })
+            PendingConsolidationDao.upsert(
+                PendingConsolidationDao.PendingConsolidation(
+                    submittedTxid = txid, submittedAt = xferNow,
+                    lastRetryAt = null, retryCount = 0, lastError = null
+                )
+            )
+            RebroadcastWorker.schedule(
+                context = context, txid = txid, rawHex = tx.hex,
+                attempt = 0, initialDelayMinutes = 30L
+            )
 
             android.util.Log.i("WalletManager", "transferAsset: sent $qty $assetName to $toAddress, " +
                 "remaining assets and RVN to $nextAddress, txid=$txid")
@@ -1736,7 +1821,7 @@ suspend fun consolidateAllFundsToFreshAddress(): String? = withContext(Dispatche
     }
 
     // Summary
-    android.util.Log.i("WalletManager", "consolid: SCAN COMPLETE — checked ${currentIndex + 1} addresses, found funds on ${allFunds.size}")
+    android.util.Log.i("WalletManager", "consolid: SCAN COMPLETE: checked ${currentIndex + 1} addresses, found funds on ${allFunds.size}")
     for (af in allFunds.sortedBy { it.index }) {
         val rvnTotal = af.rvnUtxos.sumOf { it.satoshis }
         val assetNames = af.assetUtxos.keys.toList()
@@ -1765,7 +1850,7 @@ suspend fun consolidateAllFundsToFreshAddress(): String? = withContext(Dispatche
             val assetCount = addrFunds.assetUtxos.keys.size
             android.util.Log.i("WalletManager", "consolid: funding index ${addrFunds.index} ($addr) with 10 RVN for $assetCount asset types")
 
-            // Fund with 10 RVN — enough to pay the consolidation fee, the rest returns as change
+            // Fund with 10 RVN: enough to pay the consolidation fee, the rest returns as change
             val fundAmountSat = 1_000_000_000L // 10 RVN
             val satPerByte = try { node.getMinRelayFeeRateSatPerByte() } catch (_: FeeUnavailableException) { 200L }
             val fundingTxFee = 300L * satPerByte // simple 1-in, 2-out tx
@@ -1823,7 +1908,7 @@ suspend fun consolidateAllFundsToFreshAddress(): String? = withContext(Dispatche
                     height = 0
                 ))
 
-                // DO NOT wait for confirmation — proceed immediately to avoid
+                // DO NOT wait for confirmation: proceed immediately to avoid
                 // race conditions with background sweep workers that may try to
                 // spend the same UTXOs. We know the funding tx is valid.
                 android.util.Log.i("WalletManager", "consolid: proceeding immediately with funded UTXO (tx in mempool, not yet confirmed)")
