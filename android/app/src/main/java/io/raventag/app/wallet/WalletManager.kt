@@ -41,6 +41,13 @@ class WalletManager(private val context: Context) {
         private const val KEY_MNEMONIC_IV = "mnemonic_iv"
         private const val KEY_ADDRESS_INDEX = "address_index"
         private const val KEYSTORE_ALIAS = "raventag_wallet_key"
+        // D-15 mnemonic-safety additions (plan 30-06)
+        private const val KEY_SEED_HMAC = "seed_hmac"
+        private const val KEY_MNEMONIC_HMAC = "mnemonic_hmac"
+        private const val KEY_HMAC_MATERIAL_CT = "hmac_material_ct"
+        private const val KEY_HMAC_MATERIAL_IV = "hmac_material_iv"
+        private const val KEY_BACKUP_COMPLETED = "backup_completed"
+        private val VALID_WORD_COUNTS = setOf(12, 15, 18, 21, 24)
         private const val COIN_TYPE = 175
         private val RVN_ADDRESS_VERSION = byteArrayOf(0x3C.toByte())
         private val B58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
@@ -252,38 +259,117 @@ class WalletManager(private val context: Context) {
             "worry","worth","wrap","wreck","wrestle","wrist","write","wrong","yard","year",
             "yellow","you","young","youth","zebra","zero","zone","zoo"
         )
-        // Wave 0 stubs for mnemonic safety tests (plan 30-06 will implement these)
+        // Plan 30-06: mnemonic safety helpers.
+
+        /**
+         * D-15 + Pitfall 7: normalize whitespace and validate BIP39 word count + checksum.
+         * Accepts arbitrary whitespace via `input.trim().split(Regex("\\s+"))`.
+         * @throws IllegalArgumentException if the word count is not in {12,15,18,21,24}
+         *         or the BIP39 checksum fails.
+         */
+        @JvmStatic
+        fun validateMnemonic(input: String): List<String> {
+            val words = input.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+            require(words.size in VALID_WORD_COUNTS) {
+                "invalid word count: ${words.size}"
+            }
+            require(bip39ChecksumValidCompanion(words)) { "BIP39 checksum failed" }
+            return words
+        }
+
+        /**
+         * Pure BIP39 checksum validator, operating on an already-normalized word list.
+         * Supports 12/15/18/21/24 word counts per BIP39.
+         */
+        internal fun bip39ChecksumValidCompanion(words: List<String>): Boolean {
+            val n = words.size
+            if (n !in VALID_WORD_COUNTS) return false
+            val totalBits = n * 11
+            val checksumBits = totalBits / 33
+            val entropyBits = totalBits - checksumBits
+            val entropyBytes = entropyBits / 8
+
+            val indices = IntArray(n)
+            for (i in 0 until n) {
+                val idx = WORD_LIST.indexOf(words[i])
+                if (idx < 0) return false
+                indices[i] = idx
+            }
+
+            val allBits = IntArray(totalBits)
+            var pos = 0
+            for (idx in indices) {
+                for (b in 10 downTo 0) {
+                    allBits[pos++] = (idx shr b) and 1
+                }
+            }
+
+            val entropy = ByteArray(entropyBytes)
+            for (i in 0 until entropyBits) {
+                entropy[i / 8] = (entropy[i / 8].toInt() or (allBits[i] shl (7 - i % 8))).toByte()
+            }
+
+            val hash = java.security.MessageDigest.getInstance("SHA-256").digest(entropy)
+            for (i in 0 until checksumBits) {
+                val expected = (hash[i / 8].toInt() shr (7 - i % 8)) and 1
+                if (allBits[entropyBits + i] != expected) return false
+            }
+            return true
+        }
+
+        /**
+         * D-14: block restore-over-wallet when the current wallet has funds
+         * and the user has not confirmed the recovery phrase backup.
+         */
         @JvmStatic
         fun checkRestorePreconditions(currentBalanceSat: Long, hasBackedUp: Boolean) {
-            if (currentBalanceSat > 0 && !hasBackedUp) {
-                throw BackupRequiredException()
+            if (currentBalanceSat > 0L && !hasBackedUp) {
+                throw BackupRequiredException(
+                    "Current wallet has $currentBalanceSat sat and has not been backed up"
+                )
             }
         }
 
+        /**
+         * Test-only / deterministic HMAC-SHA256 over a seed with caller-supplied key bytes.
+         * The production HMAC flow (instance method `computeSeedHmac`) loads the key from
+         * the Keystore-wrapped material stored in SharedPreferences and delegates here.
+         */
         @JvmStatic
         fun computeSeedHmacForTest(seed: ByteArray, keyBytes: ByteArray): ByteArray {
-            val mac = org.bouncycastle.crypto.macs.HMac(org.bouncycastle.crypto.digests.SHA256Digest())
+            val mac = org.bouncycastle.crypto.macs.HMac(
+                org.bouncycastle.crypto.digests.SHA256Digest()
+            )
             mac.init(org.bouncycastle.crypto.params.KeyParameter(keyBytes))
             mac.update(seed, 0, seed.size)
-            val result = ByteArray(32)
-            mac.doFinal(result, 0)
-            return result
+            val out = ByteArray(mac.macSize)
+            mac.doFinal(out, 0)
+            return out
         }
 
+        /**
+         * D-15 / A9: constant-time HMAC verification. On mismatch throws
+         * [IntegrityException] (stored seed/mnemonic tampered or wrong key).
+         */
         @JvmStatic
         fun verifySeedHmac(seed: ByteArray, tag: ByteArray, keyBytes: ByteArray) {
-            val computed = computeSeedHmacForTest(seed, keyBytes)
-            if (!computed.contentEquals(tag)) {
-                throw IntegrityException()
-            }
+            val expected = computeSeedHmacForTest(seed, keyBytes)
+            val ok = java.security.MessageDigest.isEqual(expected, tag)
+            java.util.Arrays.fill(expected, 0)
+            if (!ok) throw IntegrityException("seed HMAC mismatch")
         }
 
+        /**
+         * Pitfall 3: convert the opaque Keystore "key invalidated" signal into a
+         * typed exception the UI can route to the restore flow. All other
+         * exceptions pass through unchanged.
+         */
         @JvmStatic
         inline fun <T> wrapKeystoreException(block: () -> T): T {
             return try {
                 block()
             } catch (e: android.security.keystore.KeyPermanentlyInvalidatedException) {
-                throw KeystoreInvalidatedException(e)
+                throw KeystoreInvalidatedException(cause = e)
             }
         }
     }
@@ -336,18 +422,18 @@ class WalletManager(private val context: Context) {
         } catch (_: Exception) { false }
     }
 
-    private fun encrypt(data: ByteArray): Pair<ByteArray, ByteArray> {
+    private fun encrypt(data: ByteArray): Pair<ByteArray, ByteArray> = wrapKeystoreException {
         val key = getOrCreateAndroidKey()
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, key)
-        return cipher.doFinal(data) to cipher.iv
+        cipher.doFinal(data) to cipher.iv
     }
 
-    private fun decrypt(enc: ByteArray, iv: ByteArray): ByteArray {
+    private fun decrypt(enc: ByteArray, iv: ByteArray): ByteArray = wrapKeystoreException {
         val key = getOrCreateAndroidKey()
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, iv))
-        return cipher.doFinal(enc)
+        cipher.doFinal(enc)
     }
 
     private fun prefs() = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -838,59 +924,99 @@ class WalletManager(private val context: Context) {
         return fundingTxids
     }
 
+    /**
+     * Restore-over-wallet entry point. D-14 forces a backup gate when the current
+     * wallet has funds and the user has not confirmed their recovery phrase.
+     *
+     * Throws:
+     * - [BackupRequiredException] if the forced-backup gate fires.
+     * - [IllegalArgumentException] if the phrase fails BIP39 validation.
+     * - [KeystoreInvalidatedException] if the Keystore AES key is invalidated.
+     *
+     * Returns true on successful restore, false only on unexpected I/O failure.
+     */
     fun restoreWallet(mnemonic: String): Boolean {
+        // Validation + forced-backup gate run BEFORE any Keystore rewrite; their
+        // exceptions propagate to the UI so the restore dialog can react.
+        val normalizedWords = validateMnemonic(mnemonic)
+        val hasBackedUp = prefs().getBoolean(KEY_BACKUP_COMPLETED, false)
+        val currentBalanceSat = runCatching {
+            io.raventag.app.wallet.cache.WalletCacheDao.readState()?.balanceSat ?: 0L
+        }.getOrDefault(0L)
+        checkRestorePreconditions(currentBalanceSat, hasBackedUp)
+
+        val normalized = normalizedWords.joinToString(" ")
         return try {
-            val normalized = mnemonic.trim()
-            if (!validateMnemonic(normalized)) return false
             val seed = mnemonicToSeed(normalized, "")
             storeSeed(seed, normalized)
             cachedAddress = null
             prefs().edit().putInt(KEY_ADDRESS_INDEX, 0).apply()
+            // A restore sets a fresh wallet: clear backup gate for the new phrase.
+            prefs().edit().putBoolean(KEY_BACKUP_COMPLETED, false).apply()
             true
+        } catch (e: KeystoreInvalidatedException) {
+            throw e
         } catch (e: Exception) {
             false
         }
     }
 
-    private fun validateMnemonic(mnemonic: String): Boolean {
-        val words = mnemonic.split("\\s+".toRegex())
-        if (words.size != 12) return false
-
-        val indices = mutableListOf<Int>()
-        for (word in words) {
-            val idx = WORD_LIST.indexOf(word)
-            if (idx < 0) return false
-            indices.add(idx)
+    // D-15 HMAC key material (32 random bytes) encrypted under the existing
+    // Keystore AES key. We bridge to a raw BouncyCastle HMAC key because a
+    // Keystore-bound AES key cannot be extracted as `Mac` key material.
+    private fun loadOrCreateHmacKeyBytes(): ByteArray {
+        val p = prefs()
+        val existingCt = p.getString(KEY_HMAC_MATERIAL_CT, null)
+        val existingIv = p.getString(KEY_HMAC_MATERIAL_IV, null)
+        if (existingCt != null && existingIv != null) {
+            val ct = android.util.Base64.decode(existingCt, android.util.Base64.NO_WRAP)
+            val iv = android.util.Base64.decode(existingIv, android.util.Base64.NO_WRAP)
+            return decrypt(ct, iv)
         }
+        val fresh = ByteArray(32).also { SecureRandom().nextBytes(it) }
+        val (ct, iv) = encrypt(fresh)
+        p.edit()
+            .putString(KEY_HMAC_MATERIAL_CT, android.util.Base64.encodeToString(ct, android.util.Base64.NO_WRAP))
+            .putString(KEY_HMAC_MATERIAL_IV, android.util.Base64.encodeToString(iv, android.util.Base64.NO_WRAP))
+            .apply()
+        return fresh
+    }
 
-        val allBits = ArrayList<Int>(132)
-        for (idx in indices) {
-            for (i in 10 downTo 0) {
-                allBits.add((idx shr i) and 1)
-            }
+    private fun computeSeedHmac(seed: ByteArray): ByteArray {
+        val keyBytes = loadOrCreateHmacKeyBytes()
+        return try {
+            computeSeedHmacForTest(seed, keyBytes)
+        } finally {
+            java.util.Arrays.fill(keyBytes, 0)
         }
+    }
 
-        val entropy = ByteArray(16)
-        for (i in 0 until 128) {
-            entropy[i / 8] = (entropy[i / 8].toInt() or (allBits[i] shl (7 - i % 8))).toByte()
+    private fun verifySeedHmacInstance(seed: ByteArray, tag: ByteArray) {
+        val keyBytes = loadOrCreateHmacKeyBytes()
+        try {
+            verifySeedHmac(seed, tag, keyBytes)
+        } finally {
+            java.util.Arrays.fill(keyBytes, 0)
         }
-        val checksumBits = allBits.subList(128, 132)
-
-        val hash = MessageDigest.getInstance("SHA-256").digest(entropy)
-        val expectedBits = (0 until 4).map { i -> (hash[0].toInt() shr (7 - i)) and 1 }
-
-        return checksumBits == expectedBits
     }
 
     private fun storeSeed(seed: ByteArray, mnemonic: String) {
         val (seedEnc, seedIv) = encrypt(seed)
-        val (mnemonicEnc, mnemonicIv) = encrypt(mnemonic.toByteArray())
+        val mnemonicBytes = mnemonic.toByteArray(Charsets.UTF_8)
+        val (mnemonicEnc, mnemonicIv) = encrypt(mnemonicBytes)
+        val seedHmac = computeSeedHmac(seed)
+        val mnemonicHmac = computeSeedHmac(mnemonicBytes)
         prefs().edit()
             .putString(KEY_SEED_ENC, android.util.Base64.encodeToString(seedEnc, android.util.Base64.DEFAULT))
             .putString(KEY_SEED_IV, android.util.Base64.encodeToString(seedIv, android.util.Base64.DEFAULT))
             .putString(KEY_MNEMONIC_ENC, android.util.Base64.encodeToString(mnemonicEnc, android.util.Base64.DEFAULT))
             .putString(KEY_MNEMONIC_IV, android.util.Base64.encodeToString(mnemonicIv, android.util.Base64.DEFAULT))
+            .putString(KEY_SEED_HMAC, android.util.Base64.encodeToString(seedHmac, android.util.Base64.NO_WRAP))
+            .putString(KEY_MNEMONIC_HMAC, android.util.Base64.encodeToString(mnemonicHmac, android.util.Base64.NO_WRAP))
             .apply()
+        java.util.Arrays.fill(seedHmac, 0)
+        java.util.Arrays.fill(mnemonicHmac, 0)
+        java.util.Arrays.fill(mnemonicBytes, 0)
     }
 
     fun getMnemonic(): String? {
@@ -899,7 +1025,17 @@ class WalletManager(private val context: Context) {
             val ivStr = prefs().getString(KEY_MNEMONIC_IV, null) ?: return null
             val enc = android.util.Base64.decode(encStr, android.util.Base64.DEFAULT)
             val iv = android.util.Base64.decode(ivStr, android.util.Base64.DEFAULT)
-            String(decrypt(enc, iv))
+            val plaintext = decrypt(enc, iv)
+            val tagB64 = prefs().getString(KEY_MNEMONIC_HMAC, null)
+            if (tagB64 != null) {
+                val tag = android.util.Base64.decode(tagB64, android.util.Base64.NO_WRAP)
+                verifySeedHmacInstance(plaintext, tag)
+            }
+            String(plaintext, Charsets.UTF_8)
+        } catch (e: KeystoreInvalidatedException) {
+            throw e
+        } catch (e: IntegrityException) {
+            throw e
         } catch (e: Exception) { null }
     }
 
@@ -909,8 +1045,61 @@ class WalletManager(private val context: Context) {
             val ivStr = prefs().getString(KEY_SEED_IV, null) ?: return null
             val enc = android.util.Base64.decode(encStr, android.util.Base64.DEFAULT)
             val iv = android.util.Base64.decode(ivStr, android.util.Base64.DEFAULT)
-            decrypt(enc, iv)
+            val plaintext = decrypt(enc, iv)
+            val tagB64 = prefs().getString(KEY_SEED_HMAC, null)
+            if (tagB64 != null) {
+                val tag = android.util.Base64.decode(tagB64, android.util.Base64.NO_WRAP)
+                verifySeedHmacInstance(plaintext, tag)
+            }
+            plaintext
+        } catch (e: KeystoreInvalidatedException) {
+            throw e
+        } catch (e: IntegrityException) {
+            throw e
         } catch (e: Exception) { null }
+    }
+
+    /**
+     * D-15 + D-16: reveal the stored mnemonic as a CharArray, gated by a
+     * BiometricPrompt authentication bound to the Keystore decrypt operation.
+     *
+     * Caller is responsible for zero-filling the returned CharArray after display.
+     */
+    suspend fun revealMnemonicCharsWithBiometric(
+        gate: io.raventag.app.security.BiometricGate
+    ): CharArray = withContext(Dispatchers.IO) {
+        val p = prefs()
+        val ctB64 = p.getString(KEY_MNEMONIC_ENC, null)
+            ?: throw IllegalStateException("no mnemonic stored")
+        val ivB64 = p.getString(KEY_MNEMONIC_IV, null)
+            ?: throw IllegalStateException("no mnemonic iv stored")
+        val ct = android.util.Base64.decode(ctB64, android.util.Base64.DEFAULT)
+        val iv = android.util.Base64.decode(ivB64, android.util.Base64.DEFAULT)
+        val cipher = wrapKeystoreException {
+            Cipher.getInstance("AES/GCM/NoPadding").apply {
+                init(
+                    Cipher.DECRYPT_MODE,
+                    getOrCreateAndroidKey(),
+                    GCMParameterSpec(128, iv)
+                )
+            }
+        }
+        val plaintext = gate.decryptWithBiometric(
+            cipher,
+            ct,
+            io.raventag.app.R.string.biometricRevealTitle,
+            io.raventag.app.R.string.biometricRevealSubtitle
+        )
+        try {
+            val tagB64 = p.getString(KEY_MNEMONIC_HMAC, null)
+            if (tagB64 != null) {
+                val tag = android.util.Base64.decode(tagB64, android.util.Base64.NO_WRAP)
+                verifySeedHmacInstance(plaintext, tag)
+            }
+            String(plaintext, Charsets.UTF_8).toCharArray()
+        } finally {
+            java.util.Arrays.fill(plaintext, 0)
+        }
     }
 
     fun getAddress(accountIndex: Int = 0, addressIndex: Int = 0): String? {
@@ -1913,7 +2102,7 @@ suspend fun consolidateAllFundsToFreshAddress(): String? = withContext(Dispatche
                 // spend the same UTXOs. We know the funding tx is valid.
                 android.util.Log.i("WalletManager", "consolid: proceeding immediately with funded UTXO (tx in mempool, not yet confirmed)")
 
-                // Update allFunds with the funded UTXO directly — don't rely on server re-scan
+                // Update allFunds with the funded UTXO directly : don't rely on server re-scan
                 // which might report stale data or miss the new UTXO
                 val idx = allFunds.indexOfFirst { it.index == addrFunds.index }
                 if (idx >= 0) {
@@ -1935,7 +2124,7 @@ suspend fun consolidateAllFundsToFreshAddress(): String? = withContext(Dispatche
 
     for (i in allFunds.indices) {
         val af = allFunds[i]
-        // Skip funded addresses — they already have correct UTXO data
+        // Skip funded addresses : they already have correct UTXO data
         if (af.index in fundedIndices) {
             android.util.Log.i("WalletManager", "consolid: skipping re-scan for funded index ${af.index}")
             continue
@@ -2007,7 +2196,7 @@ suspend fun consolidateAllFundsToFreshAddress(): String? = withContext(Dispatche
         node.getMinRelayFeeRateSatPerByte()
     } catch (_: FeeUnavailableException) { 200L }
 
-    // Use a high floor and cap — Ravencoin network has been raising min relay fees.
+    // Use a high floor and cap : Ravencoin network has been raising min relay fees.
     // For large consolidation txs, underpaying fees causes silent rejection.
     val minFloor = 500L // minimum 500 sat/byte for safety
     val SAT_PER_BYTE_CAP = 2000L // cap at 2000 sat/byte for very large txs
@@ -2022,7 +2211,7 @@ suspend fun consolidateAllFundsToFreshAddress(): String? = withContext(Dispatche
     val estimatedBytes = 10L + 250L * totalInputs + 85L * (totalAssetOutputs + 2) + 34L
     val feeSat = estimatedBytes * satPerByte
 
-    android.util.Log.i("WalletManager", "consolid: fee estimate — ${estimatedBytes} bytes at ${satPerByte} sat/byte = ${feeSat} sat (raw relay fee was ${rawSatPerByte})")
+    android.util.Log.i("WalletManager", "consolid: fee estimate : ${estimatedBytes} bytes at ${satPerByte} sat/byte = ${feeSat} sat (raw relay fee was ${rawSatPerByte})")
 
     // ═══════════════════════════════════════════════════════════════════════
     // CRITICAL FIX: Asset dust reservation
@@ -2042,7 +2231,7 @@ suspend fun consolidateAllFundsToFreshAddress(): String? = withContext(Dispatche
     val totalAssetAttachedRvn = allAssetKeyed.values.flatten().sumOf { it.assetUtxo.utxo.satoshis }
     val totalRvnAvailable = totalPureRvn + totalAssetAttachedRvn
 
-    android.util.Log.i("WalletManager", "consolid: RVN breakdown — pure=$totalPureRvn, assetAttached=$totalAssetAttachedRvn, total=$totalRvnAvailable")
+    android.util.Log.i("WalletManager", "consolid: RVN breakdown : pure=$totalPureRvn, assetAttached=$totalAssetAttachedRvn, total=$totalRvnAvailable")
     android.util.Log.i("WalletManager", "consolid: fee = $feeSat sat, assetDust = $totalAssetDust sat ($totalAssetOutputs outputs × $DUST_LIMIT)")
 
     // Reserve RVN for: fee + asset dust + at least dust for RVN change/output
@@ -2069,7 +2258,7 @@ suspend fun consolidateAllFundsToFreshAddress(): String? = withContext(Dispatche
         val txid: String
 
         if (hasAssets || allFunds.size > 1) {
-            android.util.Log.i("WalletManager", "consolid: multi-address tx — " +
+            android.util.Log.i("WalletManager", "consolid: multi-address tx : " +
                 "rvnInputs=$totalRvnInputs, assetInputs=$totalAssetInputs, " +
                 "assetOutputs=$totalAssetOutputs, amountSat=$amountSat, feeSat=$feeSat, assetDust=$totalAssetDust")
 
@@ -2102,7 +2291,7 @@ suspend fun consolidateAllFundsToFreshAddress(): String? = withContext(Dispatche
             }
             val utxos = allRvnKeyed.map { it.utxo }
 
-            android.util.Log.i("WalletManager", "consolid: single-address RVN sweep — " +
+            android.util.Log.i("WalletManager", "consolid: single-address RVN sweep : " +
                 "totalIn=$totalSat, send=$sendAmount, fee=$feeSat")
 
             val tx = RavencoinTxBuilder.buildAndSign(
@@ -2123,7 +2312,7 @@ suspend fun consolidateAllFundsToFreshAddress(): String? = withContext(Dispatche
 
     } catch (e: Exception) {
         // Log full exception details for debugging
-        android.util.Log.e("WalletManager", "consolid: FAILED — ${e.javaClass.simpleName}: ${e.message}", e)
+        android.util.Log.e("WalletManager", "consolid: FAILED : ${e.javaClass.simpleName}: ${e.message}", e)
         null
     } finally {
         keyPairs.values.forEach { (priv, _) -> priv.fill(0) }
