@@ -389,6 +389,24 @@ class AppStrings {
     var walletNoTxHistory: String = ""
     var walletTxConfs: String = ""
     var walletLoadMore: String = ""
+    // Plan 30-06: mnemonic safety (biometric reveal + restore confirm + device-security-changed)
+    var mnemonicBiometricCoverTitle: String = ""
+    var mnemonicBiometricCoverBody: String = ""
+    var mnemonicRevealCta: String = ""
+    var mnemonicCopyAll: String = ""
+    var mnemonicSavedIt: String = ""
+    var authCanceledSnackbar: String = ""
+    var mnemonicRevealFailed: String = ""
+    var deviceSecurityChangedTitle: String = ""
+    var deviceSecurityChangedBody: String = ""
+    var deviceSecurityChangedCta: String = ""
+    var restoreReplaceWalletTitle: String = ""
+    var restoreReplaceWalletBody: String = ""
+    var restoreBackupFirstBody: String = ""
+    var restoreReplaceCta: String = ""
+    var restoreBackupFirstCta: String = ""
+    var restoreInvalidPhrase: String = ""
+    var cancel: String = ""
 }
 
 private fun cloneStrings(base: AppStrings): AppStrings =
@@ -609,6 +627,24 @@ val stringsEn = AppStrings().apply {
     walletTxConfs = "confirmations"
     walletLoadMore = "Load More"
     issueRootSuccess = "Asset %1 issued (tx: %2)"; issueSubSuccess = "Sub-asset %1 issued (tx: %2)"; issueUniqueSuccess = "Token %1 issued (tx: %2)"; issueFailed = "Issuance failed"
+    // Plan 30-06 mnemonic safety copy (UI-SPEC Copywriting Contract, EN)
+    mnemonicBiometricCoverTitle = "Authenticate to reveal phrase"
+    mnemonicBiometricCoverBody = "Use your fingerprint, face, or PIN to display the recovery phrase. Anyone who sees it can steal your funds."
+    mnemonicRevealCta = "Reveal phrase"
+    mnemonicCopyAll = "Copy all"
+    mnemonicSavedIt = "I've saved it"
+    authCanceledSnackbar = "Authentication canceled"
+    mnemonicRevealFailed = "Could not reveal phrase. Try again."
+    deviceSecurityChangedTitle = "Device security changed"
+    deviceSecurityChangedBody = "Device security changed. Restore your wallet from the recovery phrase to continue."
+    deviceSecurityChangedCta = "Restore from recovery phrase"
+    restoreReplaceWalletTitle = "Replace current wallet?"
+    restoreReplaceWalletBody = "This will replace your current wallet (%1\$s RVN, %2\$s assets). You must back up the recovery phrase first. This action cannot be undone."
+    restoreBackupFirstBody = "Back up your recovery phrase first. You can't undo this."
+    restoreReplaceCta = "Replace wallet"
+    restoreBackupFirstCta = "Back up phrase first"
+    restoreInvalidPhrase = "Invalid recovery phrase. Check spelling and word order."
+    cancel = "Cancel"
 }
 
 /** Italian strings. */
@@ -826,6 +862,24 @@ val stringsIt = AppStrings().apply {
     walletTxConfs = "conferme"
     walletLoadMore = "Carica altre"
     issueRootSuccess = "Asset %1 emesso (tx: %2)"; issueSubSuccess = "Sub-asset %1 emesso (tx: %2)"; issueUniqueSuccess = "Token %1 emesso (tx: %2)"; issueFailed = "Emissione fallita"
+    // Plan 30-06 mnemonic safety copy (UI-SPEC Copywriting Contract, IT)
+    mnemonicBiometricCoverTitle = "Autenticati per mostrare la frase"
+    mnemonicBiometricCoverBody = "Usa impronta, volto o PIN per visualizzare la frase di recupero. Chi la vede può rubare i tuoi fondi."
+    mnemonicRevealCta = "Mostra frase"
+    mnemonicCopyAll = "Copia tutte"
+    mnemonicSavedIt = "L'ho salvata"
+    authCanceledSnackbar = "Autenticazione annullata"
+    mnemonicRevealFailed = "Impossibile mostrare la frase. Riprova."
+    deviceSecurityChangedTitle = "La sicurezza del dispositivo è cambiata"
+    deviceSecurityChangedBody = "La sicurezza del dispositivo è cambiata. Ripristina il wallet dalla frase di recupero per continuare."
+    deviceSecurityChangedCta = "Ripristina dalla frase di recupero"
+    restoreReplaceWalletTitle = "Sostituire il wallet attuale?"
+    restoreReplaceWalletBody = "Questa operazione sostituirà il wallet attuale (%1\$s RVN, %2\$s asset). Fai prima il backup della frase di recupero. Questa azione non può essere annullata."
+    restoreBackupFirstBody = "Fai prima il backup della frase di recupero. Non puoi annullare questa azione."
+    restoreReplaceCta = "Sostituisci wallet"
+    restoreBackupFirstCta = "Fai prima il backup"
+    restoreInvalidPhrase = "Frase di recupero non valida. Controlla ortografia e ordine."
+    cancel = "Annulla"
 }
 
 /** French strings. */
@@ -1683,7 +1737,7 @@ val stringsRu = cloneStrings(stringsEn).apply {
     writeTitle = "Запись NFC-тега"; writeStep1Title = "Приложите тег"; writeStep1Hint = "Поднесите телефон к NFC-чипу, чтобы прочитать UID."; writeStep1Label = "Шаг 1 из 3"; writeIssuingTitle = "Выпуск в Ravencoin"; writeIssuingHint = "Загрузка метаданных в IPFS и создание sub-актива…"; writeStep3Title = "Приложите тег снова"; writeStep3Hint = "Поднесите телефон к тому же тегу, чтобы записать AES-ключи и SUN URL."; writeStep3Label = "Шаг 3 из 3"; writeSuccessTitle = "Тег записан!"; writeSuccessHint = "NFC-чип успешно настроен.\nСохраните ключи ниже в безопасном месте, они больше нигде не хранятся."; writeSaveKeys = "Сохраните эти ключи в защищенном хранилище. Без них нельзя будет отозвать тег или проверить считывания."; writeErrorTitle = "Ошибка"; writeCloseBtn = "Закрыть"
     walletReceiveBtn = "Получить"; walletSendBtn = "Отправить"; walletReceiveTitle = "Получить RVN"; walletReceiveDesc = "Сканируйте этот QR-код или скопируйте адрес ниже, чтобы получить Ravencoin."; walletCopyDone = "Адрес скопирован!"; walletSendTitle = "Отправить RVN"; walletSendAmountLabel = "Сумма (RVN)"; walletSendAddrLabel = "Адрес получателя"; walletSendConfirm = "Отправить"; walletSendSuccess = "Успешно отправлено!"; walletSendFailed = "Отправка не удалась"; walletTransferFailed = "Передача не удалась"; walletSendError = "Отправка не удалась: %1"; walletTransferError = "Передача не удалась: %1"; walletSendWarning = "Это действие нельзя отменить. Внимательно проверьте адрес."; walletSendFeeUnavailable = "Ставка сетевой комиссии недоступна. Все узлы недоступны, попробуйте позже."; walletSendDialogTitle = "Подтвердить отправку"; walletSendDialogMsg = "Отправить %1 RVN на %2?"
     walletFilterAll = "Все"; brandProgramTag = "Записать NFC-тег"; brandProgramTagDesc = "Записать AES-ключи и SUN URL в чип NTAG 424 DNA. Чип автоматически регистрируется в бэкенде."; brandProgramTagAssetHint = "Полное имя актива, например FASHIONX/BAG01#SN0001"; brandProgramTagStart = "Начать запись тега"; brandNoWalletMsg = "Кошелек Ravencoin не найден. Создайте или добавьте кошелек во вкладке Wallet, чтобы продолжить."; brandGoToWallet = "Перейти в кошелек"
-    settingsDonateBtn = "Пожертвовать RVN RavenTag"; settingsDonateTitle = "Пожертвование RavenTag"; settingsDonateDesc = "Поддержите развитие открытого протокола RavenTag."; settingsDonateMsg = "RavenTag — бесплатный open-source протокол NFC-аутентификации, созданный для брендов любого масштаба. Если он вам полезен, рассмотрите небольшое пожертвование в RVN, чтобы поддержать дальнейшую разработку, документацию и новые функции. Любой вклад, даже небольшой, действительно важен. Спасибо за поддержку open-source!"; brandNoFundsTitle = "Недостаточный баланс"; brandNoFundsMsg = "В кошельке нет RVN. Пополните кошелек, чтобы выпускать активы. Вы все равно можете продолжить просмотр формы."; brandNoFundsContinue = "Продолжить в любом случае"
+    settingsDonateBtn = "Пожертвовать RVN RavenTag"; settingsDonateTitle = "Пожертвование RavenTag"; settingsDonateDesc = "Поддержите развитие открытого протокола RavenTag."; settingsDonateMsg = "RavenTag : бесплатный open-source протокол NFC-аутентификации, созданный для брендов любого масштаба. Если он вам полезен, рассмотрите небольшое пожертвование в RVN, чтобы поддержать дальнейшую разработку, документацию и новые функции. Любой вклад, даже небольшой, действительно важен. Спасибо за поддержку open-source!"; brandNoFundsTitle = "Недостаточный баланс"; brandNoFundsMsg = "В кошельке нет RVN. Пополните кошелек, чтобы выпускать активы. Вы все равно можете продолжить просмотр формы."; brandNoFundsContinue = "Продолжить в любом случае"
     navSettings = "Настройки"; settingsTitle = "Настройки"; settingsBrandName = "Название бренда"; settingsBrandNameHint = "Название вашего бренда, отображаемое в приложении (например, Fashionx)"; settingsVerifyUrl = "URL сервера проверки"; settingsVerifyUrlHint = "URL бэкенда бренда, выпустившего продукт. Используется для сканирования и программирования чипов."; settingsVerifyUrlConsumer = "URL сервера бренда"; settingsVerifyUrlHintConsumer = "Введи URL, предоставленный брендом товара, который хочешь проверить. Его можно найти на упаковке или сайте бренда."; settingsSave = "Сохранить"; settingsSaved = "Сохранено!"; settingsAbout = "О приложении"; settingsVersion = "Версия"; settingsRequireAuth = "Требовать аутентификацию при запуске"; settingsRequireAuthDesc = "Запрашивать PIN или биометрию при открытии приложения (требуется активный кошелек)"; settingsRequireAuthRisk = "Отключение снижает безопасность. Любой, у кого есть доступ к устройству, сможет открыть приложение."; settingsNoLockScreen = "На устройстве не настроена блокировка экрана. Аутентификация будет пропущена. Настройте PIN или отпечаток пальца в системе для защиты кошелька."; settingsAllowScreenshots = "Разрешить скриншоты"; settingsAllowScreenshotsDesc = "Отключить защиту от захвата экрана (FLAG_SECURE). Ключи кошелька и мнемоника могут попадать в миниатюры и записи экрана."; settingsAllowScreenshotsWarning = "Скриншоты включены: ключи кошелька и мнемоника НЕ защищены от захвата экрана."; settingsAllowScreenshotsDialogTitle = "Предупреждение безопасности"; settingsAllowScreenshotsDialogBody = "Разрешение скриншотов отключает защиту FLAG_SECURE. Ключи кошелька и фраза восстановления могут быть захвачены средствами записи экрана, миниатюрами и ближайшими камерами.\n\nВключайте только на доверенных личных устройствах."; settingsAllowScreenshotsConfirm = "Понимаю, включить скриншоты"; settingsNotifications = "Включить уведомления"; settingsNotificationsDesc = "Показывать уведомление при получении RVN или активов."; authTitle = "RavenTag"; authSubtitle = "请认证以访问你的钱包"
     // QR Scanner
     qrScannerTitle = "Сканировать QR-код"
