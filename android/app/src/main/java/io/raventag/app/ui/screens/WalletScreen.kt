@@ -109,15 +109,19 @@ fun WalletScreen(
     controlKeyValidating: Boolean = false,
     controlKeyError: String? = null,
     onRestoreModeChange: (Boolean) -> Unit = {},
+    onNavigateToMnemonicBackup: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val s = LocalStrings.current
+    val context = LocalContext.current
     var pendingTransferAsset by remember { mutableStateOf<OwnedAsset?>(null) }
     var showMnemonic by remember { mutableStateOf(false) }
     var showRestore by remember { mutableStateOf(false) }
     var restoreWords by remember { mutableStateOf(List(12) { "" }) }
     var controlKey by remember { mutableStateOf("") }
     var showDeleteDialog by remember { mutableStateOf(false) }
+    var showRestoreConfirmDialog by remember { mutableStateOf(false) }
+    var pendingRestoreArgs by remember { mutableStateOf<Pair<String, String>?>(null) }
     var assetFilter by remember { mutableStateOf<AssetType?>(null) } // null = All
     var previewAsset by remember { mutableStateOf<OwnedAsset?>(null) }
     var showOwnerTokens by remember { mutableStateOf(false) }
@@ -146,6 +150,32 @@ fun WalletScreen(
                     border = BorderStroke(1.dp, RavenBorder),
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)
                 ) { Text(s.walletCancelBtn) }
+            }
+        )
+    }
+
+    if (showRestoreConfirmDialog) {
+        val prefs = context.getSharedPreferences("raventag_wallet", Context.MODE_PRIVATE)
+        val hasBackedUp = prefs.getBoolean("backup_completed", false)
+        val assetsCount = ownedAssets?.size ?: 0
+        RestoreWalletConfirmDialog(
+            hasBackedUp = hasBackedUp,
+            rvnAmount = walletBalance,
+            assetsCount = assetsCount,
+            onDismiss = {
+                showRestoreConfirmDialog = false
+                pendingRestoreArgs = null
+            },
+            onBackupFirst = {
+                showRestoreConfirmDialog = false
+                pendingRestoreArgs = null
+                onNavigateToMnemonicBackup()
+            },
+            onReplace = {
+                val args = pendingRestoreArgs
+                showRestoreConfirmDialog = false
+                pendingRestoreArgs = null
+                if (args != null) onRestoreWallet(args.first, args.second)
             }
         )
     }
@@ -333,7 +363,20 @@ fun WalletScreen(
                     },
                     onGenerate = { showRestore = false; restoreWords = List(12) { "" }; onRestoreModeChange(false); onGenerateWallet(controlKey) },
                     onToggleRestore = { val next = !showRestore; showRestore = next; restoreWords = List(12) { "" }; onRestoreModeChange(next) },
-                    onRestore = { onRestoreWallet(restoreWords.joinToString(" "), controlKey) }
+                    onRestore = {
+                        // D-14: if the current wallet holds funds or assets, gate the
+                        // restore with a destructive-confirm dialog and a forced-backup
+                        // variant when `backup_completed` is false.
+                        val phrase = restoreWords.joinToString(" ")
+                        val assetsCount = ownedAssets?.size ?: 0
+                        val hasFunds = walletBalance > 0.0 || assetsCount > 0
+                        if (hasFunds) {
+                            pendingRestoreArgs = phrase to controlKey
+                            showRestoreConfirmDialog = true
+                        } else {
+                            onRestoreWallet(phrase, controlKey)
+                        }
+                    }
                 )
             }
         } else if (walletInfo != null) {
@@ -1058,4 +1101,76 @@ private fun MnemonicCard(s: AppStrings, mnemonic: String, visible: Boolean, onTo
             if (visible) { Spacer(modifier = Modifier.height(12.dp)) ; Card(colors = CardDefaults.cardColors(containerColor = RavenBg), shape = RoundedCornerShape(8.dp)) { val words = mnemonic.split(" ") ; Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) { words.chunked(3).forEachIndexed { row, chunk -> Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) { chunk.forEachIndexed { col, word -> val n = row * 3 + col + 1 ; Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) { Text("$n.", style = MaterialTheme.typography.labelSmall, color = RavenMuted, modifier = Modifier.width(20.dp)) ; Text(word, style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace), color = Color.White) } } } } } } ; Spacer(modifier = Modifier.height(8.dp)) ; Text(s.walletNeverShare, style = MaterialTheme.typography.labelSmall, color = RavenOrange, textAlign = TextAlign.Center) } else { Spacer(modifier = Modifier.height(8.dp)) ; Text(s.walletTapReveal, style = MaterialTheme.typography.bodySmall, color = RavenMuted) }
         }
     }
+}
+
+/**
+ * D-14: destructive-confirm dialog shown when the user initiates a restore-over-wallet
+ * with funds or assets in the current wallet.
+ *
+ * Two variants:
+ *  - `hasBackedUp == true`  : body describes the replacement, primary button "Replace wallet"
+ *                             (NotAuthenticRed), Cancel outlined.
+ *  - `hasBackedUp == false` : body tells the user to back up first, primary button
+ *                             "Back up phrase first" (RavenOrange) routes to MnemonicBackupScreen,
+ *                             Cancel still available per UI-SPEC.
+ */
+@Composable
+private fun RestoreWalletConfirmDialog(
+    hasBackedUp: Boolean,
+    rvnAmount: Double,
+    assetsCount: Int,
+    onDismiss: () -> Unit,
+    onBackupFirst: () -> Unit,
+    onReplace: () -> Unit
+) {
+    val strings = LocalStrings.current
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Color(0xFF1A0000),
+        shape = RoundedCornerShape(16.dp),
+        title = {
+            Text(
+                text = strings.restoreReplaceWalletTitle,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = Color.White
+            )
+        },
+        text = {
+            val body = if (hasBackedUp) {
+                String.format(
+                    strings.restoreReplaceWalletBody,
+                    String.format("%.8f", rvnAmount),
+                    assetsCount.toString()
+                )
+            } else {
+                strings.restoreBackupFirstBody
+            }
+            Text(
+                text = body,
+                style = MaterialTheme.typography.bodyMedium,
+                color = RavenMuted
+            )
+        },
+        confirmButton = {
+            if (hasBackedUp) {
+                Button(
+                    onClick = onReplace,
+                    colors = ButtonDefaults.buttonColors(containerColor = NotAuthenticRed)
+                ) { Text(strings.restoreReplaceCta, fontWeight = FontWeight.Bold) }
+            } else {
+                Button(
+                    onClick = onBackupFirst,
+                    colors = ButtonDefaults.buttonColors(containerColor = RavenOrange)
+                ) { Text(strings.restoreBackupFirstCta, fontWeight = FontWeight.Bold) }
+            }
+        },
+        dismissButton = {
+            OutlinedButton(
+                onClick = onDismiss,
+                border = BorderStroke(1.dp, RavenBorder),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)
+            ) { Text(strings.cancel) }
+        }
+    )
 }
