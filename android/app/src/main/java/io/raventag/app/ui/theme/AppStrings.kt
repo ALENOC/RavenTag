@@ -440,6 +440,12 @@ class AppStrings {
     var txHistoryEmptyBody: String = "Your first sent or received transaction will appear here."
     var txDetailsViewOnExplorer: String = "View on explorer"
     var txHistoryConfirmations: String = "%1\$d/6 confirmations"
+
+    // Phase 30-10: accessibility contentDescription labels
+    var connectionStatusDotDesc: String = "Connection status"
+    var batterySaverChipDesc: String = "Battery saver mode active"
+    var biometricCoverDesc: String = "Biometric authentication cover"
+    var revealMnemonicButtonDesc: String = "Reveal recovery phrase"
 }
 
 private fun cloneStrings(base: AppStrings): AppStrings =
@@ -709,6 +715,11 @@ val stringsEn = AppStrings().apply {
     txHistoryEmptyBody = "Your first sent or received transaction will appear here."
     txDetailsViewOnExplorer = "View on explorer"
     txHistoryConfirmations = "%1\$d/6 confirmations"
+    // Phase 30-10: accessibility contentDescription labels (EN)
+    connectionStatusDotDesc = "Connection status"
+    batterySaverChipDesc = "Battery saver mode active"
+    biometricCoverDesc = "Biometric authentication cover"
+    revealMnemonicButtonDesc = "Reveal recovery phrase"
 }
 
 /** Italian strings. */
@@ -975,6 +986,11 @@ val stringsIt = AppStrings().apply {
     txHistoryEmptyBody = "La prima transazione inviata o ricevuta comparirà qui."
     txDetailsViewOnExplorer = "Apri su explorer"
     txHistoryConfirmations = "%1\$d/6 conferme"
+    // Phase 30-10: accessibility contentDescription labels (IT)
+    connectionStatusDotDesc = "Stato connessione"
+    batterySaverChipDesc = "Modalità risparmio energetico attiva"
+    biometricCoverDesc = "Copertura autenticazione biometrica"
+    revealMnemonicButtonDesc = "Mostra frase di recupero"
 }
 
 /** French strings. */
