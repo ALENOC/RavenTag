@@ -54,6 +54,7 @@ import io.raventag.app.ravencoin.AssetType
 import io.raventag.app.ravencoin.OwnedAsset
 import io.raventag.app.ui.theme.*
 import io.raventag.app.wallet.TxHistoryEntry
+import io.raventag.app.wallet.cache.TxHistoryDao
 import okhttp3.Request
 import coil.compose.SubcomposeAsyncImage
 import coil.request.ImageRequest
@@ -127,6 +128,11 @@ fun WalletScreen(
     val context = LocalContext.current
     var pendingTransferAsset by remember { mutableStateOf<OwnedAsset?>(null) }
     var showMnemonic by remember { mutableStateOf(false) }
+    // D-23 extra paged rows appended locally via TxHistoryDao.getPage / getHistoryPaged
+    // in addition to txHistory provided by MainViewModel.
+    var extraTxHistory by remember { mutableStateOf<List<TxHistoryEntry>>(emptyList()) }
+    // Reset local pagination when the active wallet address changes.
+    LaunchedEffect(walletInfo?.address) { extraTxHistory = emptyList() }
     var showRestore by remember { mutableStateOf(false) }
     var restoreWords by remember { mutableStateOf(List(12) { "" }) }
     var controlKey by remember { mutableStateOf("") }
@@ -693,33 +699,99 @@ fun WalletScreen(
                 }
             }
             item(key = "tx_header_spacer") { Spacer(modifier = Modifier.height(10.dp)) }
-            if (!txHistoryLoading && txHistory.isEmpty()) {
+            if (!txHistoryLoading && txHistory.isEmpty() && extraTxHistory.isEmpty()) {
+                // D-23 UI-SPEC empty state: heading + body (verbatim Copywriting Contract).
                 item(key = "tx_empty") {
                     Card(colors = CardDefaults.cardColors(containerColor = RavenCard), border = BorderStroke(1.dp, RavenBorder), shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth()) {
-                        Box(modifier = Modifier.padding(20.dp).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                            Text(s.walletNoTxHistory, style = MaterialTheme.typography.bodySmall, color = RavenMuted, textAlign = TextAlign.Center)
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 20.dp, horizontal = 16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                text = s.txHistoryEmptyHeading,
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Color.White,
+                                textAlign = TextAlign.Center
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = s.txHistoryEmptyBody,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = RavenMuted,
+                                textAlign = TextAlign.Center
+                            )
                         }
                     }
                 }
             } else {
-                items(txHistory, key = { it.txid }) { tx ->
+                items(txHistory, key = { "vm_${it.txid}" }) { tx ->
                     Box(modifier = Modifier.padding(bottom = 6.dp)) {
                         TxCard(s, tx)
                     }
                 }
-                // Show "Load More" button if there are more transactions to load
-                if (!txHistoryLoading && txHistoryLoadedCount < txHistoryTotal) {
+                // D-23 locally appended rows (from TxHistoryDao.getPage / getHistoryPaged).
+                items(extraTxHistory, key = { "ex_${it.txid}" }) { tx ->
+                    Box(modifier = Modifier.padding(bottom = 6.dp)) {
+                        TxCard(s, tx)
+                    }
+                }
+                if (!txHistoryLoading &&
+                    (txHistoryLoadedCount < txHistoryTotal ||
+                        (txHistory.isNotEmpty() && extraTxHistory.size < 200))) {
                     item(key = "load_more_spacer") { Spacer(modifier = Modifier.height(8.dp)) }
                     item(key = "load_more") {
+                        // D-23 Load more: primary = parent VM callback (enriches via network);
+                        // fallback = local paged read from TxHistoryDao, then RavencoinPublicNode.getHistoryPaged
+                        // for shells when the DB is exhausted.
                         Button(
-                            onClick = onLoadMoreTransactions,
-                            colors = ButtonDefaults.buttonColors(containerColor = RavenCard),
-                            border = BorderStroke(1.dp, RavenBorder),
+                            onClick = {
+                                onLoadMoreTransactions()
+                                scope.launch {
+                                    val offset = txHistory.size + extraTxHistory.size
+                                    val local: List<TxHistoryDao.TxHistoryRow> = try {
+                                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                            TxHistoryDao.getPage(offset = offset, limit = 20)
+                                        }
+                                    } catch (_: Exception) { emptyList() }
+                                    val localMapped = local.map { row ->
+                                        TxHistoryEntry(
+                                            txid = row.txid,
+                                            height = row.height,
+                                            confirmations = row.confirms,
+                                            amountSat = row.amountSat,
+                                            sentSat = row.sentSat,
+                                            isIncoming = row.isIncoming,
+                                            isSelfTransfer = row.isSelf,
+                                            timestamp = row.timestamp,
+                                            cycledSat = row.cycledSat,
+                                            feeSat = row.feeSat
+                                        )
+                                    }
+                                    if (localMapped.isNotEmpty()) {
+                                        val existing = (txHistory + extraTxHistory).map { it.txid }.toHashSet()
+                                        extraTxHistory = extraTxHistory + localMapped.filter { it.txid !in existing }
+                                    } else {
+                                        val addr = walletInfo?.address
+                                        if (addr != null) {
+                                            val network = try {
+                                                io.raventag.app.wallet.RavencoinPublicNode(context)
+                                                    .getHistoryPaged(address = addr, offset = offset, limit = 20)
+                                            } catch (_: Exception) { emptyList() }
+                                            if (network.isNotEmpty()) {
+                                                val existing = (txHistory + extraTxHistory).map { it.txid }.toHashSet()
+                                                extraTxHistory = extraTxHistory + network.filter { it.txid !in existing }
+                                            }
+                                        }
+                                    }
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = RavenOrange),
                             modifier = Modifier.fillMaxWidth().height(44.dp)
                         ) {
-                            Icon(Icons.Default.MoreHoriz, contentDescription = null, tint = RavenOrange, modifier = Modifier.size(18.dp))
+                            Icon(Icons.Default.MoreHoriz, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text(s.walletLoadMore, color = RavenOrange, fontWeight = FontWeight.SemiBold)
+                            Text(s.txHistoryLoadMore, color = Color.White, fontWeight = FontWeight.SemiBold)
                         }
                     }
                 }
@@ -914,24 +986,37 @@ private fun BalanceCard(s: AppStrings, info: WalletInfo, rvnPrice: Double? = nul
 private fun TxCard(s: AppStrings, tx: TxHistoryEntry) {
     val isSelf     = tx.isSelfTransfer
     val isIncoming = tx.isIncoming && !isSelf
-    val dotColor   = when { tx.confirmations == 0 -> NotAuthenticRed; tx.confirmations < 6 -> Color(0xFFF59E0B); else -> AuthenticGreen }
-    val confLabel  = when { tx.confirmations == 0 -> s.walletTxUnconfirmed; tx.confirmations < 6 -> "${tx.confirmations} ${s.walletTxConfs}"; else -> s.walletTxConfirmed }
-    // Self-transfers: show the amount that moved internally (amountSat stores totalToUs).
-    // Outgoing: sentSat is the net amount that left the wallet.
-    // Incoming: amountSat is the net amount received.
-    val amountRvn = when {
-        isSelf     -> tx.amountSat / 1e8
-        isIncoming -> tx.amountSat / 1e8
-        else       -> tx.sentSat   / 1e8
+    // D-08 dot color: red 0 conf, amber 1..5, green >=6.
+    val dotColor   = when {
+        tx.confirmations == 0 -> NotAuthenticRed
+        tx.confirmations in 1..5 -> Color(0xFFF59E0B)
+        else -> AuthenticGreen
     }
-    val sign       = if (isIncoming) "+" else ""
+    val confLabel  = when {
+        tx.confirmations == 0 -> s.walletTxUnconfirmed
+        tx.confirmations < 6  -> "${tx.confirmations} ${s.walletTxConfs}"
+        else -> s.walletTxConfirmed
+    }
     val amtColor   = when { isSelf -> RavenOrange; isIncoming -> AuthenticGreen; else -> NotAuthenticRed }
     val iconVec    = when { isSelf -> Icons.Default.Autorenew; isIncoming -> Icons.Default.CallReceived; else -> Icons.Default.CallMade }
+
+    // D-19 three-value amounts (outgoing only). Cycled/fee fall back to 0 for unenriched shells.
+    val sentSat   = tx.sentSat
+    val cycledSat = tx.cycledSat
+    val feeSat    = tx.feeSat
+
+    // Pre-existing incoming/self "big amount" composite with 10sp decimals.
+    val amountRvn = when {
+        isSelf     -> (if (cycledSat > 0L) cycledSat else tx.amountSat) / 1e8
+        isIncoming -> tx.amountSat / 1e8
+        else       -> sentSat / 1e8
+    }
+    val sign = if (isIncoming) "+" else ""
     val full   = String.format(java.util.Locale.US, "%.8f", amountRvn)
     val dotIdx = full.indexOf('.')
     val intPart = full.substring(0, dotIdx)
     val decPart = full.substring(dotIdx + 1).trimEnd('0')
-    val amountAnnotated = buildAnnotatedString {
+    val bigAmountAnnotated = buildAnnotatedString {
         append("$sign$intPart")
         if (decPart.isNotEmpty()) {
             withStyle(SpanStyle(fontSize = 10.sp)) { append(",$decPart RVN") }
@@ -939,16 +1024,92 @@ private fun TxCard(s: AppStrings, tx: TxHistoryEntry) {
             append(" RVN")
         }
     }
-    val dateText = if (tx.timestamp > 0) { java.text.SimpleDateFormat("dd/MM/yy HH:mm", java.util.Locale.getDefault()).apply { timeZone = java.util.TimeZone.getDefault() }.format(java.util.Date(tx.timestamp * 1000)) } else { "" }
-    Card(colors = CardDefaults.cardColors(containerColor = RavenCard), border = BorderStroke(1.dp, RavenBorder), shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth()) {
-        Row(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            val scale = if (tx.confirmations == 0) { rememberInfiniteTransition(label = "").animateFloat(initialValue = 0.8f, targetValue = 1.2f, animationSpec = infiniteRepeatable(tween(800), RepeatMode.Reverse), label = "").value } else 1f
+
+    // Plain 8-decimal RVN rendering for Sent/Cycled/Fee lines.
+    fun sat2Rvn(v: Long) = String.format(java.util.Locale.US, "%.8f", v / 1e8).trimEnd('0').trimEnd('.')
+
+    val dateText = if (tx.timestamp > 0) {
+        java.text.SimpleDateFormat("dd/MM/yy HH:mm", java.util.Locale.getDefault())
+            .apply { timeZone = java.util.TimeZone.getDefault() }
+            .format(java.util.Date(tx.timestamp * 1000))
+    } else { "" }
+
+    Card(
+        colors = CardDefaults.cardColors(containerColor = RavenCard),
+        border = BorderStroke(1.dp, RavenBorder),
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            val scale = if (tx.confirmations == 0) {
+                rememberInfiniteTransition(label = "").animateFloat(
+                    initialValue = 0.8f,
+                    targetValue = 1.2f,
+                    animationSpec = infiniteRepeatable(tween(800), RepeatMode.Reverse),
+                    label = ""
+                ).value
+            } else 1f
             Box(modifier = Modifier.size(10.dp).scale(scale).background(dotColor, androidx.compose.foundation.shape.CircleShape))
             Icon(imageVector = iconVec, contentDescription = null, tint = amtColor, modifier = Modifier.size(16.dp))
-            Text("${tx.txid.take(8)}\u2026${tx.txid.takeLast(6)}", style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace), color = RavenMuted, modifier = Modifier.weight(1f))
+            Text(
+                "${tx.txid.take(8)}\u2026${tx.txid.takeLast(6)}",
+                style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                color = RavenMuted,
+                modifier = Modifier.weight(1f)
+            )
             Column(horizontalAlignment = Alignment.End) {
-                Text(amountAnnotated, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold, color = amtColor)
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) { if (dateText.isNotEmpty()) { Text(dateText, style = MaterialTheme.typography.labelSmall, color = RavenMuted, fontSize = 9.sp) } ; Text("\u2022", style = MaterialTheme.typography.labelSmall, color = RavenMuted, fontSize = 9.sp) ; Text(confLabel, style = MaterialTheme.typography.labelSmall, color = dotColor, fontSize = 9.sp) }
+                when {
+                    isIncoming -> {
+                        // UNCHANGED incoming layout.
+                        Text(bigAmountAnnotated, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold, color = amtColor)
+                    }
+                    isSelf -> {
+                        // D-19 self-transfer variant: single line "Cycled X RVN \u00b7 Fee Y RVN".
+                        val cycledStr = sat2Rvn(if (cycledSat > 0L) cycledSat else tx.amountSat)
+                        val feeStr = sat2Rvn(feeSat)
+                        Text(
+                            text = "${s.txHistoryCycledPrefix} $cycledStr RVN \u00b7 ${s.txHistoryFeePrefix} $feeStr RVN",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = AuthenticGreen
+                        )
+                    }
+                    else -> {
+                        // D-19 outgoing three-value breakdown.
+                        val sentStr = sat2Rvn(sentSat)
+                        val cycledStr = sat2Rvn(cycledSat)
+                        val feeStr = sat2Rvn(feeSat)
+                        Text(
+                            text = "${s.txHistorySentPrefix} -$sentStr RVN",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = NotAuthenticRed
+                        )
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            text = "${s.txHistoryCycledPrefix} $cycledStr RVN",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = AuthenticGreen
+                        )
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            text = "${s.txHistoryFeePrefix} $feeStr RVN",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = RavenMuted
+                        )
+                    }
+                }
+                Spacer(Modifier.height(6.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    if (dateText.isNotEmpty()) {
+                        Text(dateText, style = MaterialTheme.typography.labelSmall, color = RavenMuted, fontSize = 9.sp)
+                    }
+                    Text("\u00b7", style = MaterialTheme.typography.labelSmall, color = RavenMuted, fontSize = 9.sp)
+                    Text(confLabel, style = MaterialTheme.typography.labelSmall, color = dotColor, fontSize = 9.sp)
+                }
             }
         }
     }
