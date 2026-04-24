@@ -103,10 +103,13 @@ data class TxHistoryEntry(
     val height: Int,           // 0 = unconfirmed/mempool
     val confirmations: Int,
     val amountSat: Long,       // positive = received to our address
-    val sentSat: Long,         // positive = sent to other addresses
+    val sentSat: Long,         // positive = sent to other addresses (external, D-19)
     val isIncoming: Boolean,   // true if amountSat > 0 (our address in vout)
     val isSelfTransfer: Boolean = false, // true if this is an internal sweep (< 1% net loss)
-    val timestamp: Long = 0L   // Unix timestamp in seconds (0 if unknown)
+    val timestamp: Long = 0L,  // Unix timestamp in seconds (0 if unknown)
+    // D-19 three-value breakdown (0 when unknown / not yet enriched):
+    val cycledSat: Long = 0L,  // satoshis paying the change / currentIndex+1 address
+    val feeSat: Long = 0L      // fee paid (sum(vin) - sum(vout))
 )
 
 /**
