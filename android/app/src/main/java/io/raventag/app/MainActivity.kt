@@ -972,7 +972,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         hasWallet = wm.hasWallet()
         // Only start loading if the ViewModel has no data yet (first launch or process restart).
         // On Activity re-creation (screen rotation, system config change) the ViewModel survives
-        // with walletInfo already populated — skip the reload to avoid flashing 0 on screen.
+        // with walletInfo already populated: skip the reload to avoid flashing 0 on screen.
         if (hasWallet && walletInfo == null) { loadWalletInfo() }
     }
 
@@ -3257,7 +3257,7 @@ fun RavenTagApp(
         Box(modifier = Modifier.padding(innerPadding).fillMaxSize()) {
 
             // WalletScreen: keep alive in the composition tree after the first visit.
-            // `when` branches are destroyed on every tab switch — for a large screen like
+            // `when` branches are destroyed on every tab switch, and for a large screen like
             // WalletScreen (many asset cards, scroll state, dialogs) that initial composition
             // costs more than one frame and produces visible lag.
             // Using alpha(0f) + pointer-blocking overlay keeps it alive without rendering.
