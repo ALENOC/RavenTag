@@ -407,6 +407,29 @@ class AppStrings {
     var restoreBackupFirstCta: String = ""
     var restoreInvalidPhrase: String = ""
     var cancel: String = ""
+
+    // Phase 30 plan 30-08 additions
+    var cachedStateBanner: String = "Showing cached state · Last updated %1\$s"
+    var cachedStateReconnecting: String = "Last updated %1\$s · reconnecting…"
+    var pendingBalanceLabel: String = "Pending"
+    var batterySaverChip: String = "Battery saver · manual refresh"
+    var connectionPillOnline: String = "Online"
+    var connectionPillReconnecting: String = "Reconnecting…"
+    var connectionPillOffline: String = "Offline"
+    var connectionPillSheetTitle: String = "Ravencoin network"
+    var connectionPillCurrentNode: String = "Current node"
+    var connectionPillLastSuccess: String = "Last successful RPC"
+    var connectionPillFallbackNodes: String = "Fallback nodes"
+    var connectionPillQuarantined: String = "Quarantined until %1\$s"
+    var connectionPillClose: String = "Close"
+    var connectionPillNoNode: String = "(none)"
+    var reconnectingToast: String = "Reconnecting to Ravencoin network…"
+    var offlineAllNodesUnreachable: String = "Offline · all nodes unreachable"
+    var incomingTxSnackbar: String = "+%1\$s RVN received"
+    var receiveCurrentAddressLabel: String = "Your current address"
+    var receiveCurrentAddressSubLabel: String = "Changes after your next send or consolidation."
+    var walletOfflineHeading: String = "Wallet offline"
+    var walletOfflineBody: String = "Cannot reach any Ravencoin node. Check your internet connection, then tap Refresh."
 }
 
 private fun cloneStrings(base: AppStrings): AppStrings =
@@ -645,6 +668,29 @@ val stringsEn = AppStrings().apply {
     restoreBackupFirstCta = "Back up phrase first"
     restoreInvalidPhrase = "Invalid recovery phrase. Check spelling and word order."
     cancel = "Cancel"
+
+    // Phase 30 plan 30-08
+    cachedStateBanner = "Showing cached state · Last updated %1\$s"
+    cachedStateReconnecting = "Last updated %1\$s · reconnecting…"
+    pendingBalanceLabel = "Pending"
+    batterySaverChip = "Battery saver · manual refresh"
+    connectionPillOnline = "Online"
+    connectionPillReconnecting = "Reconnecting…"
+    connectionPillOffline = "Offline"
+    connectionPillSheetTitle = "Ravencoin network"
+    connectionPillCurrentNode = "Current node"
+    connectionPillLastSuccess = "Last successful RPC"
+    connectionPillFallbackNodes = "Fallback nodes"
+    connectionPillQuarantined = "Quarantined until %1\$s"
+    connectionPillClose = "Close"
+    connectionPillNoNode = "(none)"
+    reconnectingToast = "Reconnecting to Ravencoin network…"
+    offlineAllNodesUnreachable = "Offline · all nodes unreachable"
+    incomingTxSnackbar = "+%1\$s RVN received"
+    receiveCurrentAddressLabel = "Your current address"
+    receiveCurrentAddressSubLabel = "Changes after your next send or consolidation."
+    walletOfflineHeading = "Wallet offline"
+    walletOfflineBody = "Cannot reach any Ravencoin node. Check your internet connection, then tap Refresh."
 }
 
 /** Italian strings. */
@@ -880,6 +926,29 @@ val stringsIt = AppStrings().apply {
     restoreBackupFirstCta = "Fai prima il backup"
     restoreInvalidPhrase = "Frase di recupero non valida. Controlla ortografia e ordine."
     cancel = "Annulla"
+
+    // Phase 30 plan 30-08
+    cachedStateBanner = "Stato in cache · Ultimo aggiornamento %1\$s"
+    cachedStateReconnecting = "Ultimo aggiornamento %1\$s · riconnessione…"
+    pendingBalanceLabel = "In attesa"
+    batterySaverChip = "Risparmio energetico · aggiorna a mano"
+    connectionPillOnline = "Online"
+    connectionPillReconnecting = "Riconnessione…"
+    connectionPillOffline = "Offline"
+    connectionPillSheetTitle = "Rete Ravencoin"
+    connectionPillCurrentNode = "Nodo attuale"
+    connectionPillLastSuccess = "Ultima RPC riuscita"
+    connectionPillFallbackNodes = "Nodi di riserva"
+    connectionPillQuarantined = "In quarantena fino a %1\$s"
+    connectionPillClose = "Chiudi"
+    connectionPillNoNode = "(nessuno)"
+    reconnectingToast = "Riconnessione alla rete Ravencoin…"
+    offlineAllNodesUnreachable = "Offline · nessun nodo raggiungibile"
+    incomingTxSnackbar = "+%1\$s RVN ricevuti"
+    receiveCurrentAddressLabel = "Il tuo indirizzo attuale"
+    receiveCurrentAddressSubLabel = "Cambia dopo il prossimo invio o consolidamento."
+    walletOfflineHeading = "Wallet offline"
+    walletOfflineBody = "Nessun nodo Ravencoin raggiungibile. Controlla la connessione e tocca Aggiorna."
 }
 
 /** French strings. */
