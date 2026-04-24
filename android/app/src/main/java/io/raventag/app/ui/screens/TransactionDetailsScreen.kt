@@ -1,23 +1,33 @@
 package io.raventag.app.ui.screens
 
 import android.util.Log
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Autorenew
+import androidx.compose.material.icons.filled.CallMade
+import androidx.compose.material.icons.filled.CallReceived
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.OpenInBrowser
+import androidx.compose.material.icons.filled.Payments
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.raventag.app.config.AppConfig
 import io.raventag.app.ui.theme.*
+import io.raventag.app.wallet.cache.TxHistoryDao
 
 /**
  * Transaction details screen overlay showing txid, amount, confirmations, and status.
@@ -32,7 +42,10 @@ fun TransactionDetailsScreen(
     txid: String,
     onClose: () -> Unit
 ) {
+    val strings = LocalStrings.current
+    val context = LocalContext.current
     var transaction by remember { mutableStateOf<Transaction?>(null) }
+    var txRow by remember { mutableStateOf<TxHistoryDao.TxHistoryRow?>(null) }
     var isLoading by remember { mutableStateOf(true) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
 
@@ -40,18 +53,22 @@ fun TransactionDetailsScreen(
         isLoading = true
         errorMessage = null
         try {
-            // For now, we use a minimal implementation showing basic transaction info
-            // A full implementation would require adding getTransaction() to RavencoinPublicNode
-            // which would call blockchain.transaction.get to fetch raw transaction data
+            // D-19 primary source: local TxHistoryDao with three-value breakdown.
+            val row = try {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    TxHistoryDao.findByTxid(txid)
+                }
+            } catch (_: Exception) { null }
+            txRow = row
             transaction = Transaction(
                 txid = txid,
-                amount = 0.0,
-                fee = 0.0,
-                confirmations = 0,
-                blockHeight = 0,
+                amount = (row?.amountSat ?: 0L) / 1e8,
+                fee = (row?.feeSat ?: 0L) / 1e8,
+                confirmations = row?.confirms ?: 0,
+                blockHeight = (row?.height ?: 0).toLong(),
                 from = "",
                 to = "",
-                timestamp = 0
+                timestamp = row?.timestamp ?: 0L
             )
         } catch (e: Exception) {
             Log.e("TransactionDetailsScreen", "Failed to fetch transaction", e)
@@ -185,22 +202,54 @@ fun TransactionDetailsScreen(
                             DetailRow(label = "Block Height", value = "${transaction!!.blockHeight}")
                         }
 
-                        // Amount
-                        if (transaction!!.amount > 0) {
-                            DetailRow(
-                                label = "Amount",
-                                value = "${transaction!!.amount} RVN",
-                                valueColor = RavenOrange,
-                                valueBold = true
+                        // D-19 three-value breakdown for outgoing transactions.
+                        val row = txRow
+                        if (row != null && !row.isIncoming) {
+                            val sentStr = formatRvn(row.sentSat)
+                            val cycledStr = formatRvn(row.cycledSat)
+                            val feeStr = formatRvn(row.feeSat)
+                            if (!row.isSelf) {
+                                ThreeValueRow(
+                                    icon = Icons.Default.CallMade,
+                                    tint = NotAuthenticRed,
+                                    label = strings.txHistorySentPrefix,
+                                    amount = "-$sentStr RVN",
+                                    amountColor = NotAuthenticRed,
+                                    bold = true
+                                )
+                            }
+                            ThreeValueRow(
+                                icon = Icons.Default.Autorenew,
+                                tint = AuthenticGreen,
+                                label = strings.txHistoryCycledPrefix,
+                                amount = "$cycledStr RVN",
+                                amountColor = AuthenticGreen,
+                                bold = false
                             )
-                        }
-
-                        // Fee
-                        if (transaction!!.fee > 0) {
-                            DetailRow(
-                                label = "Fee",
-                                value = "${transaction!!.fee} RVN"
+                            ThreeValueRow(
+                                icon = Icons.Default.Payments,
+                                tint = RavenMuted,
+                                label = strings.txHistoryFeePrefix,
+                                amount = "$feeStr RVN",
+                                amountColor = RavenMuted,
+                                bold = false
                             )
+                        } else {
+                            // Incoming or legacy fallback: keep prior single-amount layout.
+                            if (transaction!!.amount > 0) {
+                                DetailRow(
+                                    label = "Amount",
+                                    value = "${transaction!!.amount} RVN",
+                                    valueColor = RavenOrange,
+                                    valueBold = true
+                                )
+                            }
+                            if (transaction!!.fee > 0) {
+                                DetailRow(
+                                    label = strings.txHistoryFeePrefix,
+                                    value = "${transaction!!.fee} RVN"
+                                )
+                            }
                         }
 
                         // From address (truncated)
@@ -228,12 +277,78 @@ fun TransactionDetailsScreen(
                             )
                         }
                     }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // D-19 View on explorer: opens Intent.ACTION_VIEW at AppConfig.EXPLORER_URL + txid.
+                    OutlinedButton(
+                        onClick = {
+                            val uri = android.net.Uri.parse(AppConfig.EXPLORER_URL + txid)
+                            try {
+                                context.startActivity(
+                                    android.content.Intent(android.content.Intent.ACTION_VIEW, uri)
+                                )
+                            } catch (_: android.content.ActivityNotFoundException) {
+                                // No browser available; silent (ASVS V7 error handling).
+                            }
+                        },
+                        border = BorderStroke(1.dp, RavenOrange),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = RavenOrange),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.OpenInBrowser,
+                            contentDescription = null,
+                            tint = RavenOrange,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(strings.txDetailsViewOnExplorer, fontWeight = FontWeight.SemiBold)
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(16.dp))
             }
         }
     }
+}
+
+/** D-19 three-value breakdown row (icon + label + amount) for outgoing tx details. */
+@Composable
+private fun ThreeValueRow(
+    icon: ImageVector,
+    tint: Color,
+    label: String,
+    amount: String,
+    amountColor: Color,
+    bold: Boolean
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Icon(imageVector = icon, contentDescription = null, tint = tint, modifier = Modifier.size(16.dp))
+            Text(
+                text = label,
+                color = RavenMuted,
+                style = MaterialTheme.typography.bodyMedium
+            )
+        }
+        Text(
+            text = amount,
+            color = amountColor,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal,
+            textAlign = TextAlign.End
+        )
+    }
+}
+
+private fun formatRvn(sat: Long): String {
+    if (sat <= 0L) return "0"
+    return String.format(java.util.Locale.US, "%.8f", sat / 1e8).trimEnd('0').trimEnd('.')
 }
 
 @Composable
