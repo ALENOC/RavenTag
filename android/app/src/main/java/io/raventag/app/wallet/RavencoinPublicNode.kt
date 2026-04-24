@@ -280,11 +280,11 @@ class RavencoinPublicNode(private val context: Context) {
             val resp = responses.getOrNull(i) ?: return@forEachIndexed
             if (resp == null || !resp.isJsonObject) return@forEachIndexed
             val obj = resp.asJsonObject
-            // Top-level RVN balance: {"confirmed": N, "unconfirmed": M} — primitives, not objects
+            // Top-level RVN balance: {"confirmed": N, "unconfirmed": M} · primitives, not objects
             val rvnSat = try { obj.get("confirmed")?.asLong ?: 0L } catch (_: Exception) { 0L } +
                          try { obj.get("unconfirmed")?.asLong ?: 0L } catch (_: Exception) { 0L }
             if (rvnSat > 0) { result.add(addr); return@forEachIndexed }
-            // Asset balances: {"ASSET_NAME": {"confirmed": N, "unconfirmed": M}} — nested objects
+            // Asset balances: {"ASSET_NAME": {"confirmed": N, "unconfirmed": M}} · nested objects
             for ((key, value) in obj.entrySet()) {
                 if (key == "confirmed" || key == "unconfirmed") continue
                 try {
@@ -326,7 +326,7 @@ class RavencoinPublicNode(private val context: Context) {
             }
         }
         // If every single response failed, treat it as a network error rather than silently
-        // returning 0.0 — the caller can catch this and preserve the previously known balance.
+        // returning 0.0: the caller can catch this and preserve the previously known balance.
         if (successCount == 0) throw java.io.IOException("All balance queries failed (network unreachable)")
         return totalSat / 1e8
     }
@@ -1065,6 +1065,80 @@ class RavencoinPublicNode(private val context: Context) {
     }
 
     /**
+     * D-23 lightweight paged history fetch used by the WalletScreen "Load more" button.
+     *
+     * Returns `TxHistoryEntry` shells (amount/sent fields = 0) so the UI can insert
+     * placeholder rows into [io.raventag.app.wallet.cache.TxHistoryDao] that are then
+     * enriched on the next authoritative refresh via [getTransactionHistory].
+     *
+     * Unlike [getTransactionHistory], this helper:
+     *   - Does NOT walk vin/vout to compute amounts (expensive full tx decode).
+     *   - Reorders the list so mempool entries (height == 0) come first, then confirmed
+     *     rows sorted by height DESC (newest-first).
+     *   - Slices `[offset, offset + limit)` client-side.
+     *   - Swallows exceptions and returns `emptyList()` so the Load more path is resilient.
+     *
+     * @param address Ravencoin P2PKH address.
+     * @param offset  Zero-based offset into the newest-first ordered list.
+     * @param limit   Max rows to return (default 20 per UI-SPEC Load more).
+     * @return List of shell [TxHistoryEntry] rows; empty on any failure.
+     */
+    suspend fun getHistoryPaged(
+        address: String,
+        offset: Int,
+        limit: Int = 20
+    ): List<TxHistoryEntry> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        try {
+            val scripthash = addressToScripthash(address)
+            // Batch: fetch tip height + history in one TLS connection, same pattern as getTransactionHistory.
+            val batch = callWithFailoverBatch(listOf(
+                "blockchain.headers.subscribe" to emptyList<Any>(),
+                "blockchain.scripthash.get_history" to listOf(scripthash)
+            ))
+            val currentHeight = try {
+                batch.getOrNull(0)?.asJsonObject?.get("height")?.asInt ?: 0
+            } catch (_: Exception) { 0 }
+            val raw = try {
+                batch.getOrNull(1)?.asJsonArray
+            } catch (_: Exception) { null }
+                ?: return@withContext emptyList<TxHistoryEntry>()
+
+            val ordered = raw
+                .mapNotNull { try { it.asJsonObject } catch (_: Exception) { null } }
+                .sortedWith(Comparator { a, b ->
+                    val ha = a.get("height")?.asInt ?: 0
+                    val hb = b.get("height")?.asInt ?: 0
+                    // mempool (<=0) sorts first, then confirmed by height DESC
+                    val ka = if (ha <= 0) Int.MAX_VALUE else ha
+                    val kb = if (hb <= 0) Int.MAX_VALUE else hb
+                    kb.compareTo(ka)
+                })
+                .drop(offset.coerceAtLeast(0))
+                .take(limit.coerceAtLeast(0))
+
+            ordered.mapNotNull { item ->
+                val txHash = item.get("tx_hash")?.asString ?: return@mapNotNull null
+                val height = item.get("height")?.asInt ?: 0
+                val confirmations = if (height > 0 && currentHeight > 0) {
+                    (currentHeight - height + 1).coerceAtLeast(0)
+                } else 0
+                TxHistoryEntry(
+                    txid = txHash,
+                    height = height,
+                    confirmations = confirmations,
+                    amountSat = 0L,
+                    sentSat = 0L,
+                    isIncoming = false,
+                    isSelfTransfer = false,
+                    timestamp = 0L
+                )
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    /**
      * Returns true if [address] has any transaction history on-chain.
      *
      * @param address Ravencoin P2PKH address.
@@ -1668,5 +1742,87 @@ class RavencoinPublicNode(private val context: Context) {
             if (err != null && !err.isJsonNull) throw Exception("ElectrumX error: $err")
             return json.get("result") ?: throw Exception("Null result from ${server.host}")
         }
+    }
+}
+
+/**
+ * D-19 three-value accounting helpers. Pure functions: no network, no storage,
+ * safe to unit-test in isolation.
+ *
+ * Semantics operate on a raw JSON transaction object returned by
+ * `blockchain.transaction.get` with verbose=true, i.e. an object with a `vout`
+ * array of `{ value: Double (RVN), scriptPubKey: { addresses: [...] } }` entries.
+ *
+ * Two concepts:
+ *  - "cycled" = outputs paying the wallet's change/consolidation address (never-spent
+ *    address at currentIndex + 1). This is the RVN that remains under the user's control
+ *    after an outgoing send.
+ *  - "sent"   = outputs paying ANY address != changeAddress. For self-transfers
+ *    (pure consolidations) this returns 0.
+ */
+object RavencoinTxHistoryMath {
+
+    private const val SAT_PER_RVN = 100_000_000L
+
+    /**
+     * Sum (in satoshis) of vout entries whose scriptPubKey.addresses contains
+     * [changeAddress]. Malformed entries contribute 0.
+     */
+    fun computeCycledSat(
+        tx: com.google.gson.JsonObject,
+        changeAddress: String
+    ): Long {
+        val vout = try { tx.getAsJsonArray("vout") } catch (_: Exception) { null }
+            ?: return 0L
+        var total = 0L
+        for (element in vout) {
+            try {
+                val out = element.asJsonObject
+                val addresses = out
+                    .getAsJsonObject("scriptPubKey")
+                    ?.getAsJsonArray("addresses")
+                    ?: continue
+                val hasChange = addresses.any { it.asString == changeAddress }
+                if (hasChange) {
+                    val rvn = out.get("value")?.asDouble ?: 0.0
+                    total += (rvn * SAT_PER_RVN).toLong()
+                }
+            } catch (_: Exception) {
+                // skip malformed output
+            }
+        }
+        return total
+    }
+
+    /**
+     * Sum (in satoshis) of vout entries whose scriptPubKey.addresses contains
+     * AT LEAST ONE address != [changeAddress]. Conservative: multi-sig outputs
+     * with any non-change leg are counted as "sent" for their full value.
+     * Malformed entries contribute 0.
+     */
+    fun computeSentSat(
+        tx: com.google.gson.JsonObject,
+        changeAddress: String
+    ): Long {
+        val vout = try { tx.getAsJsonArray("vout") } catch (_: Exception) { null }
+            ?: return 0L
+        var total = 0L
+        for (element in vout) {
+            try {
+                val out = element.asJsonObject
+                val addresses = out
+                    .getAsJsonObject("scriptPubKey")
+                    ?.getAsJsonArray("addresses")
+                    ?: continue
+                val external = addresses.any { it.asString != changeAddress }
+                if (external) {
+                    val rvn = out.get("value")?.asDouble ?: 0.0
+                    total += (rvn * SAT_PER_RVN).toLong()
+                }
+            } catch (_: Exception) {
+                // skip malformed output
+            }
+        }
+        return total
     }
 }
