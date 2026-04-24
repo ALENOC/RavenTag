@@ -162,15 +162,16 @@ class RavencoinPublicNode(private val context: Context) {
         /**
          * List of public Ravencoin ElectrumX servers, tried in order.
          * All use the standard TLS port 50002.
-         * New servers can be added here; removal of dead servers avoids unnecessary
-         * timeout delays on every request.
+         *
+         * Sourced from [io.raventag.app.config.AppConfig.ELECTRUM_SERVERS] so
+         * that [io.raventag.app.wallet.health.NodeHealthMonitor] and this
+         * class iterate the same pool. Evaluated once at class init; adding
+         * hosts requires editing AppConfig (see KDoc there for provenance).
          */
-        private val SERVERS = listOf(
-            ElectrumServer("rvn4lyfe.com", 50002),
-            ElectrumServer("rvn-dashboard.com", 50002),
-            ElectrumServer("162.19.153.65", 50002),
-            ElectrumServer("51.222.139.25", 50002),
-        )
+        private val SERVERS: List<ElectrumServer> =
+            io.raventag.app.config.AppConfig.ELECTRUM_SERVERS.map { (host, port) ->
+                ElectrumServer(host, port)
+            }
 
         /**
          * Monotonically increasing request ID counter, shared across all instances.
@@ -1463,16 +1464,51 @@ class RavencoinPublicNode(private val context: Context) {
      * @throws Exception listing all server errors if every server fails.
      */
     private fun callWithFailover(method: String, params: List<Any>): com.google.gson.JsonElement {
+        io.raventag.app.wallet.health.NodeHealthMonitor.init(context)
         val errors = mutableListOf<String>()
-        for (server in SERVERS) {
+        var lastError: Throwable? = null
+        repeat(SERVERS.size) {
+            val candidate = io.raventag.app.wallet.health.NodeHealthMonitor.nextHealthyNode()
+                ?: throw AllNodesUnreachableException()
+            val (host, portStr) = candidate.split(":", limit = 2)
+            val port = portStr.toInt()
+            val server = ElectrumServer(host, port)
             try {
-                return call(server, method, params)
+                val result = call(server, method, params)
+                io.raventag.app.wallet.health.NodeHealthMonitor.reportSuccess(candidate)
+                return result
             } catch (e: Exception) {
+                lastError = e
                 Log.w(TAG, "Server ${server.host} failed for $method: ${e.message}")
                 errors.add("${server.host}: ${e.message}")
+                if (isTofuMismatch(e)) {
+                    io.raventag.app.wallet.health.NodeHealthMonitor.reportTofuMismatch(candidate)
+                } else {
+                    io.raventag.app.wallet.health.NodeHealthMonitor.reportFailure(
+                        candidate,
+                        e.javaClass.simpleName
+                    )
+                }
             }
         }
-        throw Exception("All ElectrumX servers failed for $method: ${errors.joinToString("; ")}")
+        throw lastError
+            ?: Exception("All ElectrumX servers failed for $method: ${errors.joinToString("; ")}")
+    }
+
+    /**
+     * Detects the TofuTrustManager cert-mismatch exception.
+     *
+     * TofuTrustManager throws a plain Exception with message
+     * "Certificate mismatch for <host>: expected <a>, got <b>" on a pinned
+     * cert change. Some TLS stacks wrap this in a CertificateException. We
+     * match both so NodeHealthMonitor can write the 1h quarantine row.
+     */
+    private fun isTofuMismatch(e: Throwable): Boolean {
+        if (e is java.security.cert.CertificateException) return true
+        val m = e.message ?: return false
+        return m.contains("Certificate mismatch", ignoreCase = true) ||
+            m.contains("fingerprint mismatch", ignoreCase = true) ||
+            m.contains("TOFU", ignoreCase = true)
     }
 
     /**
@@ -1550,11 +1586,29 @@ class RavencoinPublicNode(private val context: Context) {
      */
     private fun callWithFailoverBatch(requests: List<Pair<String, List<Any>>>): List<JsonElement?> {
         if (requests.isEmpty()) return emptyList()
-        for (server in SERVERS) {
+        io.raventag.app.wallet.health.NodeHealthMonitor.init(context)
+        repeat(SERVERS.size) {
+            val candidate = io.raventag.app.wallet.health.NodeHealthMonitor.nextHealthyNode()
+                ?: run {
+                    Log.w(TAG, "All nodes quarantined for batch of ${requests.size} requests")
+                    return List(requests.size) { null }
+                }
+            val (host, portStr) = candidate.split(":", limit = 2)
+            val server = ElectrumServer(host, portStr.toInt())
             try {
-                return callBatch(server, requests)
+                val result = callBatch(server, requests)
+                io.raventag.app.wallet.health.NodeHealthMonitor.reportSuccess(candidate)
+                return result
             } catch (e: Exception) {
                 Log.w(TAG, "Server ${server.host} failed for batch(${requests.size}): ${e.message}")
+                if (isTofuMismatch(e)) {
+                    io.raventag.app.wallet.health.NodeHealthMonitor.reportTofuMismatch(candidate)
+                } else {
+                    io.raventag.app.wallet.health.NodeHealthMonitor.reportFailure(
+                        candidate,
+                        e.javaClass.simpleName
+                    )
+                }
             }
         }
         Log.w(TAG, "All servers failed for batch of ${requests.size} requests")
