@@ -35,6 +35,10 @@ class RebroadcastWorker(
 ) : CoroutineWorker(ctx, params) {
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
+        // D-11/D-12: background workers may run before MainActivity has a
+        // chance to init() the health monitor, so init defensively here.
+        io.raventag.app.wallet.health.NodeHealthMonitor.init(applicationContext)
+
         val txid = inputData.getString(KEY_TXID) ?: return@withContext Result.failure()
         val rawHex = inputData.getString(KEY_RAW_HEX) ?: return@withContext Result.failure()
         val attempt = inputData.getInt(KEY_ATTEMPT, 0)
