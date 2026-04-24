@@ -2459,6 +2459,10 @@ class MainActivity : FragmentActivity() {
             System.currentTimeMillis() - 48L * 3600_000L
         )
 
+        // D-11/D-12: wire NodeHealthMonitor so RPC + subscription paths share
+        // a single quarantine + connection-health source.
+        io.raventag.app.wallet.health.NodeHealthMonitor.init(this)
+
         // Schedule periodic wallet polling every 15 minutes.
         // UPDATE policy: replaces any previously scheduled instance so app updates always
         // run the latest worker code without requiring a reinstall.

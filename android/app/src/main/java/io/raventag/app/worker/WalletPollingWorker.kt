@@ -41,6 +41,10 @@ class WalletPollingWorker(
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         try {
+            // D-11/D-12: background workers may run before MainActivity has a
+            // chance to init() the health monitor, so init defensively here.
+            io.raventag.app.wallet.health.NodeHealthMonitor.init(applicationContext)
+
             // Respect the user's notification preference
             val appPrefs = applicationContext.getSharedPreferences("raventag_app", Context.MODE_PRIVATE)
             if (!appPrefs.getBoolean("notifications_enabled", true)) return@withContext Result.success()
