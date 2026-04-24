@@ -84,14 +84,14 @@ Phase 50: Backend Stability
 - Keystore protected from extraction
 
 **Plans:**
-6/10 plans executed
+7/10 plans executed
 - [x] 30-01-PLAN.md — Wave 0 test scaffolding (6 test files, 4 production stubs, behavior contracts for Wave 1-3)
 - [x] 30-02-PLAN.md — Wallet Cache DB DAOs (WalletCacheDao, ReservedUtxoDao SQLite implementations)
 - [x] 30-03-PLAN.md — Scripthash Subscription (ElectrumX real-time status notifications)
 - [x] 30-04-PLAN.md — Fee Estimation (estimatefee with fallback)
 - [x] 30-05-PLAN.md — Consolidation Reliability (UTXO reservation, pending consolidation, RebroadcastWorker)
 - [x] 30-06-PLAN.md — Mnemonic Safety (BiometricGate + CryptoObject, HMAC integrity, FLAG_SECURE, D-14 restore-confirm dialog)
-- [ ] 30-07-PLAN.md — Node Reliability (TOFU quarantine, fallback rotation)
+- [x] 30-07-PLAN.md: Node Reliability (NodeHealthMonitor, TOFU 1h quarantine, ConnectionHealth StateFlow, D-10 timeout fix)
 - [ ] 30-08-PLAN.md — WalletScreen Refresh and Receive UX
 - [ ] 30-09-PLAN.md — Tx History 3-Value (sent/cycled/fee breakdown)
 - [ ] 30-10-PLAN.md — Housekeeping
