@@ -116,6 +116,14 @@ object TxHistoryDao {
         }
     }
 
+    /**
+     * D-23 paged tx history with argument order `(offset, limit)` matching
+     * [io.raventag.app.wallet.RavencoinPublicNode.getHistoryPaged]. Default
+     * page size 20 per UI-SPEC Load more.
+     */
+    fun getPage(offset: Int, limit: Int = 20): List<TxHistoryRow> =
+        page(limit = limit, offset = offset)
+
     fun count(): Int {
         val db = WalletReliabilityDb.getDatabase()
         db.rawQuery("SELECT COUNT(*) FROM $TABLE", null).use { c ->
