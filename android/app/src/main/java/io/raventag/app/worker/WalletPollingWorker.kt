@@ -105,6 +105,55 @@ class WalletPollingWorker(
             }
             prefs.edit().putString("poll_assets", gson.toJson(newAssets)).apply()
 
+            // ── D-06: per-address scripthash-status diff pass (plan 30-08). Fires
+            //    IncomingTxNotificationHelper on a positive balance delta once a
+            //    baseline has been established. First-ever observation only records
+            //    the baseline (avoids retroactive spam on install/restore).
+            try {
+                val currentAddr = walletManager.getCurrentAddress()
+                if (!currentAddr.isNullOrBlank()) {
+                    val status: String? = try {
+                        node.subscribeScripthashRpc(currentAddr)
+                    } catch (_: Exception) {
+                        null
+                    }
+                    val prev = prefs.getString("last_status_$currentAddr", null)
+                    if (status != prev) {
+                        prefs.edit().putString("last_status_$currentAddr", status).apply()
+                        if (prev != null) {
+                            val balance = try { node.getBalance(currentAddr) } catch (_: Exception) { null }
+                            val confirmedSat = balance?.confirmed ?: 0L
+                            val unconfirmedSat = balance?.unconfirmed ?: 0L
+                            val cachedSat = prefs.getLong("poll_rvn_sat", 0L)
+                            val deltaSat = confirmedSat + unconfirmedSat - cachedSat
+                            if (deltaSat > 0L) {
+                                val history = try {
+                                    node.getTransactionHistory(currentAddr, limit = 3, offset = 0)
+                                } catch (_: Exception) { emptyList() }
+                                val lastNotified = prefs.getString("last_notified_txid", null)
+                                val newestNew = history.firstOrNull { it.txid != lastNotified }
+                                if (newestNew != null) {
+                                    IncomingTxNotificationHelper.showIncoming(
+                                        context = applicationContext,
+                                        txid = newestNew.txid,
+                                        rvnAmount = deltaSat / 1e8,
+                                        confirmations = newestNew.confirmations
+                                    )
+                                    prefs.edit()
+                                        .putString("last_notified_txid", newestNew.txid)
+                                        .putLong("poll_rvn_sat", confirmedSat + unconfirmedSat)
+                                        .apply()
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (_: java.io.IOException) {
+                return@withContext Result.retry()
+            } catch (_: Exception) {
+                // D-06 is a silent path; swallow.
+            }
+
             // ── Auto-sweep: if any incoming transfer was detected, consolidate funds
             //    from HAS_OUTGOING addresses to the current quantum-safe address.
             //    Addresses that only received funds (RECEIVE_ONLY) are never touched.
