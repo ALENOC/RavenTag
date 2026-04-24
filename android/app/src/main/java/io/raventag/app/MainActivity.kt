@@ -2451,6 +2451,9 @@ class MainActivity : FragmentActivity() {
         // Create transaction progress notification channel
         TransactionNotificationHelper.createChannel(applicationContext)
 
+        // D-06, D-07: create incoming_tx notification channel for received RVN/assets
+        io.raventag.app.worker.IncomingTxNotificationHelper.createChannel(applicationContext)
+
         // Initialize wallet reliability database (single call per process)
         io.raventag.app.wallet.cache.WalletReliabilityDb.init(this)
 
