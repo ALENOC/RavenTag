@@ -20,6 +20,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -148,7 +150,8 @@ fun MnemonicBackupScreen(
                     .fillMaxWidth()
                     .background(RavenCard, RoundedCornerShape(12.dp))
                     .border(1.dp, RavenBorder, RoundedCornerShape(12.dp))
-                    .padding(16.dp),
+                    .padding(16.dp)
+                    .semantics { contentDescription = s.biometricCoverDesc },
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -184,7 +187,9 @@ fun MnemonicBackupScreen(
                             )
                         }
                     },
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .semantics { contentDescription = s.revealMnemonicButtonDesc },
                     colors = ButtonDefaults.buttonColors(containerColor = RavenOrange),
                     shape = RoundedCornerShape(12.dp)
                 ) {
