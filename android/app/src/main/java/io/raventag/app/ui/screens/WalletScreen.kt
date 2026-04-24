@@ -58,6 +58,17 @@ import okhttp3.Request
 import coil.compose.SubcomposeAsyncImage
 import coil.request.ImageRequest
 import io.raventag.app.network.NetworkModule
+import io.raventag.app.wallet.cache.WalletCacheDao
+import io.raventag.app.wallet.health.ConnectionHealth
+import io.raventag.app.wallet.health.NodeHealthMonitor
+import io.raventag.app.wallet.subscription.ScripthashEvent
+import io.raventag.app.wallet.subscription.SubscriptionManager
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.togetherWith
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.collect
 
 data class WalletInfo(
     val address: String,
@@ -127,6 +138,77 @@ fun WalletScreen(
     var showOwnerTokens by remember { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
     val isOperator = walletRole == "operator"
+
+    // D-12: NodeHealthMonitor.stateFlow drives the pill and Send/Receive enabled state.
+    val health by NodeHealthMonitor.stateFlow.collectAsState(initial = ConnectionHealth.GREEN)
+    var showConnectionSheet by remember { mutableStateOf(false) }
+    val snackbarHostState = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+
+    // D-04: cached banner state; flipped false once a successful refresh has been observed.
+    var cachedBannerVisible by remember { mutableStateOf(true) }
+    var cachedLastRefreshedAt by remember { mutableStateOf(0L) }
+    var isRefreshing by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        cachedLastRefreshedAt = WalletCacheDao.getLastRefreshedAt()
+    }
+
+    // D-28: battery-saver chip visibility.
+    val isPowerSave = remember {
+        val pm = context.getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
+        pm?.isPowerSaveMode == true
+    }
+
+    // D-02, D-26: 30-second periodic refresh while foreground and not power-save.
+    LaunchedEffect(Unit) {
+        while (true) {
+            kotlinx.coroutines.delay(30_000L)
+            val pm = context.getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
+            if (pm?.isPowerSaveMode != true) {
+                isRefreshing = true
+                onRefreshBalance()
+                isRefreshing = false
+                cachedLastRefreshedAt = WalletCacheDao.getLastRefreshedAt()
+                cachedBannerVisible = false
+            }
+        }
+    }
+
+    // D-05, D-07: SubscriptionManager scripthash events -> re-fetch + incoming snackbar on positive delta.
+    val subscriptionManager = remember { SubscriptionManager(context) }
+    val strings = s
+    LaunchedEffect(walletInfo?.address) {
+        val addr = walletInfo?.address
+        if (!addr.isNullOrBlank()) {
+            try { subscriptionManager.start(listOf(addr)) } catch (_: Exception) {}
+        }
+        subscriptionManager.eventsFlow().collect { ev ->
+            when (ev) {
+                is ScripthashEvent.StatusChanged -> {
+                    val beforeSat = WalletCacheDao.readState()?.balanceSat ?: 0L
+                    onRefreshBalance()
+                    val afterSat = WalletCacheDao.readState()?.balanceSat ?: 0L
+                    val deltaSat = afterSat - beforeSat
+                    if (deltaSat > 0L) {
+                        val rvn = String.format(java.util.Locale.ROOT, "%.8f", deltaSat / 1e8)
+                        scope.launch {
+                            snackbarHostState.showSnackbar(
+                                String.format(strings.incomingTxSnackbar, rvn)
+                            )
+                        }
+                    }
+                    cachedLastRefreshedAt = WalletCacheDao.getLastRefreshedAt()
+                    cachedBannerVisible = false
+                }
+                else -> {}
+            }
+        }
+    }
+
+    if (showConnectionSheet) {
+        ConnectionPillSheet(onDismiss = { showConnectionSheet = false })
+    }
 
     previewAsset?.let { asset ->
         AssetPreviewDialog(asset = asset, onDismiss = { previewAsset = null })
@@ -237,8 +319,9 @@ fun WalletScreen(
         return
     }
 
+    Box(modifier = modifier.fillMaxSize()) {
     LazyColumn(
-        modifier = modifier.fillMaxSize().background(RavenBg),
+        modifier = Modifier.fillMaxSize().background(RavenBg),
         contentPadding = PaddingValues(start = 20.dp, end = 20.dp, bottom = 24.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
@@ -314,8 +397,14 @@ fun WalletScreen(
                                 Text(roleLabel, style = MaterialTheme.typography.labelSmall, color = roleColor)
                             }
                         }
-                        // ElectrumX status badge
+                        // ElectrumX status badge (legacy, kept for existing telemetry)
                         ElectrumStatusBadge(electrumStatus, s)
+
+                        // D-12: NodeHealthMonitor-driven pill with YELLOW state + tap-to-sheet.
+                        ConnectionHealthPill(health = health, onTap = { showConnectionSheet = true })
+
+                        // D-28: battery-saver informational chip.
+                        if (isPowerSave) { BatterySaverChip() }
 
                         // Block height counter (Always occupy space to avoid layout shift)
                         val showBlockHeight = blockHeight != null && electrumStatus == MainViewModel.ElectrumStatus.ONLINE
@@ -340,6 +429,28 @@ fun WalletScreen(
                         }
                     }
                 }
+            }
+        }
+
+        // D-04: sync-in-background 2dp LinearProgressIndicator under header
+        if (isRefreshing) {
+            item(key = "sync_indicator") {
+                LinearProgressIndicator(
+                    color = RavenOrange,
+                    trackColor = RavenBorder,
+                    modifier = Modifier.fillMaxWidth().height(2.dp)
+                )
+            }
+        }
+
+        // D-04: cached-state banner
+        if (hasWallet && cachedBannerVisible && cachedLastRefreshedAt > 0L) {
+            item(key = "cached_banner") {
+                CachedStateBanner(
+                    lastRefreshedAt = cachedLastRefreshedAt,
+                    isReconnecting = health == ConnectionHealth.YELLOW,
+                    visible = true
+                )
             }
         }
 
@@ -380,23 +491,64 @@ fun WalletScreen(
                 )
             }
         } else if (walletInfo != null) {
-            item(key = "balance") { BalanceCard(s, walletInfo, rvnPrice = rvnPrice, onCopyAddress = { clipboard.setText(AnnotatedString(walletInfo.address)) }) }
+            item(key = "balance") {
+                Column {
+                    BalanceCard(s, walletInfo, rvnPrice = rvnPrice, onCopyAddress = { clipboard.setText(AnnotatedString(walletInfo.address)) })
+                    // D-24: pending mempool incoming line (reads reserved-aware cache value).
+                    val mempoolSat = remember(walletInfo.balanceRvn) {
+                        (WalletCacheDao.readState()?.utxos.orEmpty())
+                            .filter { it.height <= 0 }
+                            .sumOf { it.satoshis }
+                    }
+                    PendingBalanceLine(mempoolIncomingSat = mempoolSat)
+                }
+            }
             item(key = "balance_spacer") { Spacer(modifier = Modifier.height(16.dp)) }
             if (walletInfo.mnemonic != null) {
                 item(key = "mnemonic") { MnemonicCard(s, walletInfo.mnemonic, visible = showMnemonic, onToggle = { showMnemonic = !showMnemonic }) }
                 item(key = "mnemonic_spacer") { Spacer(modifier = Modifier.height(16.dp)) }
             }
             item(key = "actions") {
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Button(onClick = onReceive, modifier = Modifier.weight(1f).height(48.dp), colors = ButtonDefaults.buttonColors(containerColor = RavenCard), border = BorderStroke(1.dp, AuthenticGreen.copy(alpha = 0.4f)), shape = RoundedCornerShape(12.dp)) {
-                        Icon(Icons.Default.CallReceived, contentDescription = null, tint = AuthenticGreen, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(s.walletReceiveBtn, color = AuthenticGreen, fontWeight = FontWeight.SemiBold)
+                // D-12: ConnectionHealth.RED disables Send/Receive with a Snackbar on tap.
+                val offline = health == ConnectionHealth.RED
+                val alphaMod = if (offline) 0.3f else 1f
+                val offlineTapMod = if (offline) {
+                    Modifier.clickable {
+                        scope.launch { snackbarHostState.showSnackbar(s.offlineAllNodesUnreachable) }
                     }
-                    Button(onClick = { if (!isOperator) onSend() }, modifier = Modifier.weight(1f).height(48.dp), colors = ButtonDefaults.buttonColors(containerColor = RavenCard), border = BorderStroke(1.dp, (if (isOperator) RavenMuted else NotAuthenticRed).copy(alpha = 0.4f)), shape = RoundedCornerShape(12.dp)) {
-                        Icon(if (isOperator) Icons.Default.Lock else Icons.Default.Send, contentDescription = null, tint = if (isOperator) RavenMuted else NotAuthenticRed, modifier = Modifier.size(16.dp))
+                } else Modifier
+                Row(modifier = Modifier.fillMaxWidth().then(offlineTapMod), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Button(
+                        onClick = onReceive,
+                        enabled = !offline,
+                        modifier = Modifier.weight(1f).height(48.dp).alpha(alphaMod),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = RavenCard,
+                            disabledContainerColor = RavenCard,
+                            disabledContentColor = RavenMuted
+                        ),
+                        border = BorderStroke(1.dp, if (offline) RavenMuted.copy(alpha = 0.4f) else AuthenticGreen.copy(alpha = 0.4f)),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(Icons.Default.CallReceived, contentDescription = null, tint = if (offline) RavenMuted else AuthenticGreen, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text(s.walletSendBtn, color = if (isOperator) RavenMuted else NotAuthenticRed, fontWeight = FontWeight.SemiBold)
+                        Text(s.walletReceiveBtn, color = if (offline) RavenMuted else AuthenticGreen, fontWeight = FontWeight.SemiBold)
+                    }
+                    Button(
+                        onClick = { if (!isOperator) onSend() },
+                        enabled = !offline,
+                        modifier = Modifier.weight(1f).height(48.dp).alpha(alphaMod),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = RavenCard,
+                            disabledContainerColor = RavenCard,
+                            disabledContentColor = RavenMuted
+                        ),
+                        border = BorderStroke(1.dp, (if (offline || isOperator) RavenMuted else NotAuthenticRed).copy(alpha = 0.4f)),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(if (isOperator) Icons.Default.Lock else Icons.Default.Send, contentDescription = null, tint = if (offline || isOperator) RavenMuted else NotAuthenticRed, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(s.walletSendBtn, color = if (offline || isOperator) RavenMuted else NotAuthenticRed, fontWeight = FontWeight.SemiBold)
                     }
                 }
             }
@@ -577,6 +729,12 @@ fun WalletScreen(
                 Box(modifier = Modifier.fillMaxWidth().height(200.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = RavenOrange) }
             }
         }
+    }
+    // D-07, D-12: snackbar overlay for incoming tx + offline-all-nodes messages.
+    SnackbarHost(
+        hostState = snackbarHostState,
+        modifier = Modifier.align(Alignment.BottomCenter).padding(16.dp)
+    )
     }
 }
 
@@ -1114,6 +1272,245 @@ private fun MnemonicCard(s: AppStrings, mnemonic: String, visible: Boolean, onTo
  *                             "Back up phrase first" (RavenOrange) routes to MnemonicBackupScreen,
  *                             Cancel still available per UI-SPEC.
  */
+// ============================================================
+// Phase 30 plan 30-08 composables (D-04, D-12, D-18, D-24, D-28)
+// ============================================================
+
+private fun formatHhMm(ms: Long): String {
+    if (ms <= 0L) return "--:--"
+    return java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
+        .format(java.util.Date(ms))
+}
+
+/** D-04: cached-state banner shown while awaiting a successful refresh. */
+@Composable
+private fun CachedStateBanner(
+    lastRefreshedAt: Long,
+    isReconnecting: Boolean,
+    visible: Boolean
+) {
+    if (!visible || lastRefreshedAt <= 0L) return
+    val strings = LocalStrings.current
+    val label = if (isReconnecting) {
+        String.format(strings.cachedStateReconnecting, formatHhMm(lastRefreshedAt))
+    } else {
+        String.format(strings.cachedStateBanner, formatHhMm(lastRefreshedAt))
+    }
+    Card(
+        colors = CardDefaults.cardColors(containerColor = RavenCard),
+        border = BorderStroke(1.dp, RavenBorder),
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Icon(
+                Icons.Default.History,
+                contentDescription = null,
+                tint = RavenMuted,
+                modifier = Modifier.size(16.dp)
+            )
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodySmall,
+                color = RavenMuted
+            )
+        }
+    }
+}
+
+/** D-24: pending mempool-incoming line displayed under the balance. */
+@Composable
+private fun PendingBalanceLine(mempoolIncomingSat: Long) {
+    if (mempoolIncomingSat <= 0L) return
+    val strings = LocalStrings.current
+    val amber = Color(0xFFF59E0B)
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        modifier = Modifier.padding(top = 4.dp)
+    ) {
+        Icon(
+            Icons.Default.Schedule,
+            contentDescription = "Pending",
+            tint = RavenMuted,
+            modifier = Modifier.size(12.dp)
+        )
+        Text(
+            text = strings.pendingBalanceLabel,
+            style = MaterialTheme.typography.bodySmall,
+            color = RavenMuted
+        )
+        Spacer(Modifier.width(4.dp))
+        Text(
+            text = String.format(java.util.Locale.US, "+%.8f RVN", mempoolIncomingSat / 1e8),
+            style = MaterialTheme.typography.bodySmall,
+            color = amber
+        )
+    }
+}
+
+/** D-28: battery-saver informational chip. */
+@Composable
+private fun BatterySaverChip() {
+    val strings = LocalStrings.current
+    val amber = Color(0xFFF59E0B)
+    Card(
+        colors = CardDefaults.cardColors(containerColor = RavenCard),
+        border = BorderStroke(1.dp, amber.copy(alpha = 0.25f)),
+        shape = RoundedCornerShape(8.dp),
+        modifier = Modifier.padding(top = 4.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Icon(
+                Icons.Default.BatterySaver,
+                contentDescription = "Battery saver enabled",
+                tint = amber,
+                modifier = Modifier.size(10.dp)
+            )
+            Text(
+                text = strings.batterySaverChip,
+                style = MaterialTheme.typography.labelSmall,
+                color = amber
+            )
+        }
+    }
+}
+
+/** D-12: pill (GREEN/YELLOW/RED) driven by NodeHealthMonitor.stateFlow, tap opens sheet. */
+@Composable
+private fun ConnectionHealthPill(
+    health: ConnectionHealth,
+    onTap: () -> Unit
+) {
+    val strings = LocalStrings.current
+    val (color, label, pulse) = when (health) {
+        ConnectionHealth.GREEN -> Triple(AuthenticGreen, strings.connectionPillOnline, true)
+        ConnectionHealth.YELLOW -> Triple(Color(0xFFF59E0B), strings.connectionPillReconnecting, true)
+        ConnectionHealth.RED -> Triple(NotAuthenticRed, strings.connectionPillOffline, false)
+    }
+    val scale = if (pulse) {
+        val inf = rememberInfiniteTransition(label = "pill_pulse")
+        inf.animateFloat(
+            initialValue = 0.8f,
+            targetValue = 1.2f,
+            animationSpec = infiniteRepeatable(tween(800), RepeatMode.Reverse),
+            label = "pill_dot"
+        ).value
+    } else 1f
+    Row(
+        modifier = Modifier
+            .sizeIn(minHeight = 48.dp)
+            .clickable { onTap() }
+            .padding(vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(6.dp)
+                .scale(scale)
+                .background(color, androidx.compose.foundation.shape.CircleShape)
+        )
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = color.copy(alpha = 0.8f)
+        )
+    }
+}
+
+/** D-12: tap sheet listing current node + fallback nodes with quarantine status. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ConnectionPillSheet(onDismiss: () -> Unit) {
+    val strings = LocalStrings.current
+    val currentNode = NodeHealthMonitor.currentNode() ?: strings.connectionPillNoNode
+    val diagnostics = NodeHealthMonitor.diagnostics()
+    val sheetState = rememberModalBottomSheetState()
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = RavenCard
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(
+                text = strings.connectionPillSheetTitle,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = Color.White
+            )
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(strings.connectionPillCurrentNode, style = MaterialTheme.typography.labelSmall, color = RavenMuted)
+                Text(
+                    text = currentNode,
+                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                    color = Color.White
+                )
+            }
+            val lastSuccess = diagnostics.firstOrNull { it.host == currentNode }?.lastSuccessAt
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(strings.connectionPillLastSuccess, style = MaterialTheme.typography.labelSmall, color = RavenMuted)
+                Text(
+                    text = if (lastSuccess != null) formatHhMm(lastSuccess) else strings.connectionPillNoNode,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = RavenMuted
+                )
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(strings.connectionPillFallbackNodes, style = MaterialTheme.typography.labelSmall, color = RavenMuted)
+                diagnostics.forEach { diag ->
+                    val quarantined = diag.quarantinedUntil != null && diag.quarantinedUntil!! > System.currentTimeMillis()
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .background(
+                                    if (quarantined) NotAuthenticRed else AuthenticGreen,
+                                    androidx.compose.foundation.shape.CircleShape
+                                )
+                        )
+                        Text(
+                            text = diag.host,
+                            style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                            color = Color.White,
+                            modifier = Modifier.weight(1f)
+                        )
+                        if (quarantined) {
+                            Text(
+                                text = String.format(
+                                    strings.connectionPillQuarantined,
+                                    formatHhMm(diag.quarantinedUntil!!)
+                                ),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = NotAuthenticRed
+                            )
+                        }
+                    }
+                }
+            }
+            OutlinedButton(
+                onClick = onDismiss,
+                border = BorderStroke(1.dp, RavenBorder),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+                modifier = Modifier.align(Alignment.End)
+            ) { Text(strings.connectionPillClose) }
+        }
+    }
+}
+
 @Composable
 private fun RestoreWalletConfirmDialog(
     hasBackedUp: Boolean,
