@@ -430,6 +430,16 @@ class AppStrings {
     var receiveCurrentAddressSubLabel: String = "Changes after your next send or consolidation."
     var walletOfflineHeading: String = "Wallet offline"
     var walletOfflineBody: String = "Cannot reach any Ravencoin node. Check your internet connection, then tap Refresh."
+
+    // Phase 30-09: D-19 tx history three-value breakdown + D-23 pagination.
+    var txHistorySentPrefix: String = "Sent"
+    var txHistoryCycledPrefix: String = "Cycled"
+    var txHistoryFeePrefix: String = "Fee"
+    var txHistoryLoadMore: String = "Load more"
+    var txHistoryEmptyHeading: String = "No transactions yet"
+    var txHistoryEmptyBody: String = "Your first sent or received transaction will appear here."
+    var txDetailsViewOnExplorer: String = "View on explorer"
+    var txHistoryConfirmations: String = "%1\$d/6 confirmations"
 }
 
 private fun cloneStrings(base: AppStrings): AppStrings =
@@ -691,6 +701,14 @@ val stringsEn = AppStrings().apply {
     receiveCurrentAddressSubLabel = "Changes after your next send or consolidation."
     walletOfflineHeading = "Wallet offline"
     walletOfflineBody = "Cannot reach any Ravencoin node. Check your internet connection, then tap Refresh."
+    txHistorySentPrefix = "Sent"
+    txHistoryCycledPrefix = "Cycled"
+    txHistoryFeePrefix = "Fee"
+    txHistoryLoadMore = "Load more"
+    txHistoryEmptyHeading = "No transactions yet"
+    txHistoryEmptyBody = "Your first sent or received transaction will appear here."
+    txDetailsViewOnExplorer = "View on explorer"
+    txHistoryConfirmations = "%1\$d/6 confirmations"
 }
 
 /** Italian strings. */
@@ -949,6 +967,14 @@ val stringsIt = AppStrings().apply {
     receiveCurrentAddressSubLabel = "Cambia dopo il prossimo invio o consolidamento."
     walletOfflineHeading = "Wallet offline"
     walletOfflineBody = "Nessun nodo Ravencoin raggiungibile. Controlla la connessione e tocca Aggiorna."
+    txHistorySentPrefix = "Inviato"
+    txHistoryCycledPrefix = "Ciclato"
+    txHistoryFeePrefix = "Fee"
+    txHistoryLoadMore = "Carica altre"
+    txHistoryEmptyHeading = "Nessuna transazione"
+    txHistoryEmptyBody = "La prima transazione inviata o ricevuta comparirà qui."
+    txDetailsViewOnExplorer = "Apri su explorer"
+    txHistoryConfirmations = "%1\$d/6 conferme"
 }
 
 /** French strings. */
