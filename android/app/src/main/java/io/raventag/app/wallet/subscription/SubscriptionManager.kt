@@ -46,6 +46,7 @@ import javax.net.ssl.SSLSocket
  */
 class SubscriptionManager(
     private val context: Context,
+    @Suppress("UNUSED_PARAMETER")
     private val servers: List<Pair<String, Int>> = DEFAULT_SERVERS,
     private val connectTimeoutMs: Int = 10_000,
     private val readTimeoutMs: Int = 20_000,
@@ -62,12 +63,13 @@ class SubscriptionManager(
     companion object {
         private const val TAG = "SubscriptionManager"
 
-        val DEFAULT_SERVERS: List<Pair<String, Int>> = listOf(
-            "rvn4lyfe.com" to 50002,
-            "rvn-dashboard.com" to 50002,
-            "162.19.153.65" to 50002,
-            "51.222.139.25" to 50002
-        )
+        /**
+         * Kept for binary/call-site compatibility; the runtime pool is now
+         * sourced from [io.raventag.app.config.AppConfig.ELECTRUM_SERVERS]
+         * via [io.raventag.app.wallet.health.NodeHealthMonitor].
+         */
+        val DEFAULT_SERVERS: List<Pair<String, Int>> =
+            io.raventag.app.config.AppConfig.ELECTRUM_SERVERS
     }
 
     fun eventsFlow(): SharedFlow<ScripthashEvent> = events.asSharedFlow()
@@ -85,12 +87,28 @@ class SubscriptionManager(
             scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         }
 
+        io.raventag.app.wallet.health.NodeHealthMonitor.init(context)
         var opened: Session? = null
-        for ((host, port) in servers) {
+        val poolSize = io.raventag.app.config.AppConfig.ELECTRUM_SERVERS.size
+        for (attempt in 0 until poolSize) {
+            if (opened != null) break
+            val candidate = io.raventag.app.wallet.health.NodeHealthMonitor.nextHealthyNode()
+                ?: break
+            val (host, portStr) = candidate.split(":", limit = 2)
+            val port = portStr.toInt()
             try {
                 opened = openSession(host, port)
-                break
-            } catch (_: Exception) { /* try next server */ }
+                io.raventag.app.wallet.health.NodeHealthMonitor.reportSuccess(candidate)
+            } catch (e: Exception) {
+                if (isTofuMismatch(e)) {
+                    io.raventag.app.wallet.health.NodeHealthMonitor.reportTofuMismatch(candidate)
+                } else {
+                    io.raventag.app.wallet.health.NodeHealthMonitor.reportFailure(
+                        candidate,
+                        e.javaClass.simpleName
+                    )
+                }
+            }
         }
         if (opened == null) {
             events.emit(ScripthashEvent.AllNodesDown)
@@ -164,6 +182,10 @@ class SubscriptionManager(
             while (coroutineContext.isActive) {
                 val line = withContext(Dispatchers.IO) { s.reader.readLine() }
                 if (line == null) {
+                    io.raventag.app.wallet.health.NodeHealthMonitor.reportFailure(
+                        sessionKey(s),
+                        "socket_closed"
+                    )
                     events.emit(ScripthashEvent.ConnectionLost)
                     return
                 }
@@ -177,7 +199,15 @@ class SubscriptionManager(
                     is SubscriptionParser.Parsed.Unknown -> { /* ignore */ }
                 }
             }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            if (isTofuMismatch(e)) {
+                io.raventag.app.wallet.health.NodeHealthMonitor.reportTofuMismatch(sessionKey(s))
+            } else {
+                io.raventag.app.wallet.health.NodeHealthMonitor.reportFailure(
+                    sessionKey(s),
+                    e.javaClass.simpleName
+                )
+            }
             events.emit(ScripthashEvent.ConnectionLost)
         }
     }
@@ -190,13 +220,35 @@ class SubscriptionManager(
                     sendAndAwait(s, "server.ping", emptyList<Any?>())
                 }
                 if (result == null) {
+                    io.raventag.app.wallet.health.NodeHealthMonitor.reportFailure(
+                        sessionKey(s),
+                        "ping_timeout"
+                    )
                     events.emit(ScripthashEvent.PingTimeout)
                     return
                 }
             }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            if (isTofuMismatch(e)) {
+                io.raventag.app.wallet.health.NodeHealthMonitor.reportTofuMismatch(sessionKey(s))
+            } else {
+                io.raventag.app.wallet.health.NodeHealthMonitor.reportFailure(
+                    sessionKey(s),
+                    e.javaClass.simpleName
+                )
+            }
             events.emit(ScripthashEvent.ConnectionLost)
         }
+    }
+
+    private fun sessionKey(s: Session): String = "${s.host}:${s.socket.port}"
+
+    private fun isTofuMismatch(e: Throwable): Boolean {
+        if (e is java.security.cert.CertificateException) return true
+        val m = e.message ?: return false
+        return m.contains("Certificate mismatch", ignoreCase = true) ||
+            m.contains("fingerprint mismatch", ignoreCase = true) ||
+            m.contains("TOFU", ignoreCase = true)
     }
 
     private suspend fun sendAndAwait(
