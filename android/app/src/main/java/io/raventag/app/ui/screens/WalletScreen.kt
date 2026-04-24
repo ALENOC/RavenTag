@@ -25,6 +25,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -1523,7 +1525,9 @@ private fun BatterySaverChip() {
         colors = CardDefaults.cardColors(containerColor = RavenCard),
         border = BorderStroke(1.dp, amber.copy(alpha = 0.25f)),
         shape = RoundedCornerShape(8.dp),
-        modifier = Modifier.padding(top = 4.dp)
+        modifier = Modifier
+            .padding(top = 4.dp)
+            .semantics { contentDescription = strings.batterySaverChipDesc }
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
@@ -1532,7 +1536,7 @@ private fun BatterySaverChip() {
         ) {
             Icon(
                 Icons.Default.BatterySaver,
-                contentDescription = "Battery saver enabled",
+                contentDescription = null,
                 tint = amber,
                 modifier = Modifier.size(10.dp)
             )
@@ -1579,6 +1583,7 @@ private fun ConnectionHealthPill(
                 .size(6.dp)
                 .scale(scale)
                 .background(color, androidx.compose.foundation.shape.CircleShape)
+                .semantics { contentDescription = "${strings.connectionStatusDotDesc}: $label" }
         )
         Text(
             text = label,
