@@ -144,6 +144,27 @@ RavenTag/
 └── LICENSE         RavenTag Source License (RTSL-1.0)
 ```
 
+## データベースエクスプローラー
+
+実行中のバックエンドインスタンス上の SQLite データベースを探索するための読み取り専用対話型シェル。
+
+```bash
+docker exec -it raventag-backend node dist/db-explore.js
+```
+
+使用可能なコマンド:
+
+| コマンド | 説明 |
+|---|---|
+| `.assets` | 登録済みチップ一覧 (chip_registry) |
+| `.brands` | 登録済みブランド一覧 (brand_registry) |
+| `.revoked` | 失効済みアセット一覧 (revoked_assets) |
+| `.stats` | 全テーブルの行数を表示 |
+| `.help` | 使用可能なコマンドを表示 |
+| `.exit` | データベースを閉じて終了 |
+
+シェルはデータベースを読み取り専用モードで開きます。書き込み操作は公開されません。
+
 ## 法的文書
 
 - [利用規約](legal/TERMS_OF_SERVICE.md)

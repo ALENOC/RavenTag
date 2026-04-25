@@ -400,6 +400,27 @@ git pull origin master
 docker compose up -d --build backend
 ```
 
+### Database Explorer
+
+A read-only interactive shell for exploring the SQLite database on a running backend instance.
+
+```bash
+docker exec -it raventag-backend node dist/db-explore.js
+```
+
+Available commands:
+
+| Command | Description |
+|---|---|
+| `.assets` | List registered chips (chip_registry) |
+| `.brands` | List registered brands (brand_registry) |
+| `.revoked` | List revoked assets (revoked_assets) |
+| `.stats` | Show row counts for all tables |
+| `.help` | Show available commands |
+| `.exit` | Close database and exit |
+
+The explorer opens the database in read-only mode. No write operations are exposed.
+
 ### Reverse proxy and SSL (nginx example)
 
 ```nginx
