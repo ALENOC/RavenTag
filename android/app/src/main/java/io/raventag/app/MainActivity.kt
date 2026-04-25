@@ -92,6 +92,8 @@ import io.raventag.app.ui.theme.stringsZh
 import io.raventag.app.wallet.AssetIssueParams
 import io.raventag.app.wallet.AssetManager
 import io.raventag.app.wallet.BurnParams
+import io.raventag.app.wallet.RavencoinPublicNode
+import io.raventag.app.wallet.RavencoinTxBuilder
 import io.raventag.app.wallet.SubAssetIssueParams
 import io.raventag.app.wallet.WalletManager
 import io.raventag.app.security.AdminKeyStorage
@@ -1641,16 +1643,68 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             issueLoading = true
             try {
                 val assetName = name.uppercase()
-                val txid = withContext(Dispatchers.IO) {
-                    wm.issueAssetLocal(assetName, qty.toDouble(), toAddress, units = 0, reissuable = reissuable, ipfsHash = ipfsHash)
+
+                // D-04 Step 1: Wallet balance check
+                val modeBurnSat = RavencoinTxBuilder.BURN_ROOT_SAT
+                val burnRvn = modeBurnSat / 1e8
+                val networkFeeRvn = 0.01
+                if (walletInfo != null && walletInfo!!.balanceRvn < burnRvn + networkFeeRvn) {
+                    warningType = WarningType.INSUFFICIENT_BALANCE
+                    issueResult = getStrings().balanceWarningRoot
+                    issueSuccess = false
+                    issueLoading = false
+                    return@launch
                 }
+                // D-04 Step 2: Asset name uniqueness check
+                if (!ownedAssets.isNullOrEmpty()) {
+                    val duplicate = ownedAssets!!.any { it.name.equals(assetName, ignoreCase = true) }
+                    if (duplicate) {
+                        warningType = WarningType.DUPLICATE_NAME
+                        issueResult = getStrings().issueErrorDuplicateName
+                        issueSuccess = false
+                        issueLoading = false
+                        return@launch
+                    }
+                }
+                warningType = null
+
+                val txid = try {
+                    RetryUtils.retryWithBackoff(maxAttempts = 5) {
+                        withContext(Dispatchers.IO) {
+                            try {
+                                wm.issueAssetLocal(assetName, qty.toDouble(), toAddress, units = 0, reissuable = reissuable, ipfsHash = ipfsHash)
+                            } catch (e: java.net.SocketTimeoutException) {
+                                // D-08: SocketTimeout must NOT be retried (tx may be broadcast).
+                                // Throw as RuntimeException so isTransientError returns false.
+                                throw RuntimeException(e)
+                            }
+                        }
+                    }
+                } catch (e: RuntimeException) {
+                    if (e.cause is java.net.SocketTimeoutException) {
+                        // D-08: RPC timeout -- tx may have been broadcast, cannot verify without txid
+                        issueSuccess = false
+                        issueResult = getStrings().issueErrorTimeout
+                        issueStep = IssueStep.Failed(IssueStep.StepName.ISSUING, getStrings().issueErrorTimeout, canRetry = true)
+                        return@launch
+                    }
+                    throw e
+                } catch (e: Exception) {
+                    // Non-transient or connection retries exhausted
+                    issueSuccess = false
+                    issueResult = classifyIssuanceError(e, getStrings())
+                    issueStep = IssueStep.Failed(IssueStep.StepName.ISSUING, classifyIssuanceError(e, getStrings()), canRetry = RetryUtils.isTransientError(e))
+                    return@launch
+                }
+
                 issueSuccess = true
                 val s = getStrings()
                 issueResult = s.issueRootSuccess.replace("%1", assetName).replace("%2", "${txid.take(16)}...")
+                issuedTxid = txid
                 walletInfo = walletInfo?.copy(address = wm.getCurrentAddress() ?: walletInfo?.address ?: "")
                 notifyRavenTagRegistry(assetName, txid, "root")
             } catch (e: Throwable) {
-                issueSuccess = false; issueResult = getStrings().issueFailed
+                issueSuccess = false; issueResult = classifyIssuanceError(e, getStrings())
             } finally { issueLoading = false }
         }
     }
@@ -1665,16 +1719,64 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             issueLoading = true
             try {
                 val fullName = "${parent.uppercase()}/${child.uppercase()}"
-                val txid = withContext(Dispatchers.IO) {
-                    wm.issueAssetLocal(fullName, qty.toDouble(), toAddress, units = 0, reissuable = reissuable, ipfsHash = ipfsHash)
+
+                // D-04 Step 1: Wallet balance check
+                val modeBurnSat = RavencoinTxBuilder.BURN_SUB_SAT
+                val burnRvn = modeBurnSat / 1e8
+                val networkFeeRvn = 0.01
+                if (walletInfo != null && walletInfo!!.balanceRvn < burnRvn + networkFeeRvn) {
+                    warningType = WarningType.INSUFFICIENT_BALANCE
+                    issueResult = getStrings().balanceWarningSub
+                    issueSuccess = false
+                    issueLoading = false
+                    return@launch
                 }
+                // D-04 Step 2: Asset name uniqueness check
+                if (!ownedAssets.isNullOrEmpty()) {
+                    val duplicate = ownedAssets!!.any { it.name.equals(fullName, ignoreCase = true) }
+                    if (duplicate) {
+                        warningType = WarningType.DUPLICATE_NAME
+                        issueResult = getStrings().issueErrorDuplicateName
+                        issueSuccess = false
+                        issueLoading = false
+                        return@launch
+                    }
+                }
+                warningType = null
+
+                val txid = try {
+                    RetryUtils.retryWithBackoff(maxAttempts = 5) {
+                        withContext(Dispatchers.IO) {
+                            try {
+                                wm.issueAssetLocal(fullName, qty.toDouble(), toAddress, units = 0, reissuable = reissuable, ipfsHash = ipfsHash)
+                            } catch (e: java.net.SocketTimeoutException) {
+                                throw RuntimeException(e)
+                            }
+                        }
+                    }
+                } catch (e: RuntimeException) {
+                    if (e.cause is java.net.SocketTimeoutException) {
+                        issueSuccess = false
+                        issueResult = getStrings().issueErrorTimeout
+                        issueStep = IssueStep.Failed(IssueStep.StepName.ISSUING, getStrings().issueErrorTimeout, canRetry = true)
+                        return@launch
+                    }
+                    throw e
+                } catch (e: Exception) {
+                    issueSuccess = false
+                    issueResult = classifyIssuanceError(e, getStrings())
+                    issueStep = IssueStep.Failed(IssueStep.StepName.ISSUING, classifyIssuanceError(e, getStrings()), canRetry = RetryUtils.isTransientError(e))
+                    return@launch
+                }
+
                 issueSuccess = true
                 val s = getStrings()
                 issueResult = s.issueSubSuccess.replace("%1", fullName).replace("%2", "${txid.take(16)}...")
+                issuedTxid = txid
                 walletInfo = walletInfo?.copy(address = wm.getCurrentAddress() ?: walletInfo?.address ?: "")
                 notifyRavenTagRegistry(fullName, txid, "sub")
             } catch (e: Throwable) {
-                issueSuccess = false; issueResult = getStrings().issueFailed
+                issueSuccess = false; issueResult = classifyIssuanceError(e, getStrings())
             } finally { issueLoading = false }
         }
     }
@@ -1690,16 +1792,64 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             issueLoading = true
             try {
                 val fullName = "${parentSub.uppercase()}#${serial.uppercase()}"
-                val txid = withContext(Dispatchers.IO) {
-                    wm.issueAssetLocal(fullName, qty = 1.0, toAddress = toAddress, units = 0, reissuable = false, ipfsHash = ipfsHash)
+
+                // D-04 Step 1: Wallet balance check
+                val modeBurnSat = RavencoinTxBuilder.BURN_UNIQUE_SAT
+                val burnRvn = modeBurnSat / 1e8
+                val networkFeeRvn = 0.01
+                if (walletInfo != null && walletInfo!!.balanceRvn < burnRvn + networkFeeRvn) {
+                    warningType = WarningType.INSUFFICIENT_BALANCE
+                    issueResult = getStrings().balanceWarningUnique
+                    issueSuccess = false
+                    issueLoading = false
+                    return@launch
                 }
+                // D-04 Step 2: Asset name uniqueness check
+                if (!ownedAssets.isNullOrEmpty()) {
+                    val duplicate = ownedAssets!!.any { it.name.equals(fullName, ignoreCase = true) }
+                    if (duplicate) {
+                        warningType = WarningType.DUPLICATE_NAME
+                        issueResult = getStrings().issueErrorDuplicateName
+                        issueSuccess = false
+                        issueLoading = false
+                        return@launch
+                    }
+                }
+                warningType = null
+
+                val txid = try {
+                    RetryUtils.retryWithBackoff(maxAttempts = 5) {
+                        withContext(Dispatchers.IO) {
+                            try {
+                                wm.issueAssetLocal(fullName, qty = 1.0, toAddress = toAddress, units = 0, reissuable = false, ipfsHash = ipfsHash)
+                            } catch (e: java.net.SocketTimeoutException) {
+                                throw RuntimeException(e)
+                            }
+                        }
+                    }
+                } catch (e: RuntimeException) {
+                    if (e.cause is java.net.SocketTimeoutException) {
+                        issueSuccess = false
+                        issueResult = getStrings().issueErrorTimeout
+                        issueStep = IssueStep.Failed(IssueStep.StepName.ISSUING, getStrings().issueErrorTimeout, canRetry = true)
+                        return@launch
+                    }
+                    throw e
+                } catch (e: Exception) {
+                    issueSuccess = false
+                    issueResult = classifyIssuanceError(e, getStrings())
+                    issueStep = IssueStep.Failed(IssueStep.StepName.ISSUING, classifyIssuanceError(e, getStrings()), canRetry = RetryUtils.isTransientError(e))
+                    return@launch
+                }
+
                 issueSuccess = true
                 val s = getStrings()
                 issueResult = s.issueUniqueSuccess.replace("%1", fullName).replace("%2", "${txid.take(16)}...")
+                issuedTxid = txid
                 walletInfo = walletInfo?.copy(address = wm.getCurrentAddress() ?: walletInfo?.address ?: "")
                 notifyRavenTagRegistry(fullName, txid, "unique")
             } catch (e: Throwable) {
-                issueSuccess = false; issueResult = getStrings().issueFailed
+                issueSuccess = false; issueResult = classifyIssuanceError(e, getStrings())
             } finally { issueLoading = false }
         }
     }
@@ -1743,14 +1893,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             issueLoading = true
             try {
-                withContext(Dispatchers.IO) {
-                    // Mark revoked in backend SQLite
+                val result = withContext(Dispatchers.IO) {
                     am.revokeAsset(BurnParams(assetName, reason = reason, burnOnChain = false))
                 }
-                issueSuccess = true
-                issueResult = "Asset $assetName revocato"
+                issueSuccess = result.success
+                issueResult = if (result.success) getStrings().revokeSuccess else (result.error ?: getStrings().revokeFailed)
             } catch (e: Throwable) {
-                issueSuccess = false; issueResult = e.message ?: "Revoca fallita"
+                issueSuccess = false; issueResult = e.message ?: getStrings().revokeFailed
             } finally { issueLoading = false }
         }
     }
@@ -3498,6 +3647,9 @@ fun RavenTagApp(
             ownedAssets = viewModel.ownedAssets ?: emptyList(),
             savedAdminKey = savedAdminKey,
             savedKuboNodeUrl = savedKuboNodeUrl,
+            currentStep = viewModel.issueStep,
+            issuedTxid = viewModel.issuedTxid,
+            warningType = viewModel.warningType,
             onBack = { viewModel.issueMode = null; viewModel.clearIssueResult() },
             onIssueRoot = viewModel::issueRootAsset,
             onIssueSub = viewModel::issueSubAsset,
