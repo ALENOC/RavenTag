@@ -294,10 +294,17 @@ fun SendRvnScreen(
                 // "RVN" suffix displayed inside the field to clarify the currency.
                 suffix = { Text("RVN", color = RavenOrange, style = MaterialTheme.typography.bodySmall) }
             )
-            // MAX button: fills in the full wallet balance formatted to 8 decimal places.
-            // Disabled when balance is zero to avoid setting 0.00000000 accidentally.
+            // MAX button: fills in walletBalance MINUS estimated network fee so the
+            // tx actually broadcasts (sending the full balance always fails because
+            // there are no satoshis left to cover the fee).
+            // Estimate uses ~300 bytes for a typical 1-in / 2-out P2PKH transaction.
             OutlinedButton(
-                onClick = { amount = "%.8f".format(walletBalance) },
+                onClick = {
+                    // MAX = full balance. WalletManager.sendRvnLocal detects sweep mode
+                    // (amountSat + fee > totalIn) and lets the tx builder subtract the
+                    // exact fee from the recipient amount, so the wallet ends at 0 RVN.
+                    amount = "%.8f".format(walletBalance)
+                },
                 enabled = walletBalance > 0.0,
                 modifier = Modifier.height(56.dp),
                 shape = RoundedCornerShape(12.dp),
