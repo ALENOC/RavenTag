@@ -1109,6 +1109,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 delay(30_000L)
             }
         }
+        // Fire the first heartbeat immediately so the pill turns green as soon as
+        // a server answers, rather than waiting for the first 30 s tick.
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                io.raventag.app.wallet.RavencoinPublicNode(getApplication()).heartbeat()
+            } catch (_: Exception) {}
+        }
     }
 
     /** Delete the wallet from secure storage and clear all wallet state. */
