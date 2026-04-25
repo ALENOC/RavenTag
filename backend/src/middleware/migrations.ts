@@ -130,10 +130,9 @@ const MIGRATIONS: Migration[] = [
   },
   {
     id: 6,
-    name: 'log_retention_cleanup',
-    // Delete log entries older than 30 days to prevent unbounded growth.
-    // This migration runs once at schema upgrade time; ongoing cleanup would
-    // require a periodic job or SQLite triggers.
+    name: 'log_retention_cleanup_one_shot',
+    // One-shot cleanup at migration time. Periodic cleanup is handled by
+    // startLogCleanup() in logger.ts (runs every 24h, retains 30 days).
     sql: `
       DELETE FROM request_logs WHERE created_at < unixepoch() - 30 * 86400;
       DELETE FROM rate_limit_events WHERE created_at < unixepoch() - 30 * 86400;

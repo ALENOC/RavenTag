@@ -1,6 +1,11 @@
 package io.raventag.app.ui.screens
 
 import android.graphics.Bitmap
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -109,7 +114,26 @@ fun ReceiveScreen(
             }
         }
 
-        Spacer(modifier = Modifier.height(32.dp))
+        Spacer(modifier = Modifier.height(24.dp))
+
+        // D-18: main label + sub-label per UI-SPEC Copywriting Contract.
+        Text(
+            text = s.receiveCurrentAddressLabel,
+            style = MaterialTheme.typography.bodyMedium,
+            color = Color.White,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = s.receiveCurrentAddressSubLabel,
+            style = MaterialTheme.typography.bodySmall,
+            color = RavenMuted,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
 
         // Address display row with an inline copy button.
         Text("RVN", style = MaterialTheme.typography.labelSmall, color = RavenMuted, modifier = Modifier.fillMaxWidth())
@@ -123,13 +147,19 @@ fun ReceiveScreen(
                 .padding(horizontal = 14.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Address in monospace for readability and easy manual comparison.
-            Text(
-                address,
-                style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                color = Color.White,
+            // D-18: 200ms cross-fade when currentIndex-derived address advances.
+            AnimatedContent(
+                targetState = address,
+                transitionSpec = { fadeIn(tween(200)) togetherWith fadeOut(tween(200)) },
+                label = "receiveAddressCrossFade",
                 modifier = Modifier.weight(1f)
-            )
+            ) { shown ->
+                Text(
+                    shown,
+                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                    color = Color.White
+                )
+            }
             // Copy button: turns green when the address has been copied.
             IconButton(
                 onClick = {

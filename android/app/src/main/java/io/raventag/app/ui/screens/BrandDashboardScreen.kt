@@ -93,7 +93,7 @@ fun BrandDashboardScreen(
             Row(modifier = Modifier.padding(16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Icon(Icons.Default.Info, contentDescription = null, tint = AuthenticGreen, modifier = Modifier.size(18.dp))
                 Column {
-                    Text("Protocol RTP-1", fontWeight = FontWeight.SemiBold, color = AuthenticGreen, style = MaterialTheme.typography.bodyMedium)
+                    Text(s.protocolRtpBadge, fontWeight = FontWeight.SemiBold, color = AuthenticGreen, style = MaterialTheme.typography.bodyMedium)
                     Text(s.brandProtocolDesc, style = MaterialTheme.typography.bodySmall, color = RavenMuted, modifier = Modifier.padding(top = 4.dp))
                 }
             }

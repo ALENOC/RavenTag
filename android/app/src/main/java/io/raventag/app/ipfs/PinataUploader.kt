@@ -13,13 +13,14 @@
  *   POST https://api.pinata.cloud/pinning/pinFileToIPFS   Upload and pin a file.
  *   GET  https://api.pinata.cloud/data/testAuthentication  Validate the JWT.
  *
- * All network calls are synchronous and must be dispatched from a background coroutine
- * or thread by the caller.
+ * All network calls are suspend functions using Kotlin coroutines with suspendCancellableCoroutine,
+ * allowing proper dispatcher switching and preventing UI thread blocking.
  */
 package io.raventag.app.ipfs
 
 import com.google.gson.Gson
 import com.google.gson.JsonObject
+import io.raventag.app.network.executeSuspend
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
@@ -67,7 +68,7 @@ object PinataUploader {
      * @throws Exception if the HTTP response is not successful or the response body
      *                   does not contain an "IpfsHash" field.
      */
-    fun uploadFile(bytes: ByteArray, mimeType: String, filename: String, jwt: String): String {
+    suspend fun uploadFile(bytes: ByteArray, mimeType: String, filename: String, jwt: String): String {
         // Build a multipart body with the file content as the "file" part.
         val body = MultipartBody.Builder()
             .setType(MultipartBody.FORM)
@@ -79,7 +80,7 @@ object PinataUploader {
             .header("Authorization", "Bearer $jwt")
             .post(body)
             .build()
-        http.newCall(request).execute().use { response ->
+        http.newCall(request).executeSuspend().use { response ->
             if (!response.isSuccessful) throw Exception("Pinata upload failed: ${response.code}")
             // Pinata returns JSON like: {"IpfsHash":"Qm...","PinSize":123,"Timestamp":"..."}
             val json = Gson().fromJson(response.body!!.string(), JsonObject::class.java)
@@ -97,7 +98,7 @@ object PinataUploader {
      * @param jwt  The Pinata JWT token from app settings.
      * @return The IPFS CID of the uploaded JSON file.
      */
-    fun uploadJson(json: String, jwt: String): String =
+    suspend fun uploadJson(json: String, jwt: String): String =
         uploadFile(json.toByteArray(Charsets.UTF_8), "application/json", "metadata.json", jwt)
 
     /**
@@ -110,12 +111,12 @@ object PinataUploader {
      * @param jwt The Pinata JWT token to validate.
      * @return true if the JWT is accepted by Pinata (HTTP 200 response), false otherwise.
      */
-    fun testAuthentication(jwt: String): Boolean {
+    suspend fun testAuthentication(jwt: String): Boolean {
         val request = Request.Builder()
             .url("https://api.pinata.cloud/data/testAuthentication")
             .header("Authorization", "Bearer $jwt")
             .get()
             .build()
-        return http.newCall(request).execute().use { it.isSuccessful }
+        return http.newCall(request).executeSuspend().use { it.isSuccessful }
     }
 }

@@ -75,7 +75,16 @@ router.post('/register-tag', (req: Request, res: Response) => {
  */
 router.get('/tags', (req: Request, res: Response) => {
   const db = getDb()
-  const tags = db.prepare('SELECT * FROM registered_tags ORDER BY created_at DESC').all()
+  const tags = db.prepare(`
+    SELECT
+        nfc_pub_id,
+        asset_name,
+        brand_info,
+        metadata_ipfs,
+        created_at
+    FROM registered_tags
+    ORDER BY created_at DESC
+  `).all()
   res.json({ tags, count: tags.length })
 })
 
