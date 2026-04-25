@@ -34,6 +34,9 @@ enum class ConnectionHealth { GREEN, YELLOW, RED }
  *   used to compute [stateFlow] (authoritative for sub-minute UX).
  * - [QuarantineDao] persists 1-hour TOFU-mismatch quarantines across process
  *   restarts (authoritative for long-lived bans).
+ * - SharedPreferences persists the last known good host so cold starts skip
+ *   the failover rotation and connect immediately to the previously working
+ *   server.
  */
 object NodeHealthMonitor {
 
@@ -50,6 +53,8 @@ object NodeHealthMonitor {
     private const val TRANSIENT_COOLDOWN_MS: Long = 8_000L
     private const val YELLOW_FAILURE_WINDOW_MS: Long = 30_000L
     private const val GREEN_SUCCESS_WINDOW_MS: Long = 60_000L
+    private const val PREFS_NAME = "node_health_prefs"
+    private const val KEY_LAST_GOOD_HOST = "last_good_host"
 
     private val lastSuccessAt = ConcurrentHashMap<String, Long>()
     private val lastFailureAt = ConcurrentHashMap<String, Long>()
@@ -60,12 +65,14 @@ object NodeHealthMonitor {
 
     @Volatile private var initialized = false
     private val initLock = Any()
+    private var appContext: Context? = null
 
     /** Idempotent init. Safe to call from MainActivity, workers and background paths. */
     fun init(context: Context) {
         if (initialized) return
         synchronized(initLock) {
             if (initialized) return
+            appContext = context.applicationContext
             QuarantineDao.init(context)
             initialized = true
         }
@@ -73,12 +80,29 @@ object NodeHealthMonitor {
 
     /**
      * Returns the next host in "host:port" form that is NOT currently
-     * quarantined and is outside the 30s transient-failure cooldown, or null
+     * quarantined and is outside the 8s transient-failure cooldown, or null
      * if every pool entry is unavailable.
+     *
+     * Tries the last known good host (persisted across restarts) first so
+     * cold starts skip the failover rotation and connect immediately.
      */
     fun nextHealthyNode(): String? {
         val now = System.currentTimeMillis()
         val quarantinedHosts = activeQuarantineHosts(now)
+
+        // Fast path: try the persisted last-good host first on cold start.
+        // This avoids TCP connect timeout (5s) × N servers when the first
+        // server in rotation order happens to be down.
+        val preferred = getPreferredHost()
+        if (preferred != null && preferred !in quarantinedHosts) {
+            val failedAt = lastFailureAt[preferred]
+            if (failedAt == null || (now - failedAt) > TRANSIENT_COOLDOWN_MS) {
+                recomputeState()
+                return preferred
+            }
+        }
+
+        // Fallback: standard rotation order
         val candidate = AppConfig.ELECTRUM_SERVERS.firstOrNull { (host, port) ->
             val key = "$host:$port"
             if (key in quarantinedHosts) return@firstOrNull false
@@ -94,6 +118,7 @@ object NodeHealthMonitor {
         lastSuccessAt[host] = now
         lastFailureAt.remove(host)
         lastError.remove(host)
+        savePreferredHost(host)
         recomputeState()
     }
 
@@ -116,9 +141,9 @@ object NodeHealthMonitor {
         recomputeState()
     }
 
-    /** Host with the most recent [reportSuccess], for the bottom sheet. */
+    /** Host with the most recent [reportSuccess] (falls back to persisted on cold start). */
     fun currentNode(): String? =
-        lastSuccessAt.maxByOrNull { it.value }?.key
+        lastSuccessAt.maxByOrNull { it.value }?.key ?: getPreferredHost()
 
     fun diagnostics(): List<NodeDiagnostic> {
         val now = System.currentTimeMillis()
@@ -138,6 +163,22 @@ object NodeHealthMonitor {
     }
 
     // --- internal ---
+
+    private fun getPreferredHost(): String? {
+        val ctx = appContext ?: return null
+        return try {
+            ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getString(KEY_LAST_GOOD_HOST, null)
+        } catch (_: Throwable) { null }
+    }
+
+    private fun savePreferredHost(host: String) {
+        val ctx = appContext ?: return
+        try {
+            ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit().putString(KEY_LAST_GOOD_HOST, host).apply()
+        } catch (_: Throwable) {}
+    }
 
     private fun activeQuarantineHosts(now: Long): Set<String> =
         try {

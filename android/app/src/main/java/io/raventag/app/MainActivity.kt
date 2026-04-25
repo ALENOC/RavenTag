@@ -443,7 +443,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 try { io.raventag.app.wallet.RavencoinPublicNode(getApplication()).getBlockHeight() }
                 catch (_: Exception) { null }
             }
-            if (h != null) blockHeight = h
+            if (h != null) {
+                blockHeight = h
+                // Persist so the next cold start renders the chain-tip pill instantly
+                try { io.raventag.app.wallet.cache.WalletCacheDao.writeBlockHeight(h) } catch (_: Throwable) {}
+            }
         }
     }
 
@@ -908,6 +912,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     txHistoryTotal = deduped.size
                     txHistoryLoadedCount = firstPage.size
                 }
+                // Persist so the next cold start renders the list instantly
+                // from cache instead of waiting for the network round-trip.
+                if (deduped.isNotEmpty()) {
+                    withContext(Dispatchers.IO) {
+                        try {
+                            val now = System.currentTimeMillis()
+                            val rows = deduped.map { e ->
+                                io.raventag.app.wallet.cache.TxHistoryDao.TxHistoryRow(
+                                    txid = e.txid,
+                                    height = e.height,
+                                    confirms = e.confirmations,
+                                    amountSat = e.amountSat,
+                                    sentSat = e.sentSat,
+                                    cycledSat = e.cycledSat,
+                                    feeSat = e.feeSat,
+                                    isIncoming = e.isIncoming,
+                                    isSelf = e.isSelfTransfer,
+                                    timestamp = e.timestamp,
+                                    cachedAt = now
+                                )
+                            }
+                            io.raventag.app.wallet.cache.TxHistoryDao.upsert(rows)
+                        } catch (_: Throwable) {}
+                    }
+                }
             } catch (_: Throwable) {
                 // silently ignore: tx history is optional
             } finally {
@@ -1031,9 +1060,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val cachedAddr = try { wm.getCurrentAddress() } catch (_: Throwable) { null }.orEmpty()
                 walletInfo = WalletInfo(
                     address = cachedAddr,
-                    balanceRvn = (cachedState?.balanceSat ?: 0L) / 1e8,
+                    balanceRvn = cachedState?.balanceSat?.let { it / 1e8 },
                     isLoading = true
                 )
+                // Seed block height from cache so the chain-tip pill renders instantly
+                if (cachedState != null && cachedState.blockHeight > 0) {
+                    blockHeight = cachedState.blockHeight
+                }
                 val cachedTx = io.raventag.app.wallet.cache.TxHistoryDao.getPage(offset = 0, limit = 50)
                 if (cachedTx.isNotEmpty()) {
                     txHistory = cachedTx.map { row ->
@@ -1116,7 +1149,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 pendingMnemonic = mnemonic
                 // wallet is NOT yet stored, hasWallet stays false
             } catch (e: Throwable) {
-                walletInfo = WalletInfo(address = "", balanceRvn = 0.0, error = "Wallet creation failed: ${e.message}")
+                walletInfo = WalletInfo(address = "", balanceRvn = null, error = "Wallet creation failed: ${e.message}")
             } finally {
                 walletGenerating = false
             }
@@ -1136,7 +1169,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 wm.getCurrentAddress() ?: ""
             }
             hasWallet = true
-            walletInfo = WalletInfo(address = address, balanceRvn = 0.0, isLoading = true)
+            walletInfo = WalletInfo(address = address, balanceRvn = null, isLoading = true)
             pendingMnemonic = null
             loadWalletBalance()
         }
@@ -1179,7 +1212,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
 
                 val address = wm.getCurrentAddress() ?: ""
-                walletInfo = WalletInfo(address = address, balanceRvn = 0.0, isLoading = true)
+                walletInfo = WalletInfo(address = address, balanceRvn = null, isLoading = true)
                 hasWallet = true
 
                 // Parallel restore: load balance, assets, and history simultaneously
@@ -1230,9 +1263,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val cachedAddr = try { wm.getCurrentAddress() } catch (_: Throwable) { null }.orEmpty()
             walletInfo = WalletInfo(
                 address = cachedAddr,
-                balanceRvn = (cachedState?.balanceSat ?: 0L) / 1e8,
+                balanceRvn = cachedState?.balanceSat?.let { it / 1e8 },
                 isLoading = true
             )
+            // Seed block height from cache so the chain-tip pill renders instantly
+            if (cachedState != null && cachedState.blockHeight > 0) {
+                blockHeight = cachedState.blockHeight
+            }
             // Seed tx history from cache as well so the section is populated on resume.
             try {
                 val cachedTx = io.raventag.app.wallet.cache.TxHistoryDao.getPage(offset = 0, limit = 50)
@@ -1275,9 +1312,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             walletInfo = walletInfo?.copy(
                 // Keep existing address/balance if new load fails (network error)
                 address = address.ifEmpty { walletInfo?.address ?: "" },
-                balanceRvn = balance ?: walletInfo?.balanceRvn ?: 0.0,
+                balanceRvn = balance ?: walletInfo?.balanceRvn,
                 isLoading = false
             )
+
+            // Persist the just-fetched balance so the next cold start can render
+            // it instantly from cache instead of showing "Loading…" again.
+            if (balance != null) {
+                try {
+                    io.raventag.app.wallet.cache.WalletCacheDao.writeBalanceSat(
+                        (balance * 1e8).toLong()
+                    )
+                } catch (_: Throwable) {}
+            }
 
             // STEP 2: Background maintenance (does not block the UI).
             launch(Dispatchers.IO) {
@@ -1298,7 +1345,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             val newBalance = wm.getLocalBalance()
                             withContext(Dispatchers.Main) {
                                 walletInfo = walletInfo?.copy(
-                                    balanceRvn = newBalance ?: 0.0,
+                                    balanceRvn = newBalance,
                                     isLoading = false
                                 )
                             }
@@ -1324,9 +1371,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
 
-            // Auto-trigger network refresh after cache load so the ElectrumX pill
-            // flips GREEN on first successful RPC instead of lingering on YELLOW.
-            withContext(Dispatchers.Main) { refreshBalance() }
+            // Update ElectrumX health pill and chain info after initial load.
+            // Skip full refreshBalance() — the initial load already fetched
+            // balance, assets, and tx history. A second full round trip is wasteful.
+            checkElectrumStatus()
+            fetchBlockHeight()
+            fetchRvnPrice()
+            fetchNetworkHashrate()
         }
     }
 
@@ -1437,7 +1488,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val info = withContext(Dispatchers.IO) { am.getWalletInfo() }
                 walletInfo = walletInfo?.copy(
                     // Preserve the last known balance if backend also fails; never overwrite with 0
-                    balanceRvn = info?.first ?: walletInfo?.balanceRvn ?: 0.0,
+                    balanceRvn = info?.first ?: walletInfo?.balanceRvn,
                     isLoading = false
                 )
             } catch (_: Throwable) {
@@ -1648,7 +1699,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val modeBurnSat = RavencoinTxBuilder.BURN_ROOT_SAT
                 val burnRvn = modeBurnSat / 1e8
                 val networkFeeRvn = 0.01
-                if (walletInfo != null && walletInfo!!.balanceRvn < burnRvn + networkFeeRvn) {
+                if ((walletInfo?.balanceRvn ?: 0.0) < burnRvn + networkFeeRvn) {
                     warningType = WarningType.INSUFFICIENT_BALANCE
                     issueResult = getStrings().balanceWarningRoot
                     issueSuccess = false
@@ -1754,7 +1805,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val modeBurnSat = RavencoinTxBuilder.BURN_SUB_SAT
                 val burnRvn = modeBurnSat / 1e8
                 val networkFeeRvn = 0.01
-                if (walletInfo != null && walletInfo!!.balanceRvn < burnRvn + networkFeeRvn) {
+                if ((walletInfo?.balanceRvn ?: 0.0) < burnRvn + networkFeeRvn) {
                     warningType = WarningType.INSUFFICIENT_BALANCE
                     issueResult = getStrings().balanceWarningSub
                     issueSuccess = false
@@ -1829,7 +1880,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val modeBurnSat = RavencoinTxBuilder.BURN_UNIQUE_SAT
                 val burnRvn = modeBurnSat / 1e8
                 val networkFeeRvn = 0.01
-                if (walletInfo != null && walletInfo!!.balanceRvn < burnRvn + networkFeeRvn) {
+                if ((walletInfo?.balanceRvn ?: 0.0) < burnRvn + networkFeeRvn) {
                     warningType = WarningType.INSUFFICIENT_BALANCE
                     issueResult = getStrings().balanceWarningUnique
                     issueSuccess = false
@@ -2119,7 +2170,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 // Update displayed address (rotated after send)
                 walletInfo = walletInfo?.copy(address = wm.getCurrentAddress() ?: walletInfo?.address ?: "")
 
-                // Refresh balance after send
+                // Optimistically deduct sent amount + fee so the balance updates instantly
+                // instead of waiting for the network refresh round-trip.
+                val currentBalance = walletInfo?.balanceRvn
+                if (currentBalance != null) {
+                    walletInfo = walletInfo?.copy(
+                        balanceRvn = (currentBalance - amount - feeRvn).coerceAtLeast(0.0)
+                    )
+                }
+
+                // Refresh balance from network (confirms the exact post-send amount)
                 loadWalletBalance()
             } catch (e: io.raventag.app.wallet.FeeUnavailableException) {
                 sendLoading = false
@@ -2948,6 +3008,13 @@ class MainActivity : FragmentActivity() {
         // Process any NFC intent that launched or re-launched this activity
         handleIntent(intent)
 
+        // Initialize wallet reliability database BEFORE initWallet so the cache
+        // reads inside initWallet (balance, tx history, block height) actually
+        // hit SQLite instead of throwing "DB not initialized" and silently
+        // falling into the catch-all that wipes the cold-start cache view.
+        io.raventag.app.wallet.cache.WalletReliabilityDb.init(this)
+        io.raventag.app.wallet.health.NodeHealthMonitor.init(this)
+
         val walletManager = WalletManager(applicationContext)
         val assetManager = AssetManager(context = applicationContext, adminKeyStorage = adminKeyStorage)
         viewModel.initWallet(walletManager, assetManager, adminKeyStorage)
@@ -2961,17 +3028,10 @@ class MainActivity : FragmentActivity() {
         // D-06, D-07: create incoming_tx notification channel for received RVN/assets
         io.raventag.app.worker.IncomingTxNotificationHelper.createChannel(applicationContext)
 
-        // Initialize wallet reliability database (single call per process)
-        io.raventag.app.wallet.cache.WalletReliabilityDb.init(this)
-
         // Pitfall 6: prune stale reservations older than 48h on startup (D-20)
         io.raventag.app.wallet.cache.ReservedUtxoDao.pruneOlderThan(
             System.currentTimeMillis() - 48L * 3600_000L
         )
-
-        // D-11/D-12: wire NodeHealthMonitor so RPC + subscription paths share
-        // a single quarantine + connection-health source.
-        io.raventag.app.wallet.health.NodeHealthMonitor.init(this)
 
         // Schedule periodic wallet polling every 15 minutes.
         // UPDATE policy: replaces any previously scheduled instance so app updates always
@@ -3168,6 +3228,7 @@ class MainActivity : FragmentActivity() {
                                                 savedAdminKey = key; savedOperatorKey = ""
                                                 viewModel.adminKeyStatus = MainViewModel.AdminKeyStatus.VALID
                                                 viewModel.operatorKeyStatus = MainViewModel.AdminKeyStatus.UNKNOWN
+                                                try { viewModel.adminKeyStorage?.setAdminKey(key) } catch (_: Throwable) {}
                                             } else {
                                                 securePrefs.edit().putString("operator_key", key).putString("admin_key", "").apply()
                                                 savedOperatorKey = key; savedAdminKey = ""
@@ -3953,11 +4014,9 @@ fun RavenTagApp(
                         onKuboNodeUrlSave = onKuboNodeUrlSave,
                         currentAdminKey = savedAdminKey,
                         onAdminKeySave = { key ->
+                            viewModel.adminKeyStorage?.setAdminKey(key)
                             viewModel.viewModelScope.launch {
-                                val status = viewModel.validateAdminKey(key, viewModel.currentVerifyUrl)
-                                if (status == MainViewModel.AdminKeyStatus.VALID) {
-                                    viewModel.adminKeyStorage?.setAdminKey(key)
-                                }
+                                viewModel.validateAdminKey(key, viewModel.currentVerifyUrl)
                             }
                         },
                         adminKeyStatus = viewModel.adminKeyStatus,
