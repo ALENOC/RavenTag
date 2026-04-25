@@ -29,11 +29,10 @@
     "code_review": true,
     "code_review_depth": "standard",
     "_auto_chain_active": false,
-    "use_worktrees": false
-  },
-  "hooks": {
+    "use_worktrees": false,
     "context_warnings": true
   },
+  "hooks": [],
   "project_code": null,
   "phase_naming": "sequential",
   "agent_skills": {},
