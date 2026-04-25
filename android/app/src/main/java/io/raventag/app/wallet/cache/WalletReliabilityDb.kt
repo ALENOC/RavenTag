@@ -22,9 +22,12 @@ internal object WalletReliabilityDb {
     private const val DB_VERSION = 1
 
     private class Helper(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, DB_VERSION) {
+        init {
+            setWriteAheadLoggingEnabled(true)
+        }
+
         override fun onConfigure(db: SQLiteDatabase) {
             db.execSQL("PRAGMA synchronous=FULL;")
-            db.execSQL("PRAGMA journal_mode=WAL;")
             db.execSQL("PRAGMA foreign_keys=OFF;")
         }
 

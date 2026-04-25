@@ -84,8 +84,11 @@ fun MnemonicBackupScreen(
     var revealed by remember { mutableStateOf<CharArray?>(null) }
 
     // D-16: zero-fill the decrypted buffer when the screen is disposed.
+    // Capture the buffer ref at effect launch so onDispose wipes the SAME buffer
+    // this effect was keyed to, not whatever `revealed` points to at dispose time.
     DisposableEffect(revealed) {
-        onDispose { revealed?.let { java.util.Arrays.fill(it, ' ') } }
+        val captured = revealed
+        onDispose { captured?.let { java.util.Arrays.fill(it, ' ') } }
     }
 
     var copied by remember { mutableStateOf(false) }
@@ -200,11 +203,14 @@ fun MnemonicBackupScreen(
             }
             Spacer(modifier = Modifier.height(24.dp))
         } else {
-            val words = String(revealed!!).trim().split(Regex("\\s+"))
+            val raw = String(revealed!!).trim()
+            val words = if (raw.isEmpty()) emptyList() else raw.split(Regex("\\s+"))
 
             // ----------------------------------------------------------------
-            // Words grid: rows of 3.
+            // Words grid: rows of 3. Skip render if buffer already zero-filled
+            // (confirm-in-flight) to avoid a phantom "1." cell.
             // ----------------------------------------------------------------
+            if (words.isNotEmpty())
             Column(
                 modifier = Modifier
                     .padding(horizontal = 20.dp)
