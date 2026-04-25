@@ -70,5 +70,8 @@ screenshots/
 # Claude Code configuration (local only)
 .claude/
 
+# GSD planning artifacts (local only)
+.planning/
+
 # Legal documents (personal data)
 docs/associazione/
