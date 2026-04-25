@@ -78,6 +78,29 @@ object WalletCacheDao {
 
     fun getLastRefreshedAt(): Long = readState()?.lastRefreshedAt ?: 0L
 
+    /** Lightweight write that updates only the balance + last-refreshed timestamp,
+     *  preserving any previously cached UTXO/asset/blockHeight payloads. Lets the
+     *  cold-start path show the last-known balance instead of zero. */
+    fun writeBalanceSat(balanceSat: Long) {
+        val prev = readState()
+        val db = WalletReliabilityDb.getDatabase()
+        val cv = ContentValues().apply {
+            put("wallet_id", WALLET_ID)
+            put("balance_sat", balanceSat)
+            put("utxos_json", gson.toJson(prev?.utxos ?: emptyList<Utxo>()))
+            put("asset_utxos_json", gson.toJson(prev?.assetUtxos ?: emptyMap<String, List<AssetUtxo>>()))
+            put("block_height", prev?.blockHeight ?: 0)
+            put("last_refreshed_at", System.currentTimeMillis())
+        }
+        db.insertWithOnConflict(TABLE, null, cv, SQLiteDatabase.CONFLICT_REPLACE)
+    }
+
+    /** Wipe all cached wallet state. Used by deleteWallet so a fresh restore
+     *  does not inherit stale balance/UTXO data from the previous wallet. */
+    fun clearAll() {
+        WalletReliabilityDb.getDatabase().execSQL("DELETE FROM $TABLE")
+    }
+
     /**
      * Pure helper: confirmed balance minus reserved-UTXO sum, clamped to zero.
      * Unit-testable without Android context.

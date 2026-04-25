@@ -25,6 +25,11 @@ object ReservedUtxoDao {
 
     fun init(context: Context) = WalletReliabilityDb.init(context)
 
+    /** Wipe all reserved UTXO rows. Used by deleteWallet. */
+    fun clearAll() {
+        WalletReliabilityDb.getDatabase().execSQL("DELETE FROM $TABLE")
+    }
+
     fun reserve(entries: List<ReservedUtxo>) {
         if (entries.isEmpty()) return
         val db = WalletReliabilityDb.getDatabase()

@@ -644,7 +644,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var txHistoryLoadedCount by mutableStateOf<Int>(0)
 
     /** Page size for loading more transactions. */
-    private val txHistoryPageSize = 15
+    private val txHistoryPageSize = 20
 
     // ── Asset portfolio ───────────────────────────────────────────────────────
 
@@ -871,11 +871,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     )
 
                 // Avoid wiping the visible list when a transient network error
-                // returns an empty result during a refresh.
+                // returns an empty result during a refresh. Initial display caps
+                // at txHistoryPageSize (Load more pulls successive pages).
                 if (deduped.isNotEmpty() || txHistory.isEmpty()) {
-                    txHistory = deduped
+                    val firstPage = deduped.take(txHistoryPageSize)
+                    txHistory = firstPage
                     txHistoryTotal = deduped.size
-                    txHistoryLoadedCount = deduped.size
+                    txHistoryLoadedCount = firstPage.size
                 }
             } catch (_: Throwable) {
                 // silently ignore: tx history is optional
@@ -991,10 +993,44 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         assetManager = am
         adminKeyStorage = aks
         hasWallet = wm.hasWallet()
-        // Only start loading if the ViewModel has no data yet (first launch or process restart).
-        // On Activity re-creation (screen rotation, system config change) the ViewModel survives
-        // with walletInfo already populated: skip the reload to avoid flashing 0 on screen.
-        if (hasWallet && walletInfo == null) { loadWalletInfo() }
+        // Synchronously seed walletInfo + cached assets from on-disk cache BEFORE the
+        // first UI render so the screen never flashes "0 RVN / no assets" while the
+        // async load runs. Network refresh kicks in via loadWalletInfo right after.
+        if (hasWallet && walletInfo == null) {
+            try {
+                val cachedState = io.raventag.app.wallet.cache.WalletCacheDao.readState()
+                val cachedAddr = try { wm.getCurrentAddress() } catch (_: Throwable) { null }.orEmpty()
+                walletInfo = WalletInfo(
+                    address = cachedAddr,
+                    balanceRvn = (cachedState?.balanceSat ?: 0L) / 1e8,
+                    isLoading = true
+                )
+                val cachedTx = io.raventag.app.wallet.cache.TxHistoryDao.getPage(offset = 0, limit = 50)
+                if (cachedTx.isNotEmpty()) {
+                    txHistory = cachedTx.map { row ->
+                        io.raventag.app.wallet.TxHistoryEntry(
+                            txid = row.txid,
+                            height = row.height,
+                            confirmations = row.confirms,
+                            amountSat = row.amountSat,
+                            sentSat = row.sentSat,
+                            cycledSat = row.cycledSat,
+                            feeSat = row.feeSat,
+                            isIncoming = row.isIncoming,
+                            isSelfTransfer = row.isSelf,
+                            timestamp = row.timestamp
+                        )
+                    }
+                    txHistoryTotal = txHistory.size
+                    txHistoryLoadedCount = txHistory.size
+                }
+                val cachedAssets = loadAssetsCache()
+                if (!cachedAssets.isNullOrEmpty()) {
+                    ownedAssets = cachedAssets
+                }
+            } catch (_: Throwable) {}
+            loadWalletInfo()
+        }
         startHealthHeartbeat()
     }
 
@@ -1018,6 +1054,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         walletManager?.deleteWallet()
         hasWallet = false
         walletInfo = null
+        // Reset all dependent UI state so the next restore-after-delete does NOT
+        // see stale balance / assets / tx history (which would falsely trigger
+        // the "Replace current wallet?" gate).
+        ownedAssets = null
+        txHistory = emptyList()
+        txHistoryTotal = 0
+        txHistoryLoadedCount = 0
+        needsConsolidation = false
+        try { saveAssetsCache(emptyList()) } catch (_: Throwable) {}
     }
 
     /**
@@ -1349,6 +1394,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val balance = wm.getLocalBalance()
                 if (balance != null) {
                     walletInfo = walletInfo?.copy(balanceRvn = balance, isLoading = false)
+                    try {
+                        io.raventag.app.wallet.cache.WalletCacheDao.writeBalanceSat(
+                            (balance * 1e8).toLong()
+                        )
+                    } catch (_: Throwable) {}
                     return@launch
                 }
                 val am = assetManager ?: run {
@@ -1374,6 +1424,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             withContext(Dispatchers.Main) {
                 walletInfo = walletInfo?.copy(balanceRvn = balance)
             }
+            // Persist the freshly loaded balance so the next cold start can render
+            // the last-known value instantly instead of flashing 0 RVN.
+            try {
+                io.raventag.app.wallet.cache.WalletCacheDao.writeBalanceSat(
+                    (balance * 1e8).toLong()
+                )
+            } catch (_: Throwable) {}
         }
     }
 
@@ -1427,6 +1484,47 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 assetsLoading = false
             }
             if (merged.isNotEmpty()) saveAssetsCache(merged)
+
+            // IPFS enrichment for assets that still need it (refreshBalance path
+            // previously skipped this — that's why brand previews never appeared).
+            val needsEnrichment = merged.filter { it.imageUrl == null }
+            if (needsEnrichment.isNotEmpty()) {
+                val withHashes = withContext(Dispatchers.IO) {
+                    val metaBatch = try { node.getAssetMetaBatch(needsEnrichment.map { it.name }) }
+                                    catch (_: Exception) { emptyMap() }
+                    needsEnrichment.map { a ->
+                        val h = metaBatch[a.name]?.ipfsHash
+                        if (h != null) a.copy(ipfsHash = h) else a
+                    }
+                }
+                withContext(Dispatchers.Main) {
+                    ownedAssets = ownedAssets?.map { existing ->
+                        withHashes.find { it.name == existing.name } ?: existing
+                    }
+                }
+                val sem = Semaphore(8)
+                val jobs = withHashes.map { asset ->
+                    viewModelScope.async(Dispatchers.IO) {
+                        try {
+                            sem.withPermit {
+                                val enriched = rpcClient.enrichWithIpfsData(asset)
+                                withContext(Dispatchers.Main) {
+                                    ownedAssets = ownedAssets?.map {
+                                        if (it.name == enriched.name) enriched else it
+                                    }
+                                }
+                            }
+                        } catch (_: Exception) {}
+                    }
+                }
+                viewModelScope.launch {
+                    jobs.awaitAll()
+                    val current = ownedAssets
+                    if (!current.isNullOrEmpty()) {
+                        withContext(Dispatchers.IO) { saveAssetsCache(current) }
+                    }
+                }
+            }
         } catch (_: Throwable) {
             withContext(Dispatchers.Main) {
                 assetsLoadError = true
@@ -1465,12 +1563,37 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
             withContext(Dispatchers.Main) {
                 // Keep prior list visible if this refresh returned empty (network blip).
+                // Show only the first page (txHistoryPageSize); Load more appends the rest.
                 if (deduped.isNotEmpty() || txHistory.isEmpty()) {
-                    txHistory = deduped
+                    val firstPage = deduped.take(txHistoryPageSize)
+                    txHistory = firstPage
                     txHistoryTotal = deduped.size
-                    txHistoryLoadedCount = deduped.size
+                    txHistoryLoadedCount = firstPage.size
                 }
                 txHistoryLoading = false
+            }
+            // Persist tx history rows so the next cold start can render the list
+            // immediately from cache instead of waiting for the network.
+            if (deduped.isNotEmpty()) {
+                try {
+                    val now = System.currentTimeMillis()
+                    val rows = deduped.map { e ->
+                        io.raventag.app.wallet.cache.TxHistoryDao.TxHistoryRow(
+                            txid = e.txid,
+                            height = e.height,
+                            confirms = e.confirmations,
+                            amountSat = e.amountSat,
+                            sentSat = e.sentSat,
+                            cycledSat = e.cycledSat,
+                            feeSat = e.feeSat,
+                            isIncoming = e.isIncoming,
+                            isSelf = e.isSelfTransfer,
+                            timestamp = e.timestamp,
+                            cachedAt = now
+                        )
+                    }
+                    io.raventag.app.wallet.cache.TxHistoryDao.upsert(rows)
+                } catch (_: Throwable) {}
             }
         } catch (_: Throwable) {
             withContext(Dispatchers.Main) {
