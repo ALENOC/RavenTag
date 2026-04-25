@@ -24,6 +24,7 @@ import brandRouter from './routes/brand.js'
 import registryRouter from './routes/registry.js'
 import { getDb } from './middleware/cache.js'
 import { requestLogger, logRateLimitEvent, getRequestStats, startLogCleanup } from './middleware/logger.js'
+import { startBackupScheduler } from './services/backup.js'
 import { requireAdminKey } from './middleware/auth.js'
 
 // ── CRIT-2: Docker secrets support (_FILE convention) ────────────────────────
@@ -264,6 +265,7 @@ const server = app.listen(PORT, () => {
   console.log(`RavenTag API running on http://localhost:${PORT}`)
   console.log(`Protocol: RTP-1 | Env: ${process.env.NODE_ENV ?? 'development'}`)
   startLogCleanup()
+  startBackupScheduler()
 })
 
 export default app
