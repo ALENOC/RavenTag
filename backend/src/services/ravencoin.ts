@@ -220,15 +220,38 @@ class RavencoinService {
   async getAssetHierarchy(parentAsset: string): Promise<AssetHierarchy> {
     const subAssets = await this.listSubAssets(parentAsset)
     const variants: Record<string, string[]> = {}
+    const errors: Array<{ assetName: string; error: string }> = []
 
-    for (const sub of subAssets) {
-      const subVariants = await this.listSubAssets(sub)
-      if (subVariants.length > 0) {
-        variants[sub] = subVariants
-      }
+    const CONCURRENCY = 5
+    for (let i = 0; i < subAssets.length; i += CONCURRENCY) {
+      const chunk = subAssets.slice(i, i + CONCURRENCY)
+      const results = await Promise.allSettled(
+        chunk.map(sub => this.listSubAssets(sub))
+      )
+      results.forEach((result, idx) => {
+        if (result.status === 'fulfilled') {
+          if (result.value.length > 0) {
+            variants[chunk[idx]] = result.value
+          }
+        } else {
+          errors.push({
+            assetName: chunk[idx],
+            error: result.reason instanceof Error ? result.reason.message : String(result.reason)
+          })
+        }
+      })
     }
 
-    return { parent: parentAsset, subAssets, variants }
+    const hierarchy: AssetHierarchy & { partial?: boolean; errors?: Array<{ assetName: string; error: string }> } = {
+      parent: parentAsset,
+      subAssets,
+      variants
+    }
+    if (errors.length > 0) {
+      hierarchy.partial = true
+      hierarchy.errors = errors
+    }
+    return hierarchy
   }
 }
 
