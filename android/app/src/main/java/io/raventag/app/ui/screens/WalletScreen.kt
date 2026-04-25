@@ -581,7 +581,7 @@ fun WalletScreen(
                 }
             }
             item(key = "after_actions_spacer") { Spacer(modifier = Modifier.height(16.dp)) }
-            if (!isBrandApp && walletBalance < 0.01 && hasWallet && !assetsLoading && !ownedAssets.isNullOrEmpty()) {
+            if (!isBrandApp && walletBalance < 0.01 && hasWallet && !assetsLoading && !ownedAssets.isNullOrEmpty() && walletInfo?.isLoading != true) {
                 item(key = "low_rvn") {
                     Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF2D1A00)), border = BorderStroke(1.dp, RavenOrange.copy(alpha = 0.5f)), shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp)) {
                         Row(modifier = Modifier.padding(12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -1171,10 +1171,10 @@ private fun TxCard(s: AppStrings, tx: TxHistoryEntry) {
                             color = AuthenticGreen
                         )
                         if (tx.incomingAssetNames.size > 1) {
-                            // Multi-asset cycle: show compact "Ciclati N asset", tap → dialog.
+                            // Multi-asset cycle: show compact "N cycled assets", tap → dialog.
                             Spacer(Modifier.height(2.dp))
                             Text(
-                                "Ciclati ${tx.incomingAssetNames.size} asset",
+                                String.format(s.walletCycledMultiAsset, tx.incomingAssetNames.size),
                                 style = MaterialTheme.typography.labelSmall,
                                 color = AuthenticGreen.copy(alpha = 0.85f),
                                 modifier = Modifier.clickable { showAssetListDialog = true },
@@ -1268,7 +1268,7 @@ private fun TxCard(s: AppStrings, tx: TxHistoryEntry) {
                             Spacer(Modifier.height(2.dp))
                             val n = tx.incomingAssetNames.size
                             Text(
-                                "Ciclati $n asset",
+                                String.format(s.walletCycledMultiAsset, n),
                                 style = MaterialTheme.typography.labelSmall,
                                 color = AuthenticGreen.copy(alpha = 0.85f),
                                 modifier = Modifier.clickable { showAssetListDialog = true },
