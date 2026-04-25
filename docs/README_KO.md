@@ -144,6 +144,27 @@ RavenTag/
 └── LICENSE         RavenTag Source License (RTSL-1.0)
 ```
 
+## 데이터베이스 탐색기
+
+실행 중인 백엔드 인스턴스에서 SQLite 데이터베이스를 탐색하기 위한 읽기 전용 대화형 셸.
+
+```bash
+docker exec -it raventag-backend node dist/db-explore.js
+```
+
+사용 가능한 명령어:
+
+| 명령어 | 설명 |
+|---|---|
+| `.assets` | 등록된 칩 목록 (chip_registry) |
+| `.brands` | 등록된 브랜드 목록 (brand_registry) |
+| `.revoked` | 취소된 자산 목록 (revoked_assets) |
+| `.stats` | 모든 테이블의 행 수 표시 |
+| `.help` | 사용 가능한 명령어 표시 |
+| `.exit` | 데이터베이스 닫기 및 종료 |
+
+셸은 데이터베이스를 읽기 전용 모드로 엽니다. 쓰기 작업은 노출되지 않습니다.
+
 ## 법적 문서
 
 - [서비스 이용약관](legal/TERMS_OF_SERVICE.md)
