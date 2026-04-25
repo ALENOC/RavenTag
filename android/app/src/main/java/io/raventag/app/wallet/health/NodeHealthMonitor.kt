@@ -155,12 +155,18 @@ object NodeHealthMonitor {
         val now = System.currentTimeMillis()
         val total = AppConfig.ELECTRUM_SERVERS.size
         val quarantined = activeQuarantineHosts(now).size
+        val hasAnyData = lastSuccessAt.isNotEmpty() || lastFailureAt.isNotEmpty()
+        // GREEN takes precedence over YELLOW: once any host answers successfully in
+        // the last 60s we are connected, regardless of transient failures on other hosts.
         val next = when {
             quarantined >= total -> ConnectionHealth.RED
-            lastFailureAt.values.any { (now - it) <= YELLOW_FAILURE_WINDOW_MS } &&
-                quarantined < total -> ConnectionHealth.YELLOW
             lastSuccessAt.values.any { (now - it) <= GREEN_SUCCESS_WINDOW_MS } ->
                 ConnectionHealth.GREEN
+            lastFailureAt.values.any { (now - it) <= YELLOW_FAILURE_WINDOW_MS } &&
+                quarantined < total -> ConnectionHealth.YELLOW
+            // Cold start: no RPC yet → stay optimistic GREEN so the UI does not
+            // flash a yellow "reconnecting" pill before the first successful call.
+            !hasAnyData -> ConnectionHealth.GREEN
             else -> ConnectionHealth.YELLOW
         }
         _state.value = next

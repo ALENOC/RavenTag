@@ -158,6 +158,13 @@ fun WalletScreen(
     var cachedLastRefreshedAt by remember { mutableStateOf(0L) }
     var isRefreshing by remember { mutableStateOf(false) }
 
+    // Keep last non-null walletInfo so periodic refresh (which may briefly emit null)
+    // does not wipe the already-rendered balance/assets/tx sections.
+    var cachedWalletInfo by remember { mutableStateOf<WalletInfo?>(walletInfo) }
+    LaunchedEffect(walletInfo) { if (walletInfo != null) cachedWalletInfo = walletInfo }
+    @Suppress("NAME_SHADOWING")
+    val walletInfo = walletInfo ?: cachedWalletInfo
+
     LaunchedEffect(Unit) {
         cachedLastRefreshedAt = WalletCacheDao.getLastRefreshedAt()
     }
@@ -300,10 +307,15 @@ fun WalletScreen(
         }
     }
 
-    // Full-screen loading during wallet restore (per UI-SPEC.md).
-    // Shown when the wallet is being generated or an initial restore is in progress.
-    // Keeps the screen simple and gives a clear signal that heavy work is happening.
-    if (hasWallet && walletInfo?.isLoading == true && walletInfo.balanceRvn == 0.0 && ownedAssets.isNullOrEmpty()) {
+    // Full-screen loading ONLY on first-ever load. Periodic refresh uses the
+    // inline LinearProgressIndicator (isRefreshing) below so the UI doesn't
+    // flash to a black spinner on every tick.
+    var everLoaded by remember { mutableStateOf(false) }
+    LaunchedEffect(walletInfo?.isLoading, walletInfo?.balanceRvn, ownedAssets) {
+        if (walletInfo != null && walletInfo.isLoading == false) everLoaded = true
+        if ((walletInfo?.balanceRvn ?: 0.0) > 0.0 || !ownedAssets.isNullOrEmpty()) everLoaded = true
+    }
+    if (hasWallet && !everLoaded && walletInfo?.isLoading == true && walletInfo.balanceRvn == 0.0 && ownedAssets.isNullOrEmpty()) {
         Box(
             modifier = modifier.fillMaxSize().background(RavenBg),
             contentAlignment = Alignment.Center
@@ -405,24 +417,19 @@ fun WalletScreen(
                                 Text(roleLabel, style = MaterialTheme.typography.labelSmall, color = roleColor)
                             }
                         }
-                        // ElectrumX status badge (legacy, kept for existing telemetry)
-                        ElectrumStatusBadge(electrumStatus, s)
-
-                        // D-12: NodeHealthMonitor-driven pill with YELLOW state + tap-to-sheet.
+                        // D-12: NodeHealthMonitor-driven pill (replaces legacy ElectrumStatusBadge)
                         ConnectionHealthPill(health = health, onTap = { showConnectionSheet = true })
 
                         // D-28: battery-saver informational chip.
                         if (isPowerSave) { BatterySaverChip() }
 
-                        // Block height counter (Always occupy space to avoid layout shift)
-                        val showBlockHeight = blockHeight != null && electrumStatus == MainViewModel.ElectrumStatus.ONLINE
-                        Box(modifier = Modifier.alpha(if (showBlockHeight) 1f else 0f)) {
+                        // Block height counter: show last known value even during refresh.
+                        Box(modifier = Modifier.alpha(if (blockHeight != null) 1f else 0f)) {
                             BlockHeightBadge(blockHeight ?: 0)
                         }
 
-                        // Network hashrate (Always occupy space to avoid layout shift)
-                        val showHashrate = networkHashrate != null && electrumStatus == MainViewModel.ElectrumStatus.ONLINE
-                        Box(modifier = Modifier.alpha(if (showHashrate) 1f else 0f)) {
+                        // Network hashrate: show last known value even during refresh.
+                        Box(modifier = Modifier.alpha(if (networkHashrate != null) 1f else 0f)) {
                             HashrateRow(networkHashrate ?: 0.0)
                         }
                     }
@@ -440,14 +447,17 @@ fun WalletScreen(
             }
         }
 
-        // D-04: sync-in-background 2dp LinearProgressIndicator under header
-        if (isRefreshing) {
-            item(key = "sync_indicator") {
-                LinearProgressIndicator(
-                    color = RavenOrange,
-                    trackColor = RavenBorder,
-                    modifier = Modifier.fillMaxWidth().height(2.dp)
-                )
+        // D-04: sync-in-background 2dp LinearProgressIndicator under header.
+        // Always reserve the 2dp slot to avoid layout shift when refresh toggles.
+        item(key = "sync_indicator") {
+            Box(modifier = Modifier.fillMaxWidth().height(2.dp)) {
+                if (isRefreshing) {
+                    LinearProgressIndicator(
+                        color = RavenOrange,
+                        trackColor = RavenBorder,
+                        modifier = Modifier.fillMaxWidth().height(2.dp)
+                    )
+                }
             }
         }
 
@@ -669,7 +679,7 @@ fun WalletScreen(
                         }
                     }
                 }
-            } else if (!assetsLoading && !walletInfo.isLoading && filteredAssets.isEmpty()) {
+            } else if (filteredAssets.isEmpty()) {
                 item(key = "assets_empty") {
                     Card(colors = CardDefaults.cardColors(containerColor = RavenCard), border = BorderStroke(1.dp, RavenBorder), shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth()) {
                         Box(modifier = Modifier.padding(20.dp).fillMaxWidth(), contentAlignment = Alignment.Center) {
@@ -701,7 +711,7 @@ fun WalletScreen(
                 }
             }
             item(key = "tx_header_spacer") { Spacer(modifier = Modifier.height(10.dp)) }
-            if (!txHistoryLoading && txHistory.isEmpty() && extraTxHistory.isEmpty()) {
+            if (txHistory.isEmpty() && extraTxHistory.isEmpty()) {
                 // D-23 UI-SPEC empty state: heading + body (verbatim Copywriting Contract).
                 item(key = "tx_empty") {
                     Card(colors = CardDefaults.cardColors(containerColor = RavenCard), border = BorderStroke(1.dp, RavenBorder), shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth()) {
@@ -738,9 +748,8 @@ fun WalletScreen(
                         TxCard(s, tx)
                     }
                 }
-                if (!txHistoryLoading &&
-                    (txHistoryLoadedCount < txHistoryTotal ||
-                        (txHistory.isNotEmpty() && extraTxHistory.size < 200))) {
+                if (txHistoryLoadedCount < txHistoryTotal ||
+                    (txHistory.isNotEmpty() && extraTxHistory.size < 200)) {
                     item(key = "load_more_spacer") { Spacer(modifier = Modifier.height(8.dp)) }
                     item(key = "load_more") {
                         // D-23 Load more: primary = parent VM callback (enriches via network);
@@ -954,9 +963,7 @@ private fun BalanceCard(s: AppStrings, info: WalletInfo, rvnPrice: Double? = nul
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) { Icon(Icons.Default.AccountBalanceWallet, contentDescription = null, tint = RavenOrange, modifier = Modifier.size(18.dp)) ; Text(s.walletBalance, fontWeight = FontWeight.SemiBold, color = Color.White) }
             Spacer(modifier = Modifier.height(12.dp))
             Text(
-                text = if (info.isLoading) {
-                    AnnotatedString(s.walletLoading)
-                } else {
+                text = run {
                     val full = String.format(java.util.Locale.US, "%.8f", info.balanceRvn)
                     val dotIdx = full.indexOf('.')
                     buildAnnotatedString {
@@ -971,9 +978,17 @@ private fun BalanceCard(s: AppStrings, info: WalletInfo, rvnPrice: Double? = nul
                 color = RavenOrange,
                 fontSize = 28.sp
             )
-            if (!info.isLoading && rvnPrice != null) {
+            // Always reserve the USD/price rows when rvnPrice is known, even during refresh,
+            // so the card height never contracts on a loading flip.
+            if (rvnPrice != null) {
                 Spacer(modifier = Modifier.height(4.dp))
-                if (info.balanceRvn > 0) { Text(text = "\u2248 ${"$%.2f".format(info.balanceRvn * rvnPrice)} USD", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = AuthenticGreen) }
+                Text(
+                    text = "\u2248 ${"$%.2f".format(info.balanceRvn * rvnPrice)} USD",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = AuthenticGreen,
+                    modifier = Modifier.alpha(if (info.balanceRvn > 0) 1f else 0f)
+                )
                 Text(text = "1 RVN = ${"$%.4f".format(rvnPrice)}", style = MaterialTheme.typography.bodySmall, color = RavenMuted)
             }
             Spacer(modifier = Modifier.height(16.dp))
@@ -986,6 +1001,8 @@ private fun BalanceCard(s: AppStrings, info: WalletInfo, rvnPrice: Double? = nul
 
 @Composable
 private fun TxCard(s: AppStrings, tx: TxHistoryEntry) {
+    val clipboard = LocalClipboardManager.current
+    val ctx = LocalContext.current
     val isSelf     = tx.isSelfTransfer
     val isIncoming = tx.isIncoming && !isSelf
     // D-08 dot color: red 0 conf, amber 1..5, green >=6.
@@ -1061,7 +1078,10 @@ private fun TxCard(s: AppStrings, tx: TxHistoryEntry) {
                 "${tx.txid.take(8)}\u2026${tx.txid.takeLast(6)}",
                 style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
                 color = RavenMuted,
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(1f).clickable {
+                    clipboard.setText(AnnotatedString(tx.txid))
+                    android.widget.Toast.makeText(ctx, "TXID copiato", android.widget.Toast.LENGTH_SHORT).show()
+                }
             )
             Column(horizontalAlignment = Alignment.End) {
                 when {
@@ -1070,13 +1090,19 @@ private fun TxCard(s: AppStrings, tx: TxHistoryEntry) {
                         Text(bigAmountAnnotated, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold, color = amtColor)
                     }
                     isSelf -> {
-                        // D-19 self-transfer variant: single line "Cycled X RVN \u00b7 Fee Y RVN".
+                        // D-19 self-transfer variant: "Ciclato" green, "Fee" muted on new line.
                         val cycledStr = sat2Rvn(if (cycledSat > 0L) cycledSat else tx.amountSat)
                         val feeStr = sat2Rvn(feeSat)
                         Text(
-                            text = "${s.txHistoryCycledPrefix} $cycledStr RVN \u00b7 ${s.txHistoryFeePrefix} $feeStr RVN",
+                            text = "${s.txHistoryCycledPrefix} $cycledStr RVN",
                             style = MaterialTheme.typography.labelSmall,
                             color = AuthenticGreen
+                        )
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            text = "${s.txHistoryFeePrefix} $feeStr RVN",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = RavenMuted
                         )
                     }
                     else -> {
@@ -1572,11 +1598,10 @@ private fun ConnectionHealthPill(
     } else 1f
     Row(
         modifier = Modifier
-            .sizeIn(minHeight = 48.dp)
             .clickable { onTap() }
-            .padding(vertical = 2.dp),
+            .padding(top = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp)
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         Box(
             modifier = Modifier
@@ -1586,7 +1611,7 @@ private fun ConnectionHealthPill(
                 .semantics { contentDescription = "${strings.connectionStatusDotDesc}: $label" }
         )
         Text(
-            text = label,
+            text = "ElectrumX · $label",
             style = MaterialTheme.typography.labelSmall,
             color = color.copy(alpha = 0.8f)
         )

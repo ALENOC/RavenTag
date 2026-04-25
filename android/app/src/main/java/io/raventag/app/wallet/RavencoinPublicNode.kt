@@ -210,6 +210,16 @@ class RavencoinPublicNode(private val context: Context) {
     }
 
     /**
+     * Lightweight heartbeat that routes through [callWithFailover] so
+     * NodeHealthMonitor receives success/failure signals and the UI pill
+     * stays fresh between wallet refreshes. Returns true if any server answered.
+     */
+    fun heartbeat(): Boolean = try {
+        callWithFailover("server.version", listOf("RavenTag/1.0", "1.4"))
+        true
+    } catch (_: Exception) { false }
+
+    /**
      * Returns the confirmed and unconfirmed RVN balance for [address].
      *
      * Converts the P2PKH address to an ElectrumX scripthash (reversed SHA-256
@@ -272,7 +282,16 @@ class RavencoinPublicNode(private val context: Context) {
      * @param addresses List of Ravencoin P2PKH addresses to check.
      * @return Set of addresses that have at least one satoshi of RVN or assets.
      */
-    fun getAddressesWithFunds(addresses: List<String>): Set<String> {
+    fun getAddressesWithFunds(addresses: List<String>): Set<String> =
+        getAddressesWithSignificantFunds(addresses, minRvnSat = 1L)
+
+    /**
+     * Like [getAddressesWithFunds] but ignores RVN residues below [minRvnSat].
+     * Use a non-zero floor (e.g. 100_000 sat = 0.001 RVN) for the consolidation
+     * banner so we don't keep nagging the user about dust left behind by a sweep.
+     * Asset balances always count regardless of [minRvnSat].
+     */
+    fun getAddressesWithSignificantFunds(addresses: List<String>, minRvnSat: Long): Set<String> {
         if (addresses.isEmpty()) return emptySet()
         val requests = addresses.map { addr ->
             "blockchain.scripthash.get_balance" to listOf(addressToScripthash(addr), true) as List<Any>
@@ -283,11 +302,9 @@ class RavencoinPublicNode(private val context: Context) {
             val resp = responses.getOrNull(i) ?: return@forEachIndexed
             if (resp == null || !resp.isJsonObject) return@forEachIndexed
             val obj = resp.asJsonObject
-            // Top-level RVN balance: {"confirmed": N, "unconfirmed": M} · primitives, not objects
-            val rvnSat = try { obj.get("confirmed")?.asLong ?: 0L } catch (_: Exception) { 0L } +
-                         try { obj.get("unconfirmed")?.asLong ?: 0L } catch (_: Exception) { 0L }
-            if (rvnSat > 0) { result.add(addr); return@forEachIndexed }
-            // Asset balances: {"ASSET_NAME": {"confirmed": N, "unconfirmed": M}} · nested objects
+            val rvnSat = (try { obj.get("confirmed")?.asLong ?: 0L } catch (_: Exception) { 0L }) +
+                         (try { obj.get("unconfirmed")?.asLong ?: 0L } catch (_: Exception) { 0L })
+            if (rvnSat >= minRvnSat) { result.add(addr); return@forEachIndexed }
             for ((key, value) in obj.entrySet()) {
                 if (key == "confirmed" || key == "unconfirmed") continue
                 try {
@@ -942,8 +959,14 @@ class RavencoinPublicNode(private val context: Context) {
      * @param offset  Number of entries to skip for pagination (default 0).
      * @return List of [TxHistoryEntry] sorted newest-first, empty on failure.
      */
-    fun getTransactionHistory(address: String, limit: Int = 15, offset: Int = 0): List<TxHistoryEntry> {
+    fun getTransactionHistory(
+        address: String,
+        limit: Int = 15,
+        offset: Int = 0,
+        ownedAddresses: Set<String> = setOf(address)
+    ): List<TxHistoryEntry> {
         val scripthash = addressToScripthash(address)
+        val owned = if (ownedAddresses.isEmpty()) setOf(address) else ownedAddresses
 
         // Batch step 1: fetch block height + address history in a single TLS connection
         val step1 = callWithFailoverBatch(listOf(
@@ -1002,20 +1025,25 @@ class RavencoinPublicNode(private val context: Context) {
             val height = item.get("height")?.asInt ?: 0
             val tx = txMap[txHash] ?: return@mapNotNull null
 
-            var toUs = 0L
-            var toOthers = 0L
+            // Classify vout per wallet ownership across ALL owned addresses so
+            // "cycled" (change back to wallet) is not mis-classified as "sent".
+            var toUs = 0L        // vout back to any owned address (incl. change at currentIndex+1)
+            var toOthers = 0L    // vout to external addresses (true external send)
+            var totalVout = 0L
             tx.getAsJsonArray("vout")?.forEach { vout ->
                 try {
                     val obj = vout.asJsonObject
                     val valueSat = ((obj.get("value")?.asDouble ?: 0.0) * 1e8).toLong()
+                    totalVout += valueSat
                     val spk = obj.getAsJsonObject("scriptPubKey")
                     val addresses = spk?.getAsJsonArray("addresses")
-                    if (addresses?.any { it.asString == address } == true) toUs += valueSat
+                    if (addresses?.any { it.asString in owned } == true) toUs += valueSat
                     else toOthers += valueSat
                 } catch (_: Exception) {}
             }
 
-            var fromUs = 0L
+            var fromUs = 0L      // prev-vout value consumed from our inputs
+            var totalVin = 0L    // total input value (all vin, regardless of ownership)
             tx.getAsJsonArray("vin")?.forEach { vin ->
                 try {
                     val vinObj = vin.asJsonObject
@@ -1026,9 +1054,10 @@ class RavencoinPublicNode(private val context: Context) {
                         ?.mapNotNull { try { it.asJsonObject } catch (_: Exception) { null } }
                         ?.getOrNull(prevVoutIdx) ?: return@forEach
                     val prevValueSat = ((prevVoutObj.get("value")?.asDouble ?: 0.0) * 1e8).toLong()
+                    totalVin += prevValueSat
                     val prevSpk = prevVoutObj.getAsJsonObject("scriptPubKey")
                     val prevAddresses = prevSpk?.getAsJsonArray("addresses")
-                    if (prevAddresses?.any { it.asString == address } == true) fromUs += prevValueSat
+                    if (prevAddresses?.any { it.asString in owned } == true) fromUs += prevValueSat
                 } catch (_: Exception) {}
             }
 
@@ -1039,13 +1068,20 @@ class RavencoinPublicNode(private val context: Context) {
                 else -> 0
             }
             val timestamp = tx.get("blocktime")?.asLong ?: tx.get("time")?.asLong ?: 0L
+            // Fee only attributable to us when we contributed inputs.
+            val feeSat = if (fromUs > 0L && totalVin > totalVout) totalVin - totalVout else 0L
+            val isOutgoing = fromUs > 0L && toOthers > 0L
+            val isSelfTransfer = fromUs > 0L && toOthers == 0L && toUs > 0L
             TxHistoryEntry(
                 txid = txHash,
                 height = height,
                 confirmations = confs,
                 amountSat = if (netSat > 0) netSat else 0L,
-                sentSat = if (netSat < 0) -netSat else 0L,
-                isIncoming = netSat > 0,
+                sentSat = if (isOutgoing) toOthers else 0L,
+                cycledSat = if (isOutgoing || isSelfTransfer) toUs else 0L,
+                feeSat = feeSat,
+                isIncoming = netSat > 0 && !isOutgoing,
+                isSelfTransfer = isSelfTransfer,
                 timestamp = timestamp
             )
         }
@@ -1205,18 +1241,41 @@ class RavencoinPublicNode(private val context: Context) {
 
         if (needsUtxo.isEmpty()) return result
 
-        // Batch 2: listunspent only for addresses with history
-        val utxoReqs = needsUtxo.map { i ->
-            "blockchain.scripthash.listunspent" to listOf(scripthashes[i]) as List<Any>
+        // Batch 2: get_balance(asset=true) for all addresses with history.
+        // Using balance instead of listunspent because listunspent is RVN-only —
+        // an address that received only an asset (and zero RVN dust) would otherwise
+        // report 0 UTXOs while having 1 history entry, mis-classifying it as HAS_OUTGOING.
+        // Balance with asset flag detects asset funds correctly.
+        val balReqs = needsUtxo.map { i ->
+            "blockchain.scripthash.get_balance" to listOf(scripthashes[i], true) as List<Any>
         }
-        val utxoResps = callWithFailoverBatch(utxoReqs)
+        val balResps = callWithFailoverBatch(balReqs)
 
         needsUtxo.forEachIndexed { j, i ->
             val addr = addresses[i]
-            val histCount = histCounts[i] ?: 1
-            val utxoArr = utxoResps.getOrNull(j)
-            val utxoCount = if (utxoArr != null && utxoArr.isJsonArray) utxoArr.asJsonArray.size() else histCount
-            result[addr] = if (utxoCount < histCount) AddressStatus.HAS_OUTGOING else AddressStatus.RECEIVE_ONLY
+            val resp = balResps.getOrNull(j)
+            val hasFunds = if (resp != null && resp.isJsonObject) {
+                val obj = resp.asJsonObject
+                val rvnSat = (try { obj.get("confirmed")?.asLong ?: 0L } catch (_: Exception) { 0L }) +
+                             (try { obj.get("unconfirmed")?.asLong ?: 0L } catch (_: Exception) { 0L })
+                var funds = rvnSat > 0
+                if (!funds) {
+                    for ((k, v) in obj.entrySet()) {
+                        if (k == "confirmed" || k == "unconfirmed") continue
+                        try {
+                            val a = v.asJsonObject
+                            val sat = (a.get("confirmed")?.asLong ?: 0L) + (a.get("unconfirmed")?.asLong ?: 0L)
+                            if (sat > 0) { funds = true; break }
+                        } catch (_: Exception) {}
+                    }
+                }
+                funds
+            } else {
+                // Conservative: if balance call failed, assume funds present so we don't
+                // wrongly advance the index. The next sync will re-evaluate.
+                true
+            }
+            result[addr] = if (hasFunds) AddressStatus.RECEIVE_ONLY else AddressStatus.HAS_OUTGOING
         }
 
         return result

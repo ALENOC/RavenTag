@@ -60,6 +60,7 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import io.raventag.app.nfc.NfcCounterCache
@@ -732,10 +733,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         Pair(assetsDeferred.await(), rvnDeferred.await())
                     }
                     
-                    // Check if any old address has funds with one lightweight batch call.
+                    // Check if any old address still holds CONSOLIDATABLE funds.
+                    // Skip dust-only RVN residues (< 0.001 RVN) — common after a sweep
+                    // when ElectrumX leaves a few hundred sat as a mempool change leftover.
                     if (currentIndex > 0) {
                         val oldAddresses = wm.getAddressBatch(0, 0 until currentIndex).values.toList()
-                        val funded = try { node.getAddressesWithFunds(oldAddresses) } catch (_: Exception) { emptySet() }
+                        val funded = try {
+                            node.getAddressesWithSignificantFunds(oldAddresses, minRvnSat = 100_000L)
+                        } catch (_: Exception) { emptySet() }
                         needsConsolidation = funded.isNotEmpty()
                     }
                     
@@ -839,11 +844,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val node = io.raventag.app.wallet.RavencoinPublicNode(getApplication())
 
                 // One Keystore decrypt for all addresses, then parallel ElectrumX queries.
+                // Include currentIndex+1 (change address) in the owned set so cycled outputs
+                // are correctly classified as "back to wallet" instead of "sent to others".
                 val allHistory = withContext(Dispatchers.IO) {
-                    val addresses = wm.getAddressBatch(0, 0..currentIndex)
+                    val addresses = wm.getAddressBatch(0, 0..(currentIndex + 1))
+                    val ownedSet = addresses.values.toSet()
                     val deferreds = addresses.values.map { addr ->
                         async {
-                            try { node.getTransactionHistory(addr, limit = txHistoryPageSize) }
+                            try { node.getTransactionHistory(addr, limit = txHistoryPageSize, ownedAddresses = ownedSet) }
                             catch (_: Throwable) { emptyList() }
                         }
                     }
@@ -858,9 +866,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         }.thenByDescending { it.timestamp }
                     )
 
-                txHistory = deduped
-                txHistoryTotal = deduped.size
-                txHistoryLoadedCount = deduped.size
+                // Avoid wiping the visible list when a transient network error
+                // returns an empty result during a refresh.
+                if (deduped.isNotEmpty() || txHistory.isEmpty()) {
+                    txHistory = deduped
+                    txHistoryTotal = deduped.size
+                    txHistoryLoadedCount = deduped.size
+                }
             } catch (_: Throwable) {
                 // silently ignore: tx history is optional
             } finally {
@@ -882,11 +894,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         viewModelScope.launch {
             try {
+                val currentIndex = wm.getCurrentAddressIndex()
+                val ownedSet = withContext(Dispatchers.IO) {
+                    wm.getAddressBatch(0, 0..(currentIndex + 1)).values.toSet()
+                }
                 val history = withContext(Dispatchers.IO) {
                     io.raventag.app.wallet.RavencoinPublicNode(getApplication()).getTransactionHistory(
                         address,
                         limit = txHistoryPageSize,
-                        offset = txHistoryLoadedCount
+                        offset = txHistoryLoadedCount,
+                        ownedAddresses = ownedSet
                     )
                 }
 
@@ -974,6 +991,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // On Activity re-creation (screen rotation, system config change) the ViewModel survives
         // with walletInfo already populated: skip the reload to avoid flashing 0 on screen.
         if (hasWallet && walletInfo == null) { loadWalletInfo() }
+        startHealthHeartbeat()
+    }
+
+    // 30s heartbeat: keep the ElectrumX pill fresh between wallet refreshes so
+    // transient disconnects surface quickly without waiting for the next user action.
+    private var heartbeatStarted = false
+    private fun startHealthHeartbeat() {
+        if (heartbeatStarted) return
+        heartbeatStarted = true
+        viewModelScope.launch(Dispatchers.IO) {
+            val node = io.raventag.app.wallet.RavencoinPublicNode(getApplication())
+            while (true) {
+                try { node.heartbeat() } catch (_: Exception) {}
+                delay(30_000L)
+            }
+        }
     }
 
     /** Delete the wallet from secure storage and clear all wallet state. */
@@ -1110,9 +1143,44 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun loadWalletInfo() {
         val wm = walletManager ?: return
         // Preserve existing data while refreshing so the UI never flashes 0.
-        // Only create a blank placeholder when there is no previous data (first load).
-        walletInfo = walletInfo?.copy(isLoading = true)
-            ?: WalletInfo(address = "", balanceRvn = 0.0, isLoading = true)
+        // On a cold start (walletInfo==null) seed from the persistent cache so the
+        // user sees their last-known balance/address immediately instead of zero.
+        if (walletInfo == null) {
+            val cachedState = try {
+                io.raventag.app.wallet.cache.WalletCacheDao.readState()
+            } catch (_: Throwable) { null }
+            val cachedAddr = try { wm.getCurrentAddress() } catch (_: Throwable) { null }.orEmpty()
+            walletInfo = WalletInfo(
+                address = cachedAddr,
+                balanceRvn = (cachedState?.balanceSat ?: 0L) / 1e8,
+                isLoading = true
+            )
+            // Seed tx history from cache as well so the section is populated on resume.
+            try {
+                val cachedTx = io.raventag.app.wallet.cache.TxHistoryDao.getPage(offset = 0, limit = 50)
+                if (cachedTx.isNotEmpty()) {
+                    val mapped = cachedTx.map { row ->
+                        io.raventag.app.wallet.TxHistoryEntry(
+                            txid = row.txid,
+                            height = row.height,
+                            confirmations = row.confirms,
+                            amountSat = row.amountSat,
+                            sentSat = row.sentSat,
+                            cycledSat = row.cycledSat,
+                            feeSat = row.feeSat,
+                            isIncoming = row.isIncoming,
+                            isSelfTransfer = row.isSelf,
+                            timestamp = row.timestamp
+                        )
+                    }
+                    txHistory = mapped
+                    txHistoryTotal = mapped.size
+                    txHistoryLoadedCount = mapped.size
+                }
+            } catch (_: Throwable) {}
+        } else {
+            walletInfo = walletInfo?.copy(isLoading = true)
+        }
 
         viewModelScope.launch {
             // STEP 1: Load balance + assets + tx history immediately from the stored index.
@@ -1177,6 +1245,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
             }
+
+            // Auto-trigger network refresh after cache load so the ElectrumX pill
+            // flips GREEN on first successful RPC instead of lingering on YELLOW.
+            withContext(Dispatchers.Main) { refreshBalance() }
         }
     }
 
@@ -1363,12 +1435,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val node = io.raventag.app.wallet.RavencoinPublicNode(getApplication())
 
         try {
-            // One Keystore decrypt for all addresses, then parallel ElectrumX queries
+            // One Keystore decrypt for all addresses, then parallel ElectrumX queries.
+            // Include currentIndex+1 in the owned set so change outputs are classified correctly.
             val allHistory = withContext(Dispatchers.IO) {
-                val addresses = wm.getAddressBatch(0, 0..currentIndex)
+                val addresses = wm.getAddressBatch(0, 0..(currentIndex + 1))
+                val ownedSet = addresses.values.toSet()
                 val deferreds = addresses.values.map { addr ->
                     async {
-                        try { node.getTransactionHistory(addr, limit = txHistoryPageSize) }
+                        try { node.getTransactionHistory(addr, limit = txHistoryPageSize, ownedAddresses = ownedSet) }
                         catch (_: Throwable) { emptyList() }
                     }
                 }
@@ -1384,9 +1458,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
 
             withContext(Dispatchers.Main) {
-                txHistory = deduped
-                txHistoryTotal = deduped.size
-                txHistoryLoadedCount = deduped.size
+                // Keep prior list visible if this refresh returned empty (network blip).
+                if (deduped.isNotEmpty() || txHistory.isEmpty()) {
+                    txHistory = deduped
+                    txHistoryTotal = deduped.size
+                    txHistoryLoadedCount = deduped.size
+                }
                 txHistoryLoading = false
             }
         } catch (_: Throwable) {
@@ -1766,10 +1843,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 issueSuccess = true
                 issueResult = s.walletTransferResult.replace("%1", assetName).replace("%2", "${txid.take(20)}...")
 
-                // Update displayed address (rotated after transfer)
-                walletInfo = walletInfo?.copy(address = wm.getCurrentAddress() ?: walletInfo?.address ?: "")
+                // Update displayed address (rotated after transfer) and optimistically
+                // mark loading so the UI shows the previous balance + spinner instead
+                // of a temporarily wrong value while ElectrumX mempool propagates.
+                walletInfo = walletInfo?.copy(
+                    address = wm.getCurrentAddress() ?: walletInfo?.address ?: "",
+                    isLoading = true
+                )
 
-                // Reload balance and assets after transfer
+                // Give the network ~3s to propagate the broadcast before re-querying;
+                // querying immediately can return the pre-broadcast balance.
+                kotlinx.coroutines.delay(3000)
                 loadWalletBalance()
                 loadOwnedAssets()
             } catch (e: Throwable) {

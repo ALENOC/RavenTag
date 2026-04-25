@@ -969,9 +969,20 @@ class WalletManager(private val context: Context) {
         val existingCt = p.getString(KEY_HMAC_MATERIAL_CT, null)
         val existingIv = p.getString(KEY_HMAC_MATERIAL_IV, null)
         if (existingCt != null && existingIv != null) {
-            val ct = android.util.Base64.decode(existingCt, android.util.Base64.NO_WRAP)
-            val iv = android.util.Base64.decode(existingIv, android.util.Base64.NO_WRAP)
-            return decrypt(ct, iv)
+            try {
+                val ct = android.util.Base64.decode(existingCt, android.util.Base64.NO_WRAP)
+                val iv = android.util.Base64.decode(existingIv, android.util.Base64.NO_WRAP)
+                return decrypt(ct, iv)
+            } catch (_: javax.crypto.AEADBadTagException) {
+                // Stale blob (e.g., overwriting an existing wallet with a fresh mnemonic).
+                // Old HMAC tags cannot be verified under rotated key material; wipe and rebuild.
+                p.edit()
+                    .remove(KEY_HMAC_MATERIAL_CT)
+                    .remove(KEY_HMAC_MATERIAL_IV)
+                    .remove(KEY_SEED_HMAC)
+                    .remove(KEY_MNEMONIC_HMAC)
+                    .apply()
+            }
         }
         val fresh = ByteArray(32).also { SecureRandom().nextBytes(it) }
         val (ct, iv) = encrypt(fresh)
@@ -1380,24 +1391,36 @@ class WalletManager(private val context: Context) {
                     "all assets and remaining RVN to $nextAddress, txid=$txid")
 
             } else {
-                val estimatedBytes = 10 + 148 * rvnUtxos.size + 34 * 2
+                val totalIn = rvnUtxos.sumOf { it.satoshis }
+                // Sweep / MAX detection: when the requested amount + estimated fee
+                // would exceed the available balance, treat as a "send all" and let
+                // RavencoinTxBuilder subtract the exact fee from the recipient amount.
+                // The wallet will end at 0 RVN with no change output.
+                val outputsForFee = if (amountSat >= totalIn) 1 else 2
+                val estimatedBytes = 10 + 148 * rvnUtxos.size + 34 * outputsForFee
                 feeSatActual = estimatedBytes * satPerByte
 
-                val totalIn = rvnUtxos.sumOf { it.satoshis }
-                require(totalIn > amountSat + feeSatActual) {
-                    "Insufficient funds: have ${totalIn / 1e8} RVN, need ${amountSat / 1e8} RVN + ${feeSatActual / 1e8} RVN fee"
-                }
-
-                val changeSat = totalIn - amountSat - feeSatActual
-                require(changeSat > 546) {
-                    "Remaining change (${"%.8f".format(changeSat / 1e8)} RVN) is below dust limit. " +
-                    "Send a slightly smaller amount or send the full balance."
+                val isMaxSend = amountSat + feeSatActual > totalIn
+                if (isMaxSend) {
+                    require(totalIn > feeSatActual + 546) {
+                        "Insufficient funds to cover network fee: have ${totalIn / 1e8} RVN, fee ${feeSatActual / 1e8} RVN"
+                    }
+                } else {
+                    require(totalIn > amountSat + feeSatActual) {
+                        "Insufficient funds: have ${totalIn / 1e8} RVN, need ${amountSat / 1e8} RVN + ${feeSatActual / 1e8} RVN fee"
+                    }
+                    val changeSat = totalIn - amountSat - feeSatActual
+                    require(changeSat > 546) {
+                        "Remaining change (${"%.8f".format(changeSat / 1e8)} RVN) is below dust limit. " +
+                        "Send a slightly smaller amount or send the full balance."
+                    }
                 }
 
                 val tx = RavencoinTxBuilder.buildAndSign(
                     utxos = rvnUtxos,
+                    // Pass totalIn when sweeping so buildAndSign's fee-subtraction branch fires.
                     toAddress = toAddress,
-                    amountSat = amountSat,
+                    amountSat = if (isMaxSend) totalIn else amountSat,
                     feeSat = feeSatActual,
                     changeAddress = nextAddress,
                     privKeyBytes = privKey!!,
@@ -1407,8 +1430,10 @@ class WalletManager(private val context: Context) {
                 broadcastRawHex = tx.hex
                 consumedUtxos = rvnUtxos
 
+                val totalInLog = rvnUtxos.sumOf { it.satoshis }
+                val changeForLog = (totalInLog - (if (amountSat + feeSatActual > totalInLog) totalInLog else amountSat) - feeSatActual).coerceAtLeast(0L)
                 android.util.Log.i("WalletManager", "sendRvn: sent $amountRvn RVN to $toAddress, " +
-                    "remaining ${"%.8f".format(changeSat / 1e8)} RVN to $nextAddress, txid=$txid")
+                    "remaining ${"%.8f".format(changeForLog / 1e8)} RVN to $nextAddress, txid=$txid")
             }
 
             setCurrentAddressIndex(currentIndex + 1)
@@ -2207,8 +2232,9 @@ suspend fun consolidateAllFundsToFreshAddress(): String? = withContext(Dispatche
     val totalInputs = totalRvnInputs + totalAssetInputs
     val totalAssetOutputs = allAssetKeyed.size
 
-    // Conservative byte estimate: ~250 bytes per input (with scriptSig), ~85 per output, + buffer
-    val estimatedBytes = 10L + 250L * totalInputs + 85L * (totalAssetOutputs + 2) + 34L
+    // Tight byte estimate: ~150 bytes per signed P2PKH input, ~34 bytes per RVN output,
+    // ~85 bytes per asset output (extra OP_RVN_ASSET payload). +10 bytes header.
+    val estimatedBytes = 10L + 150L * totalInputs + 34L + 85L * totalAssetOutputs
     val feeSat = estimatedBytes * satPerByte
 
     android.util.Log.i("WalletManager", "consolid: fee estimate : ${estimatedBytes} bytes at ${satPerByte} sat/byte = ${feeSat} sat (raw relay fee was ${rawSatPerByte})")
@@ -2243,8 +2269,9 @@ suspend fun consolidateAllFundsToFreshAddress(): String? = withContext(Dispatche
         return@withContext null
     }
 
-    // amountSat = what's left after fee and asset dust reservation
-    val amountSat = totalPureRvn - feeSat - totalAssetDust
+    // amountSat = drain ALL RVN (pure + asset-attached) minus exact byte fee minus
+    // dust required for the new asset outputs. Old addresses end with zero satoshis.
+    val amountSat = totalRvnAvailable - feeSat - totalAssetDust
 
     android.util.Log.i("WalletManager", "consolid: amountSat=$amountSat, feeSat=$feeSat, assetDust=$totalAssetDust")
 
@@ -2369,7 +2396,10 @@ suspend fun getOwnedAssets(): List<OwnedAsset> = withContext(Dispatchers.IO) {
 suspend fun getTransactionHistory(): List<TxHistoryEntry> = withContext(Dispatchers.IO) {
     val node = RavencoinPublicNode(context)
     val currentIndex = getCurrentAddressIndex()
-    val addresses = getAddressBatch(0, 0..currentIndex).values.toList()
+    // Include currentIndex+1 (change address) so classification correctly
+    // attributes change outputs to the wallet instead of "sent to others".
+    val addresses = getAddressBatch(0, 0..(currentIndex + 1)).values.toList()
+    val ownedSet = addresses.toSet()
 
     if (addresses.isEmpty()) return@withContext emptyList()
 
@@ -2378,10 +2408,11 @@ suspend fun getTransactionHistory(): List<TxHistoryEntry> = withContext(Dispatch
     try {
         val historyEntries = mutableListOf<TxHistoryEntry>()
 
-        // Fetch history for each address using ElectrumX
+        // Fetch history for each address using ElectrumX, passing full owned set
+        // so each tx is classified consistently (sent / cycled / fee).
         for (address in addresses) {
             try {
-                val history = node.getTransactionHistory(address)
+                val history = node.getTransactionHistory(address, ownedAddresses = ownedSet)
                 historyEntries.addAll(history)
             } catch (e: Exception) {
                 android.util.Log.w("WalletManager", "Failed to fetch history for $address", e)
