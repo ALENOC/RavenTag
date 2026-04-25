@@ -1703,9 +1703,39 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 issuedTxid = txid
                 walletInfo = walletInfo?.copy(address = wm.getCurrentAddress() ?: walletInfo?.address ?: "")
                 notifyRavenTagRegistry(assetName, txid, "root")
+
+                // D-10: Start confirmation polling
+                issueStep = IssueStep.InProgress(IssueStep.StepName.CONFIRMING)
+                viewModelScope.launch {
+                    pollingLoop(txid)
+                }
             } catch (e: Throwable) {
                 issueSuccess = false; issueResult = classifyIssuanceError(e, getStrings())
             } finally { issueLoading = false }
+        }
+    }
+
+    private suspend fun pollingLoop(txid: String) {
+        val node = RavencoinPublicNode(getApplication())
+        var confirmations = 0
+        while (confirmations < 6) {
+            delay(30_000L)
+            try {
+                val tx = withContext(Dispatchers.IO) {
+                    node.callElectrumRawOrNull("blockchain.transaction.get", listOf(txid, true))
+                }
+                val height = tx?.asJsonObject?.get("height")?.asInt ?: 0
+                val tip = withContext(Dispatchers.IO) { node.getBlockHeight() } ?: 0
+                confirmations = if (height > 0) tip - height + 1 else 0
+            } catch (_: Exception) { }
+        }
+        if (confirmations >= 6) {
+            issueStep = IssueStep.Success(IssueStep.StepName.CONFIRMING)
+            delay(2_000L)
+            issueResult = null
+            issueSuccess = null
+            issueStep = IssueStep.Idle
+            issuedTxid = null
         }
     }
 
@@ -1775,6 +1805,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 issuedTxid = txid
                 walletInfo = walletInfo?.copy(address = wm.getCurrentAddress() ?: walletInfo?.address ?: "")
                 notifyRavenTagRegistry(fullName, txid, "sub")
+                issueStep = IssueStep.InProgress(IssueStep.StepName.CONFIRMING)
+                viewModelScope.launch { pollingLoop(txid) }
             } catch (e: Throwable) {
                 issueSuccess = false; issueResult = classifyIssuanceError(e, getStrings())
             } finally { issueLoading = false }
@@ -1848,6 +1880,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 issuedTxid = txid
                 walletInfo = walletInfo?.copy(address = wm.getCurrentAddress() ?: walletInfo?.address ?: "")
                 notifyRavenTagRegistry(fullName, txid, "unique")
+                issueStep = IssueStep.InProgress(IssueStep.StepName.CONFIRMING)
+                viewModelScope.launch { pollingLoop(txid) }
             } catch (e: Throwable) {
                 issueSuccess = false; issueResult = classifyIssuanceError(e, getStrings())
             } finally { issueLoading = false }
@@ -2349,7 +2383,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
             if (result.isFailure) {
                 writeTagStep = WriteTagStep.ERROR
-                writeTagError = result.exceptionOrNull()?.message ?: "Errore sconosciuto"
+                val errorMsg = result.exceptionOrNull()?.message ?: "Errore sconosciuto"
+                writeTagError = errorMsg
+                if (!isStandaloneWrite) {
+                    issueStep = IssueStep.Failed(IssueStep.StepName.ISSUING, errorMsg, canRetry = false)
+                }
             } else {
                 writeTagStep = WriteTagStep.SUCCESS
                 writeTagKeys = result.getOrNull()
@@ -2479,25 +2517,42 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         // 4. Upload metadata to IPFS via Pinata, Kubo, or the backend (in that priority order)
-        val ipfsHash = uploadMetadata(metadata, am)
-            ?: return Result.failure(Exception("Caricamento IPFS fallito"))
+        issueStep = IssueStep.InProgress(IssueStep.StepName.IPFS_UPLOAD)
+        val ipfsHash = try {
+            uploadMetadata(metadata, am) ?: throw Exception("ipfs upload failed")
+        } catch (e: Exception) {
+            val msg = classifyIssuanceError(e, getStrings())
+            return Result.failure(Exception(msg))
+        }
+        issueStep = IssueStep.Success(IssueStep.StepName.IPFS_UPLOAD)
         Log.i("IssueWriteFlow", "processIssueAndWrite metadata-uploaded asset=$fullName metadataIpfs=$ipfsHash")
 
         // 5. Issue the Ravencoin asset on-chain; the IPFS hash is embedded in the issuance tx
-        val wm = walletManager ?: return Result.failure(Exception("Wallet non disponibile"))
+        val wm = walletManager ?: return Result.failure(Exception(classifyIssuanceError(Exception("no wallet"), getStrings())))
+        issueStep = IssueStep.InProgress(IssueStep.StepName.ISSUING)
         val txid = try {
-            wm.issueAssetLocal(
-                fullName,
-                qty = 1.0,
-                toAddress = args.toAddress,
-                units = 0,
-                reissuable = false,
-                ipfsHash = ipfsHash
-            )
+            RetryUtils.retryWithBackoff(maxAttempts = 5) {
+                try {
+                    wm.issueAssetLocal(fullName, qty = 1.0, toAddress = args.toAddress,
+                        units = 0, reissuable = false, ipfsHash = ipfsHash)
+                } catch (e: java.net.SocketTimeoutException) {
+                    throw RuntimeException(e)
+                }
+            }
+        } catch (e: RuntimeException) {
+            if (e.cause is java.net.SocketTimeoutException) {
+                val msg = classifyIssuanceError(e.cause!!, getStrings())
+                return Result.failure(Exception(msg))
+            }
+            val msg = classifyIssuanceError(e, getStrings())
+            return Result.failure(Exception(msg))
         } catch (e: Exception) {
-            return Result.failure(Exception("Emissione Ravencoin fallita: ${e.message}"))
+            val msg = classifyIssuanceError(e, getStrings())
+            return Result.failure(Exception(msg))
         }
         Log.i("IssueWriteFlow", "processIssueAndWrite asset-issued asset=$fullName txid=$txid")
+        issueStep = IssueStep.Success(IssueStep.StepName.ISSUING)
+        issuedTxid = txid
         // Update displayed address (rotated after issuance)
         walletInfo = walletInfo?.copy(address = wm.getCurrentAddress() ?: walletInfo?.address ?: "")
         notifyRavenTagRegistry(
@@ -2507,6 +2562,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         )
 
         // 6. Program the tag: authenticate, set keys derived from this specific UID, write NDEF URL
+        issueStep = IssueStep.InProgress(IssueStep.StepName.NFC_PROGRAMMING)
         val verifyUrl = "${args.baseUrl}/verify?asset=${fullName.uppercase().replace("#", "%23")}&"
         val params = io.raventag.app.nfc.Ntag424Configurator.WriteParams(
             baseUrl = verifyUrl,
@@ -2518,11 +2574,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         )
         val configResult = ntag424.configure(tag, params)
         if (configResult.isFailure) return Result.failure(configResult.exceptionOrNull()!!)
+        issueStep = IssueStep.Success(IssueStep.StepName.NFC_PROGRAMMING)
         Log.i("IssueWriteFlow", "processIssueAndWrite tag-configured asset=$fullName uid=$uidHex")
 
         // 7. Register the chip on the backend (links UID to the new asset record)
         val regResult = am.registerChip(fullName, uidHex)
         Log.i("IssueWriteFlow", "processIssueAndWrite registerChip asset=$fullName success=${regResult.success} error=${regResult.error}")
+
+        // D-10: Start confirmation polling after combined flow
+        issueStep = IssueStep.InProgress(IssueStep.StepName.CONFIRMING)
+        viewModelScope.launch { pollingLoop(txid) }
 
         return Result.success(WriteTagKeys(
             sdmmacInputKey = keys.sdmmacInputKey.toHex(),
