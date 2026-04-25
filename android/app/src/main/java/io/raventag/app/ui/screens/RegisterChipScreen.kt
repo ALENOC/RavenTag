@@ -60,6 +60,7 @@ fun RegisterChipScreen(
     onBack: () -> Unit,
     onRegister: (assetName: String, tagUid: String, adminKey: String) -> Unit
 ) {
+    val s = LocalStrings.current
     // ---- Local form state ----
     var assetName by remember { mutableStateOf("") }
     var tagUid by remember { mutableStateOf("") }
@@ -87,8 +88,8 @@ fun RegisterChipScreen(
                 Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = Color.White)
             }
             Column {
-                Text("Register NFC Chip", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = Color.White)
-                Text("Link chip UID to a Ravencoin asset", style = MaterialTheme.typography.bodySmall, color = RavenMuted)
+                Text(s.regChipTitle, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = Color.White)
+                Text(s.regChipSubtitle, style = MaterialTheme.typography.bodySmall, color = RavenMuted)
             }
         }
 
@@ -106,7 +107,7 @@ fun RegisterChipScreen(
             Row(modifier = Modifier.padding(14.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Icon(Icons.Default.Info, contentDescription = null, tint = RavenOrange, modifier = Modifier.size(16.dp).padding(top = 2.dp))
                 Text(
-                    "The server uses BRAND_SALT to compute nfc_pub_id = SHA-256(uid ∥ salt). The raw UID stays private; only nfc_pub_id is published in IPFS metadata.",
+                    s.regChipInfo,
                     style = MaterialTheme.typography.bodySmall,
                     color = RavenMuted
                 )
@@ -138,7 +139,7 @@ fun RegisterChipScreen(
                     // The operator can cross-check this against their write-step records.
                     if (success && nfcPubId != null) {
                         Spacer(modifier = Modifier.height(10.dp))
-                        Text("NFC PUBLIC ID", style = MaterialTheme.typography.labelSmall, color = RavenMuted)
+                        Text(s.verifyNfcPubId, style = MaterialTheme.typography.labelSmall, color = RavenMuted)
                         Spacer(modifier = Modifier.height(4.dp))
                         // Monospace makes the 64-char hex string easier to compare visually.
                         Text(nfcPubId, style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace), color = AuthenticGreen)
@@ -150,7 +151,7 @@ fun RegisterChipScreen(
 
         // Asset name field: accepts any Ravencoin asset depth (ROOT, SUB, or unique token).
         // Input is uppercased on every keystroke to match Ravencoin naming rules.
-        RavenFormField(label = "Asset Name", hint = "e.g. FASHIONX/BAG001#SN0001") {
+        RavenFormField(label = s.fieldAssetName, hint = "e.g. FASHIONX/BAG001#SN0001") {
             OutlinedTextField(
                 value = assetName,
                 onValueChange = { assetName = it.uppercase() },
@@ -168,10 +169,10 @@ fun RegisterChipScreen(
         // then capped at 14 characters to match the 7-byte NTAG 424 DNA UID length.
         // A live validation hint shows the current character count when the input is invalid.
         RavenFormField(
-            label = "Tag UID",
+            label = s.regChipTagUid,
             hint = if (tagUid.isNotEmpty() && !isValidUid)
-                "Must be exactly 14 hex characters (7 bytes). Current: ${tagUid.length}"
-            else "14 hex characters = 7 bytes, e.g. 04A1B2C3D4E5F6"
+                s.regChipUidError + " ${tagUid.length}"
+            else s.regChipUidHint
         ) {
             OutlinedTextField(
                 value = tagUid,
@@ -190,7 +191,7 @@ fun RegisterChipScreen(
 
         // Admin API key field: rendered as a password field so the key is not visible on screen.
         // The hint makes clear the key is not saved anywhere in the app.
-        RavenFormField(label = "Admin API Key", hint = "X-Admin-Key, never stored in app") {
+        RavenFormField(label = s.adminKey, hint = s.adminKeyHint) {
             OutlinedTextField(
                 value = adminKey,
                 onValueChange = { adminKey = it },
@@ -220,7 +221,7 @@ fun RegisterChipScreen(
             } else {
                 Icon(Icons.Default.Memory, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Register Chip", fontWeight = FontWeight.SemiBold)
+                Text(s.regChipBtn, fontWeight = FontWeight.SemiBold)
             }
         }
 

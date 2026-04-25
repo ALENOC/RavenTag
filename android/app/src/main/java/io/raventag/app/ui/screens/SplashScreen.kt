@@ -15,6 +15,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.material3.Icon
 import io.raventag.app.R
+import io.raventag.app.ui.theme.LocalStrings
 import io.raventag.app.ui.theme.RavenMuted
 import io.raventag.app.ui.theme.RavenOrange
 import kotlinx.coroutines.delay
@@ -22,6 +23,7 @@ import kotlinx.coroutines.delay
 @Composable
 fun SplashScreen(onFinished: () -> Unit) {
     var phase by remember { mutableStateOf(0) } // 0=invisible, 1=visible, 2=fading out
+    val s = LocalStrings.current
 
     LaunchedEffect(Unit) {
         delay(100)
@@ -63,7 +65,7 @@ fun SplashScreen(onFinished: () -> Unit) {
             )
             Spacer(modifier = Modifier.height(20.dp))
             Text(
-                text = "Protocol RTP-1",
+                text = s.protocolRtpBadge,
                 style = MaterialTheme.typography.labelSmall,
                 color = RavenOrange.copy(alpha = 0.7f),
                 letterSpacing = 3.sp

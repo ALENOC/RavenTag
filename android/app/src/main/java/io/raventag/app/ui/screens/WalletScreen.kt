@@ -408,7 +408,7 @@ fun WalletScreen(
                     if (hasWallet) {
                         Row(modifier = Modifier.padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                             Icon(Icons.Default.Security, contentDescription = null, tint = AuthenticGreen, modifier = Modifier.size(12.dp))
-                            Text("Android Keystore \u00b7 AES-256-GCM", style = MaterialTheme.typography.labelSmall, color = AuthenticGreen.copy(alpha = 0.8f))
+                            Text(s.walletKeystoreLabel, style = MaterialTheme.typography.labelSmall, color = AuthenticGreen.copy(alpha = 0.8f))
                         }
                         if (isBrandApp && walletRole.isNotEmpty()) {
                             val roleColor = if (isOperator) Color(0xFF60A5FA) else RavenOrange
@@ -468,17 +468,6 @@ fun WalletScreen(
                         modifier = Modifier.fillMaxWidth().height(2.dp)
                     )
                 }
-            }
-        }
-
-        // D-04: cached-state banner
-        if (hasWallet && cachedBannerVisible && cachedLastRefreshedAt > 0L) {
-            item(key = "cached_banner") {
-                CachedStateBanner(
-                    lastRefreshedAt = cachedLastRefreshedAt,
-                    isReconnecting = health == ConnectionHealth.YELLOW,
-                    visible = true
-                )
             }
         }
 
@@ -635,7 +624,7 @@ fun WalletScreen(
                             ) {
                                 Icon(Icons.Default.Sync, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text("Consolidate to Fresh Address", color = Color.White, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium)
+                                Text(s.walletConsolidateBtn, color = Color.White, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium)
                             }
                         }
                     }
@@ -1028,7 +1017,7 @@ private fun TxCard(s: AppStrings, tx: TxHistoryEntry) {
         AlertDialog(
             onDismissRequest = { showAssetListDialog = false },
             containerColor = RavenCard,
-            title = { Text("Asset ciclati", color = Color.White, fontWeight = FontWeight.Bold) },
+            title = { Text(s.walletCycledAssetsTitle, color = Color.White, fontWeight = FontWeight.Bold) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     tx.incomingAssetNames.forEach { name ->
@@ -1038,7 +1027,7 @@ private fun TxCard(s: AppStrings, tx: TxHistoryEntry) {
             },
             confirmButton = {
                 TextButton(onClick = { showAssetListDialog = false }) {
-                    Text("Chiudi", color = RavenOrange)
+                    Text(s.closeGeneric, color = RavenOrange)
                 }
             }
         )
