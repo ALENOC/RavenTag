@@ -1,5 +1,6 @@
 package io.raventag.app.wallet
 
+import android.content.Context
 import android.util.Log
 import com.google.gson.Gson
 import com.google.gson.JsonElement
@@ -12,17 +13,9 @@ import java.math.BigInteger
 import java.net.InetSocketAddress
 import java.security.MessageDigest
 import java.security.SecureRandom
-import java.security.cert.X509Certificate
-import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLSocket
-import javax.net.ssl.X509TrustManager
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
 
 /**
  * Thrown when no ElectrumX server in the server list is able to provide a
@@ -107,12 +100,23 @@ data class ElectrumAssetMeta(
  */
 data class TxHistoryEntry(
     val txid: String,
-    val height: Int,         // 0 = unconfirmed/mempool
+    val height: Int,           // 0 = unconfirmed/mempool
     val confirmations: Int,
-    val amountSat: Long,     // positive = received to our address
-    val sentSat: Long,       // positive = sent to other addresses
-    val isIncoming: Boolean, // true if amountSat > 0 (our address in vout)
-    val timestamp: Long = 0L // Unix timestamp in seconds (0 if unknown)
+    val amountSat: Long,       // positive = received to our address
+    val sentSat: Long,         // positive = sent to other addresses (external, D-19)
+    val isIncoming: Boolean,   // true if amountSat > 0 (our address in vout)
+    val isSelfTransfer: Boolean = false, // true if this is an internal sweep (< 1% net loss)
+    val timestamp: Long = 0L,  // Unix timestamp in seconds (0 if unknown)
+    // D-19 three-value breakdown (0 when unknown / not yet enriched):
+    val cycledSat: Long = 0L,  // satoshis paying the change / currentIndex+1 address
+    val feeSat: Long = 0L,     // fee paid (sum(vin) - sum(vout))
+    // Asset transfer detection: when this tx delivers an asset to one of our
+    // addresses, [assetName] and [assetAmount] describe the asset; otherwise null/0.
+    val assetName: String? = null,
+    val assetAmount: Long = 0L,  // raw asset amount (sats * 10^divisions)
+    // Full list of asset names cycled/received in this tx (toUs vouts).
+    // Used by the UI to compact the row to "Ciclati N asset" with a tap-to-list dialog.
+    val incomingAssetNames: List<String> = emptyList()
 )
 
 /**
@@ -151,29 +155,36 @@ private data class ElectrumServer(val host: String, val port: Int)
  *   assets:    blockchain.scripthash.listunspent + blockchain.scripthash.get_balance
  *              with the Ravencoin ElectrumX asset extensions
  */
-class RavencoinPublicNode {
+class RavencoinPublicNode(private val context: Context) {
 
     companion object {
         private const val TAG = "ElectrumX"
 
-        /** Timeout for the TCP connection handshake in milliseconds. */
-        private const val CONNECT_TIMEOUT_MS = 12_000
+        /** Timeout for the TCP connection handshake in milliseconds.
+         *  Kept tight so a dead server does not stall the cold-start failover
+         *  rotation: 5 servers × 5 s previously meant up to 25 s of "Reconnecting…"
+         *  on app resume; 2.5 s caps that at ~12 s worst case. */
+        private const val CONNECT_TIMEOUT_MS = 2_500
 
         /** Timeout for reading a response line from the server in milliseconds. */
         private const val READ_TIMEOUT_MS = 15_000
 
+        /** Maximum number of pipelined requests per [callBatch] TLS connection. */
+        private const val BATCH_CHUNK_SIZE = 20
+
         /**
          * List of public Ravencoin ElectrumX servers, tried in order.
          * All use the standard TLS port 50002.
-         * New servers can be added here; removal of dead servers avoids unnecessary
-         * timeout delays on every request.
+         *
+         * Sourced from [io.raventag.app.config.AppConfig.ELECTRUM_SERVERS] so
+         * that [io.raventag.app.wallet.health.NodeHealthMonitor] and this
+         * class iterate the same pool. Evaluated once at class init; adding
+         * hosts requires editing AppConfig (see KDoc there for provenance).
          */
-        private val SERVERS = listOf(
-            ElectrumServer("rvn4lyfe.com", 50002),
-            ElectrumServer("rvn-dashboard.com", 50002),
-            ElectrumServer("162.19.153.65", 50002),
-            ElectrumServer("51.222.139.25", 50002),
-        )
+        private val SERVERS: List<ElectrumServer> =
+            io.raventag.app.config.AppConfig.ELECTRUM_SERVERS.map { (host, port) ->
+                ElectrumServer(host, port)
+            }
 
         /**
          * Monotonically increasing request ID counter, shared across all instances.
@@ -185,12 +196,6 @@ class RavencoinPublicNode {
 
         /** Shared Gson instance for serializing JSON-RPC request objects. */
         private val gson = Gson()
-
-        /**
-         * TOFU certificate fingerprint cache: hostname -> SHA-256 hex string.
-         * Thread-safe via ConcurrentHashMap. Scoped to the process lifetime.
-         */
-        private val certCache = ConcurrentHashMap<String, String>()
     }
 
     // Public API ──────────────────────────────────────────────────────────────
@@ -215,6 +220,16 @@ class RavencoinPublicNode {
     }
 
     /**
+     * Lightweight heartbeat that routes through [callWithFailover] so
+     * NodeHealthMonitor receives success/failure signals and the UI pill
+     * stays fresh between wallet refreshes. Returns true if any server answered.
+     */
+    fun heartbeat(): Boolean = try {
+        callWithFailover("server.version", listOf("RavenTag/1.0", "1.4"))
+        true
+    } catch (_: Exception) { false }
+
+    /**
      * Returns the confirmed and unconfirmed RVN balance for [address].
      *
      * Converts the P2PKH address to an ElectrumX scripthash (reversed SHA-256
@@ -231,6 +246,119 @@ class RavencoinPublicNode {
             confirmed = result.get("confirmed")?.asLong ?: 0L,
             unconfirmed = result.get("unconfirmed")?.asLong ?: 0L
         )
+    }
+
+    /**
+     * Aggregates asset balances across all [addresses] using a single pipelined batch request.
+     *
+     * Sends one `blockchain.scripthash.get_balance` call (with asset=true) per address,
+     * all pipelined in one TLS connection. Returns a map from asset name to total amount
+     * (in human-readable units, i.e. divided by 10^8), excluding plain RVN entries.
+     *
+     * @param addresses List of Ravencoin P2PKH addresses to aggregate.
+     * @return Map of asset name to total balance; empty if no assets or network failure.
+     */
+    fun getTotalAssetBalances(addresses: List<String>): Map<String, Double> {
+        if (addresses.isEmpty()) return emptyMap()
+        val requests = addresses.map { addr ->
+            "blockchain.scripthash.get_balance" to listOf(addressToScripthash(addr), true) as List<Any>
+        }
+        val responses = callWithFailoverBatch(requests)
+        val totals = mutableMapOf<String, Long>()
+        addresses.forEachIndexed { i, addr ->
+            val resp = responses.getOrNull(i) ?: return@forEachIndexed
+            if (resp == null || !resp.isJsonObject) return@forEachIndexed
+            for ((name, value) in resp.asJsonObject.entrySet()) {
+                if (name == "rvn" || name == "RVN") continue
+                try {
+                    val obj = value.asJsonObject
+                    val sat = (obj.get("confirmed")?.asLong ?: 0L) + (obj.get("unconfirmed")?.asLong ?: 0L)
+                    if (sat > 0) {
+                                        totals[name] = (totals[name] ?: 0L) + sat
+                    }
+                } catch (_: Exception) {}
+            }
+        }
+        return totals.mapValues { (_, sat) -> sat / 1e8 }
+    }
+
+    /**
+     * Returns the subset of [addresses] that currently hold any funds (RVN or assets),
+     * using a single pipelined batch `get_balance?asset=true` request.
+     *
+     * Replaces the previous pattern of N*2 sequential getAssetBalances+getUtxos calls
+     * (one TLS connection per address) with a single batched query (ceil(N/20) connections).
+     *
+     * @param addresses List of Ravencoin P2PKH addresses to check.
+     * @return Set of addresses that have at least one satoshi of RVN or assets.
+     */
+    fun getAddressesWithFunds(addresses: List<String>): Set<String> =
+        getAddressesWithSignificantFunds(addresses, minRvnSat = 1L)
+
+    /**
+     * Like [getAddressesWithFunds] but ignores RVN residues below [minRvnSat].
+     * Use a non-zero floor (e.g. 100_000 sat = 0.001 RVN) for the consolidation
+     * banner so we don't keep nagging the user about dust left behind by a sweep.
+     * Asset balances always count regardless of [minRvnSat].
+     */
+    fun getAddressesWithSignificantFunds(addresses: List<String>, minRvnSat: Long): Set<String> {
+        if (addresses.isEmpty()) return emptySet()
+        val requests = addresses.map { addr ->
+            "blockchain.scripthash.get_balance" to listOf(addressToScripthash(addr), true) as List<Any>
+        }
+        val responses = callWithFailoverBatch(requests)
+        val result = mutableSetOf<String>()
+        addresses.forEachIndexed { i, addr ->
+            val resp = responses.getOrNull(i) ?: return@forEachIndexed
+            if (resp == null || !resp.isJsonObject) return@forEachIndexed
+            val obj = resp.asJsonObject
+            val rvnSat = (try { obj.get("confirmed")?.asLong ?: 0L } catch (_: Exception) { 0L }) +
+                         (try { obj.get("unconfirmed")?.asLong ?: 0L } catch (_: Exception) { 0L })
+            if (rvnSat >= minRvnSat) { result.add(addr); return@forEachIndexed }
+            for ((key, value) in obj.entrySet()) {
+                if (key == "confirmed" || key == "unconfirmed") continue
+                try {
+                    val assetObj = value.asJsonObject
+                    val sat = (assetObj.get("confirmed")?.asLong ?: 0L) +
+                              (assetObj.get("unconfirmed")?.asLong ?: 0L)
+                    if (sat > 0) { result.add(addr); break }
+                } catch (_: Exception) {}
+            }
+        }
+        return result
+    }
+
+    /**
+     * Returns the total RVN balance (confirmed + unconfirmed) across all [addresses]
+     * using a single pipelined batch request.
+     *
+     * Replaces N sequential/parallel [getBalance] calls with one TLS connection and
+     * N pipelined `blockchain.scripthash.get_balance` requests (chunked at [BATCH_CHUNK_SIZE]).
+     * With 37 addresses this drops from 37 connections to 2.
+     *
+     * @param addresses List of Ravencoin P2PKH addresses to aggregate.
+     * @return Total balance in RVN, 0.0 if all addresses are empty or on network failure.
+     */
+    fun getTotalBalance(addresses: List<String>): Double {
+        if (addresses.isEmpty()) return 0.0
+        val requests = addresses.map { addr ->
+            "blockchain.scripthash.get_balance" to listOf(addressToScripthash(addr)) as List<Any>
+        }
+        val responses = callWithFailoverBatch(requests)
+        var totalSat = 0L
+        var successCount = 0
+        for (resp in responses) {
+            if (resp != null && !resp.isJsonNull && resp.isJsonObject) {
+                val obj = resp.asJsonObject
+                totalSat += obj.get("confirmed")?.asLong ?: 0L
+                totalSat += obj.get("unconfirmed")?.asLong ?: 0L
+                successCount++
+            }
+        }
+        // If every single response failed, treat it as a network error rather than silently
+        // returning 0.0: the caller can catch this and preserve the previously known balance.
+        if (successCount == 0) throw java.io.IOException("All balance queries failed (network unreachable)")
+        return totalSat / 1e8
     }
 
     /**
@@ -301,6 +429,16 @@ class RavencoinPublicNode {
         callWithFailover("blockchain.transaction.broadcast", listOf(rawHex)).asString
 
     /**
+     * Low-level RPC call with failover; returns null on any exception.
+     *
+     * Used by RebroadcastWorker for confirmation checks and other callers
+     * that need best-effort access to ElectrumX RPC without propagating errors.
+     */
+    fun callElectrumRawOrNull(method: String, params: List<Any>): com.google.gson.JsonElement? = try {
+        callWithFailover(method, params)
+    } catch (_: Exception) { null }
+
+    /**
      * Queries all known ElectrumX servers for "blockchain.relayfee" and returns a
      * safe fee rate to use when building transactions.
      *
@@ -342,6 +480,33 @@ class RavencoinPublicNode {
     fun getBlockHeight(): Int? {
         val result = callWithFailover("blockchain.headers.subscribe", emptyList())
         return result.asJsonObject.get("height")?.asInt
+    }
+
+    /**
+     * D-05 support: subscribes to a scripthash and returns the current status hash.
+     * Uses the one-shot RPC socket; the foreground-session long-lived socket lives in
+     * [io.raventag.app.wallet.subscription.SubscriptionManager].
+     *
+     * @param address Ravencoin P2PKH address.
+     * @return The current status hash, or null if the address has no history.
+     */
+    fun subscribeScripthashRpc(address: String): String? {
+        val scripthash = addressToScripthash(address)
+        val result = callWithFailover("blockchain.scripthash.subscribe", listOf(scripthash))
+        return if (result.isJsonNull) null else result.asString
+    }
+
+    /**
+     * D-22 support: calls blockchain.estimatefee with a block target and returns
+     * the raw RVN/kB number. Returns -1.0 when the server returns null. Callers
+     * (FeeEstimator) are responsible for the static-fallback policy.
+     *
+     * @param targetBlocks Number of blocks for the fee estimation target.
+     * @return Fee rate in RVN per kilobyte, or -1.0 if unavailable.
+     */
+    fun estimateFeeRvnPerKb(targetBlocks: Int): Double {
+        val result = callWithFailover("blockchain.estimatefee", listOf(targetBlocks))
+        return if (result.isJsonNull) -1.0 else result.asDouble
     }
 
     /**
@@ -532,6 +697,190 @@ class RavencoinPublicNode {
     }
 
     /**
+     * Fetches all UTXOs for [address] and returns RVN UTXOs, asset outpoints, and all
+     * asset UTXOs with full scripts in at most 2 TLS connections.
+     *
+     * TLS 1: blockchain.scripthash.listunspent (full unfiltered UTXO list)
+     * TLS 2: batch blockchain.transaction.get for every unique txid referenced by
+     *        unknown-type UTXOs (need "88acc0" check) and asset UTXOs (need on-chain script)
+     *
+     * This replaces the combination of [getUtxos] + [getAllAssetOutpoints] + N calls to
+     * [getAssetUtxosFull] that previously required N+2 separate TLS connections.
+     *
+     * @param address Ravencoin P2PKH address.
+     * @return Triple:
+     *   - rvnUtxos:       plain RVN UTXOs safe to spend as fee inputs
+     *   - assetOutpoints: set of "txid:vout" that carry assets (to exclude from fee inputs)
+     *   - assetUtxosMap:  map from asset name to list of AssetUtxo (with on-chain scripts)
+     */
+    fun getUtxosAndAllAssetUtxosBatch(
+        address: String
+    ): Triple<List<Utxo>, Set<String>, Map<String, List<AssetUtxo>>> {
+        val rvnScript = p2pkhScriptHex(address)
+        val rawList = listUnspentRaw(address)   // TLS 1
+
+        // Classify each UTXO into one of three buckets
+        data class PendingUtxo(
+            val txHash: String,
+            val txPos: Int,
+            val height: Int,
+            val valueField: Long?,   // raw "value" from listunspent (may be asset amount for asset UTXOs)
+            val isKnownAsset: Boolean,
+            val isUnknown: Boolean,  // no "asset" field: needs raw-tx check for "88acc0"
+            val assetName: String?,
+            val assetAmount: Long?
+        )
+
+        val pending = mutableListOf<PendingUtxo>()
+        for (obj in rawList) {
+            val txHash = obj.get("tx_hash")?.asString ?: continue
+            val txPos  = obj.get("tx_pos")?.asInt    ?: continue
+            val height = obj.get("height")?.asInt    ?: 0
+            val value  = obj.get("value")?.asLong
+            val assetField = if (obj.has("asset")) obj.get("asset") else null
+
+            when {
+                assetField == null || assetField.isJsonNull -> {
+                    // No "asset" tag: server either omitted it or this is plain RVN
+                    pending.add(PendingUtxo(txHash, txPos, height, value, false, true, null, null))
+                }
+                assetField.isJsonPrimitive -> {
+                    val name = runCatching { assetField.asString }.getOrDefault("")
+                    if (name.isEmpty() || name == "RVN") {
+                        pending.add(PendingUtxo(txHash, txPos, height, value, false, false, null, null))
+                    } else {
+                        pending.add(PendingUtxo(txHash, txPos, height, value, true, false, name, value))
+                    }
+                }
+                else -> {
+                    val ao = assetField.asJsonObject
+                    val name   = ao.get("name")?.asString   ?: ""
+                    val amount = ao.get("amount")?.asLong
+                    if (name.isEmpty() || name == "RVN") {
+                        pending.add(PendingUtxo(txHash, txPos, height, value, false, false, null, null))
+                    } else {
+                        pending.add(PendingUtxo(txHash, txPos, height, value, true, false, name, amount))
+                    }
+                }
+            }
+        }
+
+        // Collect txids that need a raw transaction fetch (unknown + known asset)
+        val txidsToFetch = pending
+            .filter { it.isKnownAsset || it.isUnknown }
+            .map { it.txHash }
+            .distinct()
+
+        // Batch-fetch all raw transactions in one TLS connection  (TLS 2)
+        val txCache = mutableMapOf<String, JsonObject?>()
+        if (txidsToFetch.isNotEmpty()) {
+            val requests = txidsToFetch.map { "blockchain.transaction.get" to listOf(it, true) as List<Any> }
+            val results = callWithFailoverBatch(requests)
+            txidsToFetch.forEachIndexed { i, txid ->
+                txCache[txid] = try { results[i]?.asJsonObject } catch (_: Exception) { null }
+            }
+        }
+
+        // Build the three return collections
+        val rvnUtxos      = mutableListOf<Utxo>()
+        val assetOutpoints = mutableSetOf<String>()
+        val assetUtxosMap  = mutableMapOf<String, MutableList<AssetUtxo>>()
+
+        for (u in pending) {
+            val outpoint = "${u.txHash}:${u.txPos}"
+            when {
+                u.isKnownAsset -> {
+                    // Asset UTXO: extract on-chain script and actual RVN satoshis from raw tx
+                    assetOutpoints.add(outpoint)
+                    val tx = txCache[u.txHash]
+                    val vout = try {
+                        tx?.getAsJsonArray("vout")?.get(u.txPos)?.asJsonObject
+                    } catch (_: Exception) { null }
+                    val satoshis = try {
+                        val rvn = vout?.get("value")?.asDouble ?: 0.0
+                        (rvn * 100_000_000.0).toLong()
+                    } catch (_: Exception) { 0L }
+                    val onChainScript = try {
+                        vout?.getAsJsonObject("scriptPubKey")?.get("hex")?.asString
+                    } catch (_: Exception) { null }
+                    val name = u.assetName ?: continue
+                    val rawAmount = u.assetAmount ?: continue
+                    val assetScript = onChainScript ?: if (name.endsWith("!")) {
+                        buildOwnerAssetScriptHex(address, name)
+                    } else {
+                        buildAssetScriptHex(address, name, rawAmount)
+                    }
+                    val utxo = Utxo(u.txHash, u.txPos, satoshis, assetScript, u.height)
+                    assetUtxosMap.getOrPut(name) { mutableListOf() }.add(AssetUtxo(utxo, name, rawAmount))
+                }
+                u.isUnknown -> {
+                    // No "asset" tag: check raw tx scriptPubKey for OP_RVN_ASSET marker "88acc0"
+                    val tx = txCache[u.txHash]
+                    val vout = try {
+                        tx?.getAsJsonArray("vout")?.get(u.txPos)?.asJsonObject
+                    } catch (_: Exception) { null }
+                    val scriptHex = try {
+                        vout?.getAsJsonObject("scriptPubKey")?.get("hex")?.asString
+                    } catch (_: Exception) { null }
+                    if (scriptHex != null && "88acc0" in scriptHex) {
+                        assetOutpoints.add(outpoint)
+                        // Parse asset name and amount directly from the script so the UTXO
+                        // is properly included in assetUtxosMap (not just silently dropped).
+                        val parsed = parseAssetFromScript(scriptHex)
+                        if (parsed != null) {
+                            val (assetName, rawAmount) = parsed
+                            val satoshis = try {
+                                ((vout?.get("value")?.asDouble ?: 0.0) * 100_000_000.0).toLong()
+                            } catch (_: Exception) { 0L }
+                            val utxo = Utxo(u.txHash, u.txPos, satoshis, scriptHex, u.height)
+                            assetUtxosMap.getOrPut(assetName) { mutableListOf() }
+                                .add(AssetUtxo(utxo, assetName, rawAmount))
+                        } else {
+                            // Recognition failed but it has an asset marker: treat as RVN so it's at least swept
+                            val satoshis = try {
+                                ((vout?.get("value")?.asDouble ?: 0.0) * 100_000_000.0).toLong()
+                            } catch (_: Exception) { u.valueField ?: 0L }
+                            rvnUtxos.add(Utxo(u.txHash, u.txPos, satoshis, scriptHex, u.height))
+                        }
+                    } else {
+                        // Confirmed RVN or unknown (treat as RVN to avoid locking up funds)
+                        val satoshis = u.valueField ?: continue
+                        rvnUtxos.add(Utxo(u.txHash, u.txPos, satoshis, rvnScript, u.height))
+                    }
+                }
+                else -> {
+                    // Explicitly tagged as plain RVN
+                    val satoshis = u.valueField ?: continue
+                    rvnUtxos.add(Utxo(u.txHash, u.txPos, satoshis, rvnScript, u.height))
+                }
+            }
+        }
+
+        // Secondary asset check: some ElectrumX servers (e.g. Ravencoin mainnet nodes) do not
+        // include asset UTXOs in blockchain.scripthash.listunspent. If listunspent returned no
+        // assets but get_balance?asset=true shows some, fetch them explicitly via getAssetUtxosFull.
+        if (assetUtxosMap.isEmpty()) {
+            try {
+                val assetBalances = getAssetBalances(address)
+                for (ab in assetBalances) {
+                    try {
+                        val utxos = getAssetUtxosFull(address, ab.name)
+                        if (utxos.isNotEmpty()) {
+                            assetUtxosMap.getOrPut(ab.name) { mutableListOf() }.addAll(utxos)
+                            assetOutpoints.addAll(utxos.map { "${it.utxo.txid}:${it.utxo.outputIndex}" })
+                            android.util.Log.i("RavencoinPublicNode", "  secondary: ${utxos.size} UTXOs for ${ab.name} via getAssetUtxosFull")
+                        }
+                    } catch (e: Exception) {
+                        android.util.Log.w("RavencoinPublicNode", "  secondary: getAssetUtxosFull failed for ${ab.name}: ${e.message}")
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+
+        return Triple(rvnUtxos, assetOutpoints, assetUtxosMap)
+    }
+
+    /**
      * Returns metadata for [assetName] via the "blockchain.asset.get_meta" call.
      *
      * Handles two variations of the IPFS field name ("ipfs" vs "ipfs_hash") seen
@@ -562,6 +911,41 @@ class RavencoinPublicNode {
     }
 
     /**
+     * Fetch metadata for multiple assets in a single pipelined TLS connection.
+     *
+     * Equivalent to calling [getAssetMeta] N times, but uses one batch connection
+     * for all N [blockchain.asset.get_meta] requests instead of N separate connections.
+     *
+     * @param assetNames List of full asset names to look up.
+     * @return Map from asset name to [ElectrumAssetMeta] (null value if a specific
+     *         asset was not found or its result could not be parsed).
+     */
+    fun getAssetMetaBatch(assetNames: List<String>): Map<String, ElectrumAssetMeta?> {
+        if (assetNames.isEmpty()) return emptyMap()
+        val reqs = assetNames.map { name ->
+            "blockchain.asset.get_meta" to listOf(name) as List<Any>
+        }
+        val resps = try { callWithFailoverBatch(reqs) } catch (_: Exception) { return emptyMap() }
+        val result = mutableMapOf<String, ElectrumAssetMeta?>()
+        assetNames.forEachIndexed { i, name ->
+            result[name] = try {
+                val obj = resps.getOrNull(i)?.asJsonObject ?: return@forEachIndexed
+                val hasIpfs = obj.get("has_ipfs").asFlexibleBoolean()
+                val ipfsHash = obj.get("ipfs")?.asString ?: obj.get("ipfs_hash")?.asString
+                ElectrumAssetMeta(
+                    name = name,
+                    totalSupply = obj.get("sats_in_circulation")?.asLong ?: 0L,
+                    divisions = obj.get("divisions")?.asInt ?: 0,
+                    reissuable = obj.get("reissuable").asFlexibleBoolean(),
+                    hasIpfs = hasIpfs,
+                    ipfsHash = if (hasIpfs) ipfsHash else null
+                )
+            } catch (_: Exception) { null }
+        }
+        return result
+    }
+
+    /**
      * Returns up to [limit] transactions for [address], sorted newest-first.
      *
      * This is a suspend function because it performs concurrent network I/O:
@@ -585,44 +969,56 @@ class RavencoinPublicNode {
      * @param offset  Number of entries to skip for pagination (default 0).
      * @return List of [TxHistoryEntry] sorted newest-first, empty on failure.
      */
-    suspend fun getTransactionHistory(address: String, limit: Int = 15, offset: Int = 0): List<TxHistoryEntry> = coroutineScope {
-        val currentHeight = try { getBlockHeight() ?: 0 } catch (_: Exception) { 0 }
+    fun getTransactionHistory(
+        address: String,
+        limit: Int = 15,
+        offset: Int = 0,
+        ownedAddresses: Set<String> = setOf(address)
+    ): List<TxHistoryEntry> {
         val scripthash = addressToScripthash(address)
+        val owned = if (ownedAddresses.isEmpty()) setOf(address) else ownedAddresses
+        // Hash160 of each owned address (lowercase hex). Asset outputs wrap a P2PKH
+        // payload inside an OP_RVN_ASSET script; some ElectrumX servers do not expose
+        // the inner address in `scriptPubKey.addresses`, so we fall back to hex match.
+        val ownedHashes: Set<String> = owned.mapNotNull { addr ->
+            try {
+                val decoded = base58Decode(addr)
+                if (decoded.size < 21) null
+                else decoded.copyOfRange(1, 21).joinToString("") { "%02x".format(it) }
+            } catch (_: Exception) { null }
+        }.toSet()
+
+        // Batch step 1: fetch block height + address history in a single TLS connection
+        val step1 = callWithFailoverBatch(listOf(
+            "blockchain.headers.subscribe" to emptyList<Any>(),
+            "blockchain.scripthash.get_history" to listOf(scripthash)
+        ))
+        val currentHeight = try { step1[0]?.asJsonObject?.get("height")?.asInt ?: 0 } catch (_: Exception) { 0 }
         val history = try {
-            callWithFailover("blockchain.scripthash.get_history", listOf(scripthash))
-                .asJsonArray
-                .mapNotNull { try { it.asJsonObject } catch (_: Exception) { null } }
-                .sortedWith(compareByDescending {
+            step1[1]?.asJsonArray
+                ?.mapNotNull { try { it.asJsonObject } catch (_: Exception) { null } }
+                ?.sortedWith(compareByDescending {
                     val h = it.get("height")?.asInt ?: 0
-                    // Unconfirmed transactions have height=0 or negative; sort them first
-                    // by mapping 0/negative to Int.MAX_VALUE
                     if (h <= 0) Int.MAX_VALUE else h
                 })
-                .drop(offset)
-                .take(limit)
-        } catch (_: Exception) { return@coroutineScope emptyList() }
+                ?.drop(offset)
+                ?.take(limit)
+                ?: emptyList()
+        } catch (_: Exception) { return emptyList() }
 
-        // Semaphore limits concurrent ElectrumX connections to avoid overwhelming servers
-        val requestLimiter = Semaphore(4)
-        suspend fun fetchTransaction(txId: String): JsonObject? = requestLimiter.withPermit {
-            try {
-                // Pass "true" to get the verbose/decoded JSON form (not just hex)
-                callWithFailover("blockchain.transaction.get", listOf(txId, true)).asJsonObject
-            } catch (_: Exception) {
-                null
-            }
-        }
+        if (history.isEmpty()) return emptyList()
 
-        // Fetch all current transactions in parallel
-        val txHashes = history.mapNotNull { it.get("tx_hash")?.asString }
-        val txMap = txHashes
-            .map { txId -> async { txId to fetchTransaction(txId) } }
-            .awaitAll()
-            .mapNotNull { (txId, tx) -> tx?.let { txId to it } }
+        val txHashes = history.mapNotNull { it.get("tx_hash")?.asString }.distinct()
+
+        // Batch step 2: fetch all current-tx bodies in a single TLS connection
+        val txBatch = callWithFailoverBatch(
+            txHashes.map { "blockchain.transaction.get" to listOf(it, true) }
+        )
+        val txMap = txHashes.zip(txBatch)
+            .mapNotNull { (txId, result) -> result?.let { txId to it.asJsonObject } }
             .toMap()
 
-        // Collect all previous transaction IDs referenced by the inputs of our transactions
-        // (needed to determine whether a vin was funded by our address)
+        // Collect prev-TX IDs from inputs (needed to compute fromUs for outgoing detection)
         val prevTxIds = txMap.values
             .flatMap { tx ->
                 tx.getAsJsonArray("vin")
@@ -632,72 +1028,135 @@ class RavencoinPublicNode {
                     .orEmpty()
             }
             .distinct()
-
-        // Fetch previous transactions that are not already in txMap (avoid redundant fetches)
-        val prevTxMap = prevTxIds
             .filterNot { txMap.containsKey(it) }
-            .map { txId -> async { txId to fetchTransaction(txId) } }
-            .awaitAll()
-            .mapNotNull { (txId, tx) -> tx?.let { txId to it } }
-            .toMap()
 
-        history.mapNotNull { item ->
+        // Batch step 3: fetch all prev-tx bodies in a single TLS connection
+        val prevTxMap: Map<String, JsonObject> = if (prevTxIds.isNotEmpty()) {
+            val prevBatch = callWithFailoverBatch(
+                prevTxIds.map { "blockchain.transaction.get" to listOf(it, true) }
+            )
+            prevTxIds.zip(prevBatch)
+                .mapNotNull { (txId, result) -> result?.let { txId to it.asJsonObject } }
+                .toMap()
+        } else emptyMap()
+
+        return history.mapNotNull { item ->
             val txHash = item.get("tx_hash")?.asString ?: return@mapNotNull null
             val height = item.get("height")?.asInt ?: 0
             val tx = txMap[txHash] ?: return@mapNotNull null
 
-            // Compute how much the transaction sent to our address (sum of matching vout values)
-            var toUs = 0L
-            var toOthers = 0L
+            // Classify vout per wallet ownership across ALL owned addresses so
+            // "cycled" (change back to wallet) is not mis-classified as "sent".
+            var toUs = 0L        // vout back to any owned address (incl. change at currentIndex+1)
+            var toOthers = 0L    // vout to external addresses (true external send)
+            var totalVout = 0L
+            var incomingAssetName: String? = null
+            var incomingAssetAmount: Long = 0L
+            var outgoingAssetName: String? = null
+            var outgoingAssetAmount: Long = 0L
+            val incomingAssetNamesSet = LinkedHashSet<String>()
             tx.getAsJsonArray("vout")?.forEach { vout ->
                 try {
                     val obj = vout.asJsonObject
-                    // vout value is in RVN (floating-point); multiply by 1e8 to get satoshis
                     val valueSat = ((obj.get("value")?.asDouble ?: 0.0) * 1e8).toLong()
+                    totalVout += valueSat
                     val spk = obj.getAsJsonObject("scriptPubKey")
                     val addresses = spk?.getAsJsonArray("addresses")
-                    if (addresses?.any { it.asString == address } == true) toUs += valueSat
-                    else toOthers += valueSat
+                    val hex = spk?.get("hex")?.asString?.lowercase() ?: ""
+                    val byAddr = addresses?.any { it.asString in owned } == true
+                    val byHex = !byAddr && hex.isNotEmpty() && ownedHashes.any { hex.contains(it) }
+                    val ours = byAddr || byHex
+                    if (ours) toUs += valueSat else toOthers += valueSat
+
+                    // Detect asset payload (OP_RVN_ASSET) and tag it as incoming or
+                    // outgoing depending on whether the output is to one of our addresses.
+                    if (hex.contains("72766e")) {
+                        parseAssetPayload(hex)?.let { (name, amount) ->
+                            if (ours) {
+                                incomingAssetNamesSet.add(name)
+                                if (incomingAssetName == null) {
+                                    incomingAssetName = name; incomingAssetAmount = amount
+                                }
+                            } else {
+                                if (outgoingAssetName == null) {
+                                    outgoingAssetName = name; outgoingAssetAmount = amount
+                                }
+                            }
+                        }
+                    }
                 } catch (_: Exception) {}
             }
 
-            // Compute how much was spent from our address (sum of vin values where we owned the output)
-            var fromUs = 0L
+            var fromUs = 0L      // prev-vout value consumed from our inputs
+            var totalVin = 0L    // total input value (all vin, regardless of ownership)
             tx.getAsJsonArray("vin")?.forEach { vin ->
                 try {
                     val vinObj = vin.asJsonObject
                     val prevTxId = vinObj.get("txid")?.asString ?: return@forEach
                     val prevVoutIdx = vinObj.get("vout")?.asInt ?: return@forEach
-                    // Look up the previous transaction in both caches
                     val prevTx = txMap[prevTxId] ?: prevTxMap[prevTxId] ?: return@forEach
                     val prevVoutObj = prevTx.getAsJsonArray("vout")
                         ?.mapNotNull { try { it.asJsonObject } catch (_: Exception) { null } }
                         ?.getOrNull(prevVoutIdx) ?: return@forEach
                     val prevValueSat = ((prevVoutObj.get("value")?.asDouble ?: 0.0) * 1e8).toLong()
+                    totalVin += prevValueSat
                     val prevSpk = prevVoutObj.getAsJsonObject("scriptPubKey")
                     val prevAddresses = prevSpk?.getAsJsonArray("addresses")
-                    // Only count this input as "from us" if the previous output was ours
-                    if (prevAddresses?.any { it.asString == address } == true) fromUs += prevValueSat
+                    val prevByAddr = prevAddresses?.any { it.asString in owned } == true
+                    val prevByHex = if (!prevByAddr) {
+                        val hex = prevSpk?.get("hex")?.asString?.lowercase() ?: ""
+                        hex.isNotEmpty() && ownedHashes.any { hex.contains(it) }
+                    } else false
+                    if (prevByAddr || prevByHex) fromUs += prevValueSat
                 } catch (_: Exception) {}
             }
 
-            // Net from our perspective: positive = received, negative = sent
             val netSat = toUs - fromUs
             val confs = when {
-                height <= 0 -> 0  // unconfirmed
+                height <= 0 -> 0
                 currentHeight >= height -> currentHeight - height + 1
                 else -> 0
             }
-            // Prefer "blocktime" (set when mined) over "time" (set when first seen in mempool)
-            val timestamp = tx.get("time")?.asLong ?: tx.get("blocktime")?.asLong ?: 0L
+            val timestamp = tx.get("blocktime")?.asLong ?: tx.get("time")?.asLong ?: 0L
+            // Fee only attributable to us when we contributed inputs.
+            val feeSat = if (fromUs > 0L && totalVin > totalVout) totalVin - totalVout else 0L
+            // Asset transfers can ride on a 0-sat dust output (Ravencoin allows this when
+            // the receiving address is also paid via a separate RVN output in the same tx).
+            // Include "asset to non-owned address" as outgoing even when toOthers == 0.
+            val isOutgoing = fromUs > 0L && (toOthers > 0L || outgoingAssetName != null)
+            val isSelfTransfer = fromUs > 0L && !isOutgoing && toUs > 0L
+            // The scripthash query returned this tx, so our address is involved in
+            // some way the parser may have missed (asset OP_RVN_ASSET script with
+            // no addresses[] and no inner hash160 hex match — happens on some
+            // ElectrumX server variants). Treat as incoming when nothing else
+            // tagged it as outgoing or self.
+            val isHiddenIncoming = !isOutgoing && !isSelfTransfer && fromUs == 0L && toUs == 0L
             TxHistoryEntry(
                 txid = txHash,
                 height = height,
                 confirmations = confs,
                 amountSat = if (netSat > 0) netSat else 0L,
-                sentSat = if (netSat < 0) -netSat else 0L,
-                isIncoming = netSat > 0,
-                timestamp = timestamp
+                sentSat = if (isOutgoing) toOthers else 0L,
+                cycledSat = if (isOutgoing || isSelfTransfer) toUs else 0L,
+                feeSat = feeSat,
+                isIncoming = (netSat > 0 && !isOutgoing) || isHiddenIncoming,
+                isSelfTransfer = isSelfTransfer,
+                timestamp = timestamp,
+                // For outgoing tx, prefer the asset sent to others; for incoming, the
+                // asset received. Self-transfer reports the cycled asset name.
+                assetName = when {
+                    isOutgoing && outgoingAssetName != null -> outgoingAssetName
+                    incomingAssetName != null -> incomingAssetName
+                    isOutgoing -> outgoingAssetName
+                    else -> null
+                },
+                assetAmount = when {
+                    isOutgoing && outgoingAssetName != null -> outgoingAssetAmount
+                    incomingAssetName != null -> incomingAssetAmount
+                    isOutgoing -> outgoingAssetAmount
+                    else -> 0L
+                },
+                incomingAssetNames = incomingAssetNamesSet.toList()
             )
         }
     }
@@ -709,13 +1168,208 @@ class RavencoinPublicNode {
      * @param address Ravencoin P2PKH address.
      * @return Total transaction count, or 0 on failure.
      */
-    suspend fun getTransactionCount(address: String): Int {
+    fun getTransactionCount(address: String): Int {
         val scripthash = addressToScripthash(address)
         return try {
             val history = callWithFailover("blockchain.scripthash.get_history", listOf(scripthash))
                 .asJsonArray
             history.size()
         } catch (_: Exception) { 0 }
+    }
+
+    /**
+     * D-23 lightweight paged history fetch used by the WalletScreen "Load more" button.
+     *
+     * Returns `TxHistoryEntry` shells (amount/sent fields = 0) so the UI can insert
+     * placeholder rows into [io.raventag.app.wallet.cache.TxHistoryDao] that are then
+     * enriched on the next authoritative refresh via [getTransactionHistory].
+     *
+     * Unlike [getTransactionHistory], this helper:
+     *   - Does NOT walk vin/vout to compute amounts (expensive full tx decode).
+     *   - Reorders the list so mempool entries (height == 0) come first, then confirmed
+     *     rows sorted by height DESC (newest-first).
+     *   - Slices `[offset, offset + limit)` client-side.
+     *   - Swallows exceptions and returns `emptyList()` so the Load more path is resilient.
+     *
+     * @param address Ravencoin P2PKH address.
+     * @param offset  Zero-based offset into the newest-first ordered list.
+     * @param limit   Max rows to return (default 20 per UI-SPEC Load more).
+     * @return List of shell [TxHistoryEntry] rows; empty on any failure.
+     */
+    suspend fun getHistoryPaged(
+        address: String,
+        offset: Int,
+        limit: Int = 20
+    ): List<TxHistoryEntry> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        try {
+            val scripthash = addressToScripthash(address)
+            // Batch: fetch tip height + history in one TLS connection, same pattern as getTransactionHistory.
+            val batch = callWithFailoverBatch(listOf(
+                "blockchain.headers.subscribe" to emptyList<Any>(),
+                "blockchain.scripthash.get_history" to listOf(scripthash)
+            ))
+            val currentHeight = try {
+                batch.getOrNull(0)?.asJsonObject?.get("height")?.asInt ?: 0
+            } catch (_: Exception) { 0 }
+            val raw = try {
+                batch.getOrNull(1)?.asJsonArray
+            } catch (_: Exception) { null }
+                ?: return@withContext emptyList<TxHistoryEntry>()
+
+            val ordered = raw
+                .mapNotNull { try { it.asJsonObject } catch (_: Exception) { null } }
+                .sortedWith(Comparator { a, b ->
+                    val ha = a.get("height")?.asInt ?: 0
+                    val hb = b.get("height")?.asInt ?: 0
+                    // mempool (<=0) sorts first, then confirmed by height DESC
+                    val ka = if (ha <= 0) Int.MAX_VALUE else ha
+                    val kb = if (hb <= 0) Int.MAX_VALUE else hb
+                    kb.compareTo(ka)
+                })
+                .drop(offset.coerceAtLeast(0))
+                .take(limit.coerceAtLeast(0))
+
+            ordered.mapNotNull { item ->
+                val txHash = item.get("tx_hash")?.asString ?: return@mapNotNull null
+                val height = item.get("height")?.asInt ?: 0
+                val confirmations = if (height > 0 && currentHeight > 0) {
+                    (currentHeight - height + 1).coerceAtLeast(0)
+                } else 0
+                TxHistoryEntry(
+                    txid = txHash,
+                    height = height,
+                    confirmations = confirmations,
+                    amountSat = 0L,
+                    sentSat = 0L,
+                    isIncoming = false,
+                    isSelfTransfer = false,
+                    timestamp = 0L
+                )
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    /**
+     * Returns true if [address] has any transaction history on-chain.
+     *
+     * @param address Ravencoin P2PKH address.
+     * @return true if the address has at least one on-chain transaction.
+     */
+    fun hasHistory(address: String): Boolean {
+        val scripthash = addressToScripthash(address)
+        return try {
+            callWithFailover("blockchain.scripthash.get_history", listOf(scripthash))
+                .asJsonArray.size() > 0
+        } catch (_: Exception) { false }
+    }
+
+    /**
+     * Tri-state classification of a Ravencoin address for address rotation.
+     *
+     * - [NO_HISTORY]: address has never appeared on-chain (completely unused).
+     * - [RECEIVE_ONLY]: address has received funds but never signed a transaction,
+     *   so its public key has never been exposed on-chain (quantum-safe).
+     * - [HAS_OUTGOING]: address has signed at least one outgoing transaction,
+     *   exposing its public key on-chain (quantum-vulnerable).
+     *
+     * Detection heuristic: if the number of unspent outputs (UTXOs) is strictly
+     * less than the number of history entries, at least one UTXO was consumed,
+     * which requires a signature that reveals the public key.
+     */
+    enum class AddressStatus { NO_HISTORY, RECEIVE_ONLY, HAS_OUTGOING }
+
+    /**
+     * Batch variant of [getAddressStatus] for many addresses at once.
+     *
+     * Uses two pipelined batch calls:
+     *   1. `get_history` for all addresses to identify which have on-chain history.
+     *   2. `listunspent` only for the subset with history (to distinguish RECEIVE_ONLY from HAS_OUTGOING).
+     *
+     * With 20 addresses this replaces up to 40 individual TLS connections with 2.
+     *
+     * @param addresses List of Ravencoin P2PKH addresses.
+     * @return Map from address to [AddressStatus]; missing entries default to [AddressStatus.NO_HISTORY].
+     */
+    fun getAddressStatusBatch(addresses: List<String>): Map<String, AddressStatus> {
+        if (addresses.isEmpty()) return emptyMap()
+        val scripthashes = addresses.map { addressToScripthash(it) }
+
+        // Batch 1: history for all
+        val histReqs = scripthashes.map { sh ->
+            "blockchain.scripthash.get_history" to listOf(sh) as List<Any>
+        }
+        val histResps = callWithFailoverBatch(histReqs)
+
+        val result = mutableMapOf<String, AddressStatus>()
+        val histCounts = mutableMapOf<Int, Int>()
+        val needsUtxo = mutableListOf<Int>()
+
+        addresses.forEachIndexed { i, addr ->
+            val arr = histResps.getOrNull(i)
+            val n = if (arr != null && arr.isJsonArray) arr.asJsonArray.size() else 0
+            if (n == 0) result[addr] = AddressStatus.NO_HISTORY
+            else { histCounts[i] = n; needsUtxo.add(i) }
+        }
+
+        if (needsUtxo.isEmpty()) return result
+
+        // Batch 2: get_balance(asset=true) for all addresses with history.
+        // Using balance instead of listunspent because listunspent is RVN-only —
+        // an address that received only an asset (and zero RVN dust) would otherwise
+        // report 0 UTXOs while having 1 history entry, mis-classifying it as HAS_OUTGOING.
+        // Balance with asset flag detects asset funds correctly.
+        val balReqs = needsUtxo.map { i ->
+            "blockchain.scripthash.get_balance" to listOf(scripthashes[i], true) as List<Any>
+        }
+        val balResps = callWithFailoverBatch(balReqs)
+
+        needsUtxo.forEachIndexed { j, i ->
+            val addr = addresses[i]
+            val resp = balResps.getOrNull(j)
+            val hasFunds = if (resp != null && resp.isJsonObject) {
+                val obj = resp.asJsonObject
+                val rvnSat = (try { obj.get("confirmed")?.asLong ?: 0L } catch (_: Exception) { 0L }) +
+                             (try { obj.get("unconfirmed")?.asLong ?: 0L } catch (_: Exception) { 0L })
+                var funds = rvnSat > 0
+                if (!funds) {
+                    for ((k, v) in obj.entrySet()) {
+                        if (k == "confirmed" || k == "unconfirmed") continue
+                        try {
+                            val a = v.asJsonObject
+                            val sat = (a.get("confirmed")?.asLong ?: 0L) + (a.get("unconfirmed")?.asLong ?: 0L)
+                            if (sat > 0) { funds = true; break }
+                        } catch (_: Exception) {}
+                    }
+                }
+                funds
+            } else {
+                // Conservative: if balance call failed, assume funds present so we don't
+                // wrongly advance the index. The next sync will re-evaluate.
+                true
+            }
+            result[addr] = if (hasFunds) AddressStatus.RECEIVE_ONLY else AddressStatus.HAS_OUTGOING
+        }
+
+        return result
+    }
+
+    /**
+     * Classifies [address] as unused, receive-only, or has-outgoing.
+     * Makes at most 2 ElectrumX calls (history + listunspent).
+     */
+    fun getAddressStatus(address: String): AddressStatus {
+        val scripthash = addressToScripthash(address)
+        val history = try {
+            callWithFailover("blockchain.scripthash.get_history", listOf(scripthash)).asJsonArray
+        } catch (_: Exception) { return AddressStatus.NO_HISTORY }
+        if (history.size() == 0) return AddressStatus.NO_HISTORY
+        val utxos = try {
+            callWithFailover("blockchain.scripthash.listunspent", listOf(scripthash)).asJsonArray
+        } catch (_: Exception) { return AddressStatus.RECEIVE_ONLY }
+        return if (utxos.size() < history.size()) AddressStatus.HAS_OUTGOING
+               else AddressStatus.RECEIVE_ONLY
     }
 
     // Internal helpers ────────────────────────────────────────────────────────
@@ -756,6 +1410,75 @@ class RavencoinPublicNode {
                 else -> false
             }
         }.getOrDefault(false)
+    }
+
+    /**
+     * Parse asset name and raw amount from an on-chain OP_RVN_ASSET scriptPubKey hex.
+     *
+     * Works on transfer scripts ("rvnt" marker, has 8-byte LE amount) and owner-token
+     * scripts ("rvno" marker, no amount field, always 100_000_000 raw units).
+     * Returns null if the script is not a recognised asset script or if parsing fails.
+     *
+     * Hex layout after the P2PKH prefix (...88acc0):
+     *   <push_byte>  "rvnt"|"rvno"  <1-byte name len>  <name bytes>  [<amount LE64>]
+     */
+    private fun parseAssetFromScript(scriptHex: String): Pair<String, Long>? {
+        return try {
+            val idx = scriptHex.indexOf("88acc0")
+            if (idx < 0 || idx % 2 != 0) return null
+            // Byte position just after the 3-byte marker
+            var pos = idx / 2 + 3
+            if (pos * 2 + 2 > scriptHex.length) return null
+            val pushByte = scriptHex.substring(pos * 2, pos * 2 + 2).toInt(16)
+            pos++
+            val payloadLen = when {
+                pushByte in 1..75 -> pushByte
+                pushByte == 0x4c -> {   // OP_PUSHDATA1
+                    if (pos * 2 + 2 > scriptHex.length) return null
+                    val len = scriptHex.substring(pos * 2, pos * 2 + 2).toInt(16)
+                    pos++
+                    len
+                }
+                pushByte == 0x4d -> {   // OP_PUSHDATA2
+                    if (pos * 2 + 4 > scriptHex.length) return null
+                    // 2 bytes LE
+                    val low = scriptHex.substring(pos * 2, pos * 2 + 2).toInt(16)
+                    val high = scriptHex.substring(pos * 2 + 2, pos * 2 + 4).toInt(16)
+                    pos += 2
+                    (high shl 8) or low
+                }
+                else -> return null
+            }
+            val dataEnd = pos + payloadLen
+            if (dataEnd * 2 > scriptHex.length || payloadLen < 6) return null
+            // 4-byte type marker
+            val marker = buildString {
+                for (i in 0..3) append(scriptHex.substring((pos + i) * 2, (pos + i) * 2 + 2).toInt(16).toChar())
+            }
+            val isTransfer = marker == "rvnt"
+            val isOwner    = marker == "rvno"
+            val isIssue    = marker == "rvnq"
+            val isReissue  = marker == "rvnr"
+            if (!isTransfer && !isOwner && !isIssue && !isReissue) return null
+            var p = pos + 4
+            // compact_size name length (1 byte; names are always < 253 chars)
+            val nameLen = scriptHex.substring(p * 2, p * 2 + 2).toInt(16)
+            p++
+            if ((p + nameLen) * 2 > scriptHex.length) return null
+            val assetName = buildString {
+                for (i in 0 until nameLen) append(scriptHex.substring((p + i) * 2, (p + i) * 2 + 2).toInt(16).toChar())
+            }
+            p += nameLen
+            val rawAmount: Long = if (isOwner) {
+                100_000_000L
+            } else {
+                if ((p + 8) * 2 > scriptHex.length) return null
+                var amt = 0L
+                for (i in 0..7) amt = amt or (scriptHex.substring((p + i) * 2, (p + i) * 2 + 2).toLong(16) shl (8 * i))
+                amt
+            }
+            Pair(assetName, rawAmount)
+        } catch (_: Exception) { null }
     }
 
     /**
@@ -872,7 +1595,7 @@ class RavencoinPublicNode {
      * @param address Ravencoin P2PKH address.
      * @return Lowercase hex-encoded reversed SHA-256 of the scriptPubKey.
      */
-    private fun addressToScripthash(address: String): String {
+    internal fun addressToScripthash(address: String): String {
         val decoded = base58Decode(address)
         require(decoded.size == 25) { "Invalid Ravencoin address (decoded=${decoded.size} bytes)" }
         val hash160 = decoded.copyOfRange(1, 21)
@@ -920,6 +1643,54 @@ class RavencoinPublicNode {
      * @return Raw byte array.
      * @throws IllegalArgumentException if the string contains an invalid character.
      */
+    /**
+     * Parse a Ravencoin OP_RVN_ASSET payload from a scriptPubKey hex string.
+     * Returns (assetName, rawAmount) when the script carries a transfer/issue/owner
+     * marker, null otherwise. Amount is the on-chain integer (sats * 10^divisions).
+     */
+    private fun parseAssetPayload(hex: String): Pair<String, Long>? {
+        // "rvn" magic prefix in hex = 72 76 6e
+        var i = hex.indexOf("72766e")
+        while (i >= 0) {
+            // After "rvn" comes a 1-byte type marker: t=transfer, q=issue, o=owner, r=reissue.
+            val typeIdx = i + 6
+            if (typeIdx + 2 > hex.length) return null
+            val type = hex.substring(typeIdx, typeIdx + 2)
+            if (type !in setOf("74", "71", "6f", "72")) {
+                i = hex.indexOf("72766e", i + 1); continue
+            }
+            // After the type byte, 1 byte = name length (hex pair).
+            val lenIdx = typeIdx + 2
+            if (lenIdx + 2 > hex.length) return null
+            val nameLen = hex.substring(lenIdx, lenIdx + 2).toIntOrNull(16) ?: return null
+            if (nameLen <= 0 || nameLen > 32) {
+                i = hex.indexOf("72766e", i + 1); continue
+            }
+            val nameStart = lenIdx + 2
+            val nameEnd = nameStart + nameLen * 2
+            if (nameEnd > hex.length) return null
+            val nameBytes = ByteArray(nameLen) { k ->
+                hex.substring(nameStart + k * 2, nameStart + k * 2 + 2).toInt(16).toByte()
+            }
+            val name = String(nameBytes, Charsets.US_ASCII)
+            if (!name.all { it.isLetterOrDigit() || it in "/#_-." }) {
+                i = hex.indexOf("72766e", i + 1); continue
+            }
+            // Owner tokens (rvno) carry no amount — return amount 0.
+            if (type == "6f") return name to 0L
+            // For transfer / issue / reissue, 8 bytes amount little-endian follow.
+            val amtEnd = nameEnd + 16
+            if (amtEnd > hex.length) return name to 0L
+            var amount = 0L
+            for (b in 0 until 8) {
+                val byteHex = hex.substring(nameEnd + b * 2, nameEnd + b * 2 + 2)
+                amount = amount or ((byteHex.toLong(16) and 0xff) shl (b * 8))
+            }
+            return name to amount
+        }
+        return null
+    }
+
     private fun base58Decode(input: String): ByteArray {
         var num = BigInteger.ZERO
         for (char in input) {
@@ -951,16 +1722,160 @@ class RavencoinPublicNode {
      * @throws Exception listing all server errors if every server fails.
      */
     private fun callWithFailover(method: String, params: List<Any>): com.google.gson.JsonElement {
+        io.raventag.app.wallet.health.NodeHealthMonitor.init(context)
         val errors = mutableListOf<String>()
-        for (server in SERVERS) {
+        var lastError: Throwable? = null
+        repeat(SERVERS.size) {
+            val candidate = io.raventag.app.wallet.health.NodeHealthMonitor.nextHealthyNode()
+                ?: throw AllNodesUnreachableException()
+            val (host, portStr) = candidate.split(":", limit = 2)
+            val port = portStr.toInt()
+            val server = ElectrumServer(host, port)
             try {
-                return call(server, method, params)
+                val result = call(server, method, params)
+                io.raventag.app.wallet.health.NodeHealthMonitor.reportSuccess(candidate)
+                return result
             } catch (e: Exception) {
+                lastError = e
                 Log.w(TAG, "Server ${server.host} failed for $method: ${e.message}")
                 errors.add("${server.host}: ${e.message}")
+                if (isTofuMismatch(e)) {
+                    io.raventag.app.wallet.health.NodeHealthMonitor.reportTofuMismatch(candidate)
+                } else {
+                    io.raventag.app.wallet.health.NodeHealthMonitor.reportFailure(
+                        candidate,
+                        e.javaClass.simpleName
+                    )
+                }
             }
         }
-        throw Exception("All ElectrumX servers failed for $method: ${errors.joinToString("; ")}")
+        throw lastError
+            ?: Exception("All ElectrumX servers failed for $method: ${errors.joinToString("; ")}")
+    }
+
+    /**
+     * Detects the TofuTrustManager cert-mismatch exception.
+     *
+     * TofuTrustManager throws a plain Exception with message
+     * "Certificate mismatch for <host>: expected <a>, got <b>" on a pinned
+     * cert change. Some TLS stacks wrap this in a CertificateException. We
+     * match both so NodeHealthMonitor can write the 1h quarantine row.
+     */
+    private fun isTofuMismatch(e: Throwable): Boolean {
+        if (e is java.security.cert.CertificateException) return true
+        val m = e.message ?: return false
+        return m.contains("Certificate mismatch", ignoreCase = true) ||
+            m.contains("fingerprint mismatch", ignoreCase = true) ||
+            m.contains("TOFU", ignoreCase = true)
+    }
+
+    /**
+     * Executes multiple JSON-RPC calls in a single TLS connection using ElectrumX pipelining.
+     *
+     * Sends all requests at once after the server.version handshake, then reads all responses
+     * matching them back to their requests via the JSON-RPC "id" field. This eliminates the
+     * per-call TCP+TLS handshake overhead: N calls cost 1 connection instead of N connections.
+     *
+     * Large batches are chunked at [BATCH_CHUNK_SIZE] to bound per-chunk socket timeout.
+     *
+     * @param server   Target ElectrumX server.
+     * @param requests List of (method, params) pairs in any order.
+     * @return List of results in the same order as [requests]; null for each failed/errored request.
+     * @throws Exception on connection or TLS failure (triggers failover in [callWithFailoverBatch]).
+     */
+    private fun callBatch(
+        server: ElectrumServer,
+        requests: List<Pair<String, List<Any>>>
+    ): List<JsonElement?> {
+        if (requests.isEmpty()) return emptyList()
+        if (requests.size > BATCH_CHUNK_SIZE) {
+            return requests.chunked(BATCH_CHUNK_SIZE).flatMap { callBatch(server, it) }
+        }
+        val sslCtx = SSLContext.getInstance("TLS")
+        sslCtx.init(null, arrayOf(TofuTrustManager(context, server.host)), SecureRandom())
+        val rawSocket = java.net.Socket()
+        rawSocket.connect(InetSocketAddress(server.host, server.port), CONNECT_TIMEOUT_MS)
+        val sslSocket = sslCtx.socketFactory.createSocket(rawSocket, server.host, server.port, true) as SSLSocket
+        // Scale timeout with batch size so the last response has time to arrive
+        sslSocket.soTimeout = READ_TIMEOUT_MS + requests.size * 500
+        return sslSocket.use { sock ->
+            val writer = PrintWriter(sock.outputStream, true)
+            val reader = BufferedReader(InputStreamReader(sock.inputStream))
+            // Handshake
+            val hsId = idCounter.getAndIncrement()
+            writer.println("""{"id":$hsId,"method":"server.version","params":["RavenTag/1.0","1.4"]}""")
+            reader.readLine()
+            // Send all requests and remember id -> index mapping
+            val idToIndex = mutableMapOf<Int, Int>()
+            for ((index, req) in requests.withIndex()) {
+                val (method, params) = req
+                val id = idCounter.getAndIncrement()
+                idToIndex[id] = index
+                writer.println(gson.toJson(mapOf("id" to id, "method" to method, "params" to params)))
+            }
+            // Read all responses
+            val results = arrayOfNulls<JsonElement>(requests.size)
+            var received = 0
+            while (received < requests.size) {
+                val line = reader.readLine() ?: break
+                received++
+                try {
+                    val json = JsonParser.parseString(line).asJsonObject
+                    val id = json.get("id")?.asInt ?: continue
+                    val index = idToIndex[id] ?: continue
+                    val err = json.get("error")
+                    if (err != null && !err.isJsonNull) continue
+                    results[index] = json.get("result")
+                } catch (_: Exception) {}
+            }
+            results.toList()
+        }
+    }
+
+    /**
+     * Pipelined multi-call with automatic server failover.
+     *
+     * Tries each server in [SERVERS] order. Returns a null-filled list only when
+     * every server fails (network unreachable or all timeout). Individual request
+     * errors within a successful batch are represented as null entries.
+     *
+     * @param requests List of (method, params) pairs.
+     * @return Results in the same order as [requests]; null per failed request.
+     */
+    private fun callWithFailoverBatch(requests: List<Pair<String, List<Any>>>): List<JsonElement?> {
+        if (requests.isEmpty()) return emptyList()
+        io.raventag.app.wallet.health.NodeHealthMonitor.init(context)
+        repeat(SERVERS.size) {
+            val candidate = io.raventag.app.wallet.health.NodeHealthMonitor.nextHealthyNode()
+                ?: run {
+                    Log.w(TAG, "All nodes quarantined for batch of ${requests.size} — falling back to per-request singles")
+                    // Sequential single-RPC fallback: slower but resilient when batch
+                    // pipelining fails on every server (common on flaky mobile networks
+                    // where the first batch hits a TLS race that closes the socket).
+                    return requests.map { (method, params) ->
+                        try { callWithFailover(method, params) } catch (_: Exception) { null }
+                    }
+                }
+            val (host, portStr) = candidate.split(":", limit = 2)
+            val server = ElectrumServer(host, portStr.toInt())
+            try {
+                val result = callBatch(server, requests)
+                io.raventag.app.wallet.health.NodeHealthMonitor.reportSuccess(candidate)
+                return result
+            } catch (e: Exception) {
+                Log.w(TAG, "Server ${server.host} failed for batch(${requests.size}): ${e.message}")
+                if (isTofuMismatch(e)) {
+                    io.raventag.app.wallet.health.NodeHealthMonitor.reportTofuMismatch(candidate)
+                } else {
+                    io.raventag.app.wallet.health.NodeHealthMonitor.reportFailure(
+                        candidate,
+                        e.javaClass.simpleName
+                    )
+                }
+            }
+        }
+        Log.w(TAG, "All servers failed for batch of ${requests.size} requests")
+        return List(requests.size) { null }
     }
 
     /**
@@ -986,7 +1901,7 @@ class RavencoinPublicNode {
     private fun call(server: ElectrumServer, method: String, params: List<Any>): com.google.gson.JsonElement {
         // Create a TLS context with TOFU certificate validation for this server
         val sslCtx = SSLContext.getInstance("TLS")
-        sslCtx.init(null, arrayOf(TofuTrustManager(server.host)), SecureRandom())
+        sslCtx.init(null, arrayOf(TofuTrustManager(context, server.host)), SecureRandom())
 
         // Connect TCP first with the connect timeout, then upgrade to TLS
         val rawSocket = java.net.Socket()
@@ -1017,41 +1932,86 @@ class RavencoinPublicNode {
             return json.get("result") ?: throw Exception("Null result from ${server.host}")
         }
     }
+}
+
+/**
+ * D-19 three-value accounting helpers. Pure functions: no network, no storage,
+ * safe to unit-test in isolation.
+ *
+ * Semantics operate on a raw JSON transaction object returned by
+ * `blockchain.transaction.get` with verbose=true, i.e. an object with a `vout`
+ * array of `{ value: Double (RVN), scriptPubKey: { addresses: [...] } }` entries.
+ *
+ * Two concepts:
+ *  - "cycled" = outputs paying the wallet's change/consolidation address (never-spent
+ *    address at currentIndex + 1). This is the RVN that remains under the user's control
+ *    after an outgoing send.
+ *  - "sent"   = outputs paying ANY address != changeAddress. For self-transfers
+ *    (pure consolidations) this returns 0.
+ */
+object RavencoinTxHistoryMath {
+
+    private const val SAT_PER_RVN = 100_000_000L
 
     /**
-     * TOFU (Trust On First Use) TrustManager for ElectrumX self-signed TLS certificates.
-     *
-     * Standard certificate authority validation is not used because ElectrumX servers
-     * commonly use self-signed certificates. TOFU provides a practical security model:
-     *
-     * - First connection to a host: the server's SHA-256 fingerprint is computed from
-     *   the raw DER-encoded certificate bytes and stored in the in-process [certCache].
-     *   The connection is allowed.
-     * - Subsequent connections to the same host: the fingerprint is verified against
-     *   the cached value. If it differs, the connection is rejected with an exception
-     *   to protect against man-in-the-middle attacks.
-     *
-     * Limitation: the cache is not persisted, so a certificate change across process
-     * restarts is silently accepted (pinned fresh). This is an acceptable trade-off
-     * for a mobile wallet that rotates processes frequently.
-     *
-     * @param host Hostname of the ElectrumX server, used as the cache key.
+     * Sum (in satoshis) of vout entries whose scriptPubKey.addresses contains
+     * [changeAddress]. Malformed entries contribute 0.
      */
-    private class TofuTrustManager(private val host: String) : X509TrustManager {
-        override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
-        override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
-        override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {
-            val cert = chain?.firstOrNull() ?: throw Exception("No certificate from $host")
-            // Compute SHA-256 fingerprint of the raw DER-encoded certificate
-            val fingerprint = MessageDigest.getInstance("SHA-256").digest(cert.encoded)
-                .joinToString("") { "%02x".format(it) }
-            // putIfAbsent returns the existing value if already pinned, or null if this is the first pin
-            val existing = certCache.putIfAbsent(host, fingerprint)
-            if (existing != null && existing != fingerprint) {
-                // Certificate changed since last pin: possible MITM, reject immediately
-                throw Exception("Certificate mismatch for $host: expected $existing, got $fingerprint")
+    fun computeCycledSat(
+        tx: com.google.gson.JsonObject,
+        changeAddress: String
+    ): Long {
+        val vout = try { tx.getAsJsonArray("vout") } catch (_: Exception) { null }
+            ?: return 0L
+        var total = 0L
+        for (element in vout) {
+            try {
+                val out = element.asJsonObject
+                val addresses = out
+                    .getAsJsonObject("scriptPubKey")
+                    ?.getAsJsonArray("addresses")
+                    ?: continue
+                val hasChange = addresses.any { it.asString == changeAddress }
+                if (hasChange) {
+                    val rvn = out.get("value")?.asDouble ?: 0.0
+                    total += (rvn * SAT_PER_RVN).toLong()
+                }
+            } catch (_: Exception) {
+                // skip malformed output
             }
-            if (existing == null) Log.i(TAG, "TOFU: pinned $host")
         }
+        return total
+    }
+
+    /**
+     * Sum (in satoshis) of vout entries whose scriptPubKey.addresses contains
+     * AT LEAST ONE address != [changeAddress]. Conservative: multi-sig outputs
+     * with any non-change leg are counted as "sent" for their full value.
+     * Malformed entries contribute 0.
+     */
+    fun computeSentSat(
+        tx: com.google.gson.JsonObject,
+        changeAddress: String
+    ): Long {
+        val vout = try { tx.getAsJsonArray("vout") } catch (_: Exception) { null }
+            ?: return 0L
+        var total = 0L
+        for (element in vout) {
+            try {
+                val out = element.asJsonObject
+                val addresses = out
+                    .getAsJsonObject("scriptPubKey")
+                    ?.getAsJsonArray("addresses")
+                    ?: continue
+                val external = addresses.any { it.asString != changeAddress }
+                if (external) {
+                    val rvn = out.get("value")?.asDouble ?: 0.0
+                    total += (rvn * SAT_PER_RVN).toLong()
+                }
+            } catch (_: Exception) {
+                // skip malformed output
+            }
+        }
+        return total
     }
 }

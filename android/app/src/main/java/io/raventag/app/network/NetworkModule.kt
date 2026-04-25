@@ -66,9 +66,11 @@ object NetworkModule {
 
         return OkHttpClient.Builder()
             .cache(cache)
+            // D-10: single canonical timeout pair for all HTTP traffic
+            // (ElectrumX TLS sockets have their own per-socket timeouts).
             .connectTimeout(10, TimeUnit.SECONDS)
-            .readTimeout(15, TimeUnit.SECONDS)
-            .writeTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(20, TimeUnit.SECONDS)
+            .writeTimeout(20, TimeUnit.SECONDS)
             // Use a browser-like User-Agent: public IPFS gateways (ipfs.io, cloudflare)
             // block requests with the default okhttp/* user agent.
             .addInterceptor { chain ->
@@ -82,8 +84,8 @@ object NetworkModule {
             .followRedirects(true)
             .followSslRedirects(true)
             .dispatcher(okhttp3.Dispatcher().apply {
-                maxRequests = 50
-                maxRequestsPerHost = 20
+                maxRequests = 100
+                maxRequestsPerHost = 50
             })
             .build()
     }

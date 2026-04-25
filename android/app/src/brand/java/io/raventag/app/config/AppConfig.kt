@@ -24,4 +24,40 @@ object AppConfig {
 
     /** Whether the Settings screen shows the admin/brand configuration fields */
     const val SHOW_BRAND_SETTINGS = true
+
+    /**
+     * D-09: Hardcoded public ElectrumX fallback pool. Round-robin via
+     * [io.raventag.app.wallet.health.NodeHealthMonitor].
+     *
+     * Researched 2026-04 from:
+     *   - github.com/Electrum-RVN-SIG/electrum-ravencoin servers.json (3 hosts)
+     *   - rvn4lyfe.com operator-hosted (confirms 4th host 51.222.139.25)
+     *
+     * Note: "rvn-dashboard.com" may rotate off SSL in the future; quarantine
+     * handles silently (D-11, 1h quarantine on TOFU mismatch). If a future
+     * community list expands coverage, add hosts here (no user-configurable
+     * list in v1, deferred to a later "power user" phase).
+     *
+     * Current count: 4 (marginal per RESEARCH Pitfall 8; a single cert
+     * rotation leaves 3 operational which is acceptable for D-09).
+     */
+    val ELECTRUM_SERVERS: List<Pair<String, Int>> = listOf(
+        // Verified live (probed via server.version + headers.subscribe). The bare
+        // IPs that used to live here pointed to the same hosts as the rvn4lyfe.com /
+        // rvn-dashboard.com domains and were dropped after the cert rotation. Cipig
+        // (KomodoPlatform) operates the three "rvn.electrumN.cipig.net" mirrors
+        // and they are listed in coins_config.json.
+        "rvn4lyfe.com" to 50002,
+        "rvn-dashboard.com" to 50002,
+        "rvn.electrum1.cipig.net" to 20051,
+        "rvn.electrum2.cipig.net" to 20051,
+        "rvn.electrum3.cipig.net" to 20051,
+    )
+
+    /**
+     * Block explorer URL prefix for Ravencoin transactions (D-19).
+     * Appending a txid yields a browsable transaction page, e.g. `${EXPLORER_URL}<txid>`.
+     * Verified 2026-04 against Ravencoin mainnet (community explorer).
+     */
+    const val EXPLORER_URL: String = "https://ravencoin.network/tx/"
 }

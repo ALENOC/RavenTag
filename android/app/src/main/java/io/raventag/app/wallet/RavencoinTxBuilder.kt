@@ -104,6 +104,18 @@ object RavencoinTxBuilder {
     /** Hex-encoded raw transaction and its txid (both in display/broadcast form). */
     data class SignedTx(val hex: String, val txid: String)
 
+    /**
+     * A RVN UTXO paired with the signing key for its address.
+     * Used when a transaction spans inputs from multiple HD addresses.
+     */
+    data class KeyedUtxo(val utxo: Utxo, val privKey: ByteArray, val pubKey: ByteArray)
+
+    /**
+     * An asset UTXO paired with the signing key for its address.
+     * Used when a transaction spans inputs from multiple HD addresses.
+     */
+    data class KeyedAssetUtxo(val assetUtxo: AssetUtxo, val privKey: ByteArray, val pubKey: ByteArray)
+
     // ── Public API: RVN transfer ──────────────────────────────────────────────
 
     /**
@@ -247,7 +259,404 @@ object RavencoinTxBuilder {
         return SignedTx(raw.toHex(), txid)
     }
 
+    // ── Public API: multi-asset transfer (post-quantum safe) ─────────────────
+
+    /**
+     * A single asset output in a multi-asset transfer transaction.
+     *
+     * @param assetName   Name of the asset (e.g. "BRAND/ITEM#SN001")
+     * @param rawAmount   Raw asset amount (display_amount * 10^8)
+     * @param toAddress   Recipient Ravencoin address
+     */
+    data class AssetOutput(
+        val assetName: String,
+        val rawAmount: Long,
+        val toAddress: String
+    )
+
+    /**
+     * Build and sign a Ravencoin multi-asset transfer transaction with post-quantum protection.
+     *
+     * This method transfers MULTIPLE different assets in a SINGLE transaction:
+     *   - The primary asset goes to an external destination address
+     *   - ALL other remaining assets go to a fresh address (currentIndex + 1)
+     *   - ALL remaining RVN goes to the fresh address (currentIndex + 1)
+     *
+     * This ensures the current address is completely emptied in one atomic
+     * transaction, preserving post-quantum security.
+     *
+     * Output order (Ravencoin consensus: P2PKH before OP_RVN_ASSET):
+     *   1. RVN change to [changeAddress] (omitted if below dust limit)
+     *   2. Primary asset output to [primaryAssetOutput]
+     *   3. Primary asset change (if partial transfer)
+     *   4. All other asset outputs to [changeAddress]
+     *
+     * @param primaryAssetUtxos  UTXOs carrying the primary asset being transferred externally
+     * @param otherAssetUtxos    Map of other asset names to their AssetUtxos (all go to changeAddress)
+     * @param rvnUtxos           RVN-only UTXOs for fee coverage
+     * @param primaryAssetOutput Primary asset output (name, amount, external destination)
+     * @param primaryAssetChange Amount of primary asset to return to changeAddress (0 for full transfer)
+     * @param feeSat             Miner fee in satoshis
+     * @param changeAddress      Fresh address that receives all remaining assets and RVN
+     * @param privKeyBytes       Raw 32-byte private key
+     * @param pubKeyBytes        Compressed 33-byte public key
+     * @return [SignedTx] ready to broadcast
+     */
+    fun buildAndSignMultiAssetTransfer(
+        primaryAssetUtxos: List<Utxo>,
+        otherAssetUtxos: Map<String, List<AssetUtxo>>,
+        rvnUtxos: List<Utxo>,
+        primaryAssetOutput: AssetOutput,
+        primaryAssetChange: Long,
+        feeSat: Long,
+        changeAddress: String,
+        privKeyBytes: ByteArray,
+        pubKeyBytes: ByteArray
+    ): SignedTx {
+        // Calculate input dust for each asset type to preserve value balance
+        val primaryAssetDustIn = primaryAssetUtxos.sumOf { it.satoshis }
+
+        // Dust amounts: 0 if input had 0 satoshis, otherwise 600 per output
+        val dustForPrimaryRecipient = if (primaryAssetDustIn > 0) 600L else 0L
+        val dustForPrimaryChange = if (primaryAssetChange > 0 && primaryAssetDustIn > 0) 600L else 0L
+
+        // Calculate dust for other assets and build output list
+        val otherAssetOutputs = mutableListOf<AssetOutput>()
+        var dustForOtherAssets = 0L
+        for ((assetName, utxos) in otherAssetUtxos) {
+            val totalRawAmount = utxos.sumOf { it.assetRawAmount }
+            if (totalRawAmount > 0) {
+                otherAssetOutputs.add(AssetOutput(assetName, totalRawAmount, changeAddress))
+                val inputDust = utxos.sumOf { it.utxo.satoshis }
+                if (inputDust > 0) dustForOtherAssets += 600L
+            }
+        }
+
+        // RVN change from RVN-only inputs after fee and dust
+        val rvnFromRvnUtxosOnly = rvnUtxos.sumOf { it.satoshis }
+        val totalDustForAssetOutputs = dustForPrimaryRecipient + dustForPrimaryChange + dustForOtherAssets
+
+        val rvnChange = rvnFromRvnUtxosOnly - feeSat - totalDustForAssetOutputs
+        require(rvnChange >= 0 || (rvnFromRvnUtxosOnly >= feeSat)) {
+            "Insufficient RVN for fee and dust: have ${rvnFromRvnUtxosOnly / 1e8} RVN, " +
+            "need ${feeSat / 1e8} RVN fee + ${totalDustForAssetOutputs / 1e8} RVN dust"
+        }
+
+        // Combine all inputs: primary asset + other assets + RVN
+        val allInputs = mutableListOf<Utxo>()
+        allInputs.addAll(primaryAssetUtxos)
+        otherAssetUtxos.values.forEach { allInputs.addAll(it.map { au -> au.utxo }) }
+        allInputs.addAll(rvnUtxos)
+
+        // Build outputs in consensus order: P2PKH first, then OP_RVN_ASSET
+        val outputs = mutableListOf<ScriptedOutput>()
+
+        // 1. RVN change (P2PKH)
+        val effectiveRvnChange = if (rvnChange > 546) rvnChange else 0L
+        if (effectiveRvnChange > 0) {
+            outputs.add(ScriptedOutput(effectiveRvnChange, p2pkhScript(changeAddress)))
+        }
+
+        // 2. Primary asset to external destination
+        outputs.add(ScriptedOutput(dustForPrimaryRecipient,
+            buildAssetTransferScript(primaryAssetOutput.toAddress, primaryAssetOutput.assetName, primaryAssetOutput.rawAmount)))
+
+        // 3. Primary asset change (if partial transfer)
+        if (primaryAssetChange > 0) {
+            outputs.add(ScriptedOutput(dustForPrimaryChange,
+                buildAssetTransferScript(changeAddress, primaryAssetOutput.assetName, primaryAssetChange)))
+        }
+
+        // 4. All other assets to changeAddress
+        for (assetOutput in otherAssetOutputs) {
+            val inputDust = otherAssetUtxos[assetOutput.assetName]?.sumOf { it.utxo.satoshis } ?: 0L
+            val dustForThisOutput = if (inputDust > 0) 600L else 0L
+            outputs.add(ScriptedOutput(dustForThisOutput,
+                buildAssetTransferScript(changeAddress, assetOutput.assetName, assetOutput.rawAmount)))
+        }
+
+        // Sign each input
+        val signatures = allInputs.mapIndexed { idx, utxo ->
+            val sigHash = sigHashWithScriptedOutputs(allInputs, outputs, idx, utxo.script)
+            signEcdsa(sigHash, privKeyBytes)
+        }
+
+        val raw = serializeTxWithScripts(allInputs, outputs, signatures, pubKeyBytes)
+        val txid = txid(raw)
+        return SignedTx(raw.toHex(), txid)
+    }
+
+    // ── Public API: multi-address asset transfer (post-quantum safe) ────────
+
+    /**
+     * Build and sign an asset transfer where inputs may span multiple HD addresses.
+     *
+     * Each input is signed with its own key pair so inputs from any combination of
+     * BIP44 derived addresses are supported. Typical use: the target asset lives on
+     * an old HAS_OUTGOING address while RVN for fees is on the current address.
+     *
+     * Output order (Ravencoin consensus: P2PKH before OP_RVN_ASSET):
+     *   1. RVN change to [changeAddress]
+     *   2. Primary asset to [primaryAsset.toAddress]
+     *   3. Primary asset change to [changeAddress] (omitted if full balance sent)
+     *   4. All other assets to [changeAddress]
+     *
+     * @param primaryAssetInputs  Keyed UTXOs for the asset being transferred
+     * @param otherAssetInputs    Keyed UTXOs for all other assets (swept to changeAddress)
+     * @param rvnInputs           Keyed UTXOs providing RVN for fees and dust
+     * @param primaryAsset        Output descriptor: asset name, raw amount, recipient address
+     * @param primaryAssetChange  Raw amount of primary asset returned as change (0 = full sweep)
+     * @param feeSat              Miner fee in satoshis
+     * @param changeAddress       Destination for all change (RVN, asset change, other assets)
+     */
+    fun buildAndSignMultiAddressAssetTransfer(
+        primaryAssetInputs: List<KeyedAssetUtxo>,
+        otherAssetInputs: Map<String, List<KeyedAssetUtxo>>,
+        rvnInputs: List<KeyedUtxo>,
+        primaryAsset: AssetOutput,
+        primaryAssetChange: Long,
+        feeSat: Long,
+        changeAddress: String
+    ): SignedTx {
+        val primaryDustIn = primaryAssetInputs.sumOf { it.assetUtxo.utxo.satoshis }
+        val dustForPrimaryOut    = if (primaryDustIn > 0) 600L else 0L
+        val dustForPrimaryChange = if (primaryAssetChange > 0 && primaryDustIn > 0) 600L else 0L
+
+        val otherOutputs = mutableListOf<AssetOutput>()
+        var dustForOtherAssets = 0L
+        for ((name, keyedUtxos) in otherAssetInputs) {
+            val totalRaw = keyedUtxos.sumOf { it.assetUtxo.assetRawAmount }
+            if (totalRaw > 0) {
+                otherOutputs.add(AssetOutput(name, totalRaw, changeAddress))
+                if (keyedUtxos.sumOf { it.assetUtxo.utxo.satoshis } > 0) dustForOtherAssets += 600L
+            }
+        }
+
+        val totalDust = dustForPrimaryOut + dustForPrimaryChange + dustForOtherAssets
+        val rvnIn = rvnInputs.sumOf { it.utxo.satoshis } +
+                    primaryAssetInputs.sumOf { it.assetUtxo.utxo.satoshis } +
+                    otherAssetInputs.values.flatten().sumOf { it.assetUtxo.utxo.satoshis }
+        val rvnChange = rvnIn - feeSat - totalDust
+
+        require(rvnIn >= feeSat + totalDust) {
+            "Insufficient RVN: have ${rvnIn / 1e8}, need ${feeSat / 1e8} fee + ${totalDust / 1e8} dust"
+        }
+
+        data class InputEntry(val utxo: Utxo, val privKey: ByteArray, val pubKey: ByteArray)
+        val allEntries = mutableListOf<InputEntry>()
+        primaryAssetInputs.forEach  { allEntries.add(InputEntry(it.assetUtxo.utxo, it.privKey, it.pubKey)) }
+        otherAssetInputs.values.flatten().forEach { allEntries.add(InputEntry(it.assetUtxo.utxo, it.privKey, it.pubKey)) }
+        rvnInputs.forEach           { allEntries.add(InputEntry(it.utxo, it.privKey, it.pubKey)) }
+
+        val outputs = mutableListOf<ScriptedOutput>()
+        // P2PKH outputs first
+        val effectiveRvnChange = if (rvnChange > 546) rvnChange else 0L
+        if (effectiveRvnChange > 0) outputs.add(ScriptedOutput(effectiveRvnChange, p2pkhScript(changeAddress)))
+        // OP_RVN_ASSET outputs after
+        outputs.add(ScriptedOutput(dustForPrimaryOut,
+            buildAssetTransferScript(primaryAsset.toAddress, primaryAsset.assetName, primaryAsset.rawAmount)))
+        if (primaryAssetChange > 0) {
+            outputs.add(ScriptedOutput(dustForPrimaryChange,
+                buildAssetTransferScript(changeAddress, primaryAsset.assetName, primaryAssetChange)))
+        }
+        for (ao in otherOutputs) {
+            val inputDust = otherAssetInputs[ao.assetName]?.sumOf { it.assetUtxo.utxo.satoshis } ?: 0L
+            outputs.add(ScriptedOutput(if (inputDust > 0) 600L else 0L,
+                buildAssetTransferScript(changeAddress, ao.assetName, ao.rawAmount)))
+        }
+
+        val allInputs = allEntries.map { it.utxo }
+        val sigsAndKeys = allEntries.mapIndexed { idx, entry ->
+            val sigHash = sigHashWithScriptedOutputs(allInputs, outputs, idx, entry.utxo.script)
+            Pair(signEcdsa(sigHash, entry.privKey), entry.pubKey)
+        }
+        val raw = serializeTxMultiKey(allInputs, outputs, sigsAndKeys)
+        return SignedTx(raw.toHex(), txid(raw))
+    }
+
+    // ── Public API: RVN send with asset sweep (post-quantum safe) ────────────
+
+    /**
+     * Build and sign a Ravencoin RVN send transaction that also sweeps ALL assets
+     * to a fresh address in a SINGLE transaction.
+     *
+     * This ensures post-quantum safety by completely emptying the current address:
+     *   - The requested RVN amount goes to an external destination
+     *   - ALL assets are transferred to a fresh address (currentIndex + 1)
+     *   - All remaining RVN goes to the fresh address (currentIndex + 1)
+     *
+     * Output order (Ravencoin consensus: P2PKH before OP_RVN_ASSET):
+     *   1. RVN to external destination
+     *   2. RVN change to [changeAddress] (omitted if below dust limit)
+     *   3. All asset outputs to [changeAddress]
+     *
+     * @param rvnUtxos     RVN-only UTXOs (must cover amount + fee + dust for assets)
+     * @param assetUtxos   Map of asset names to their AssetUtxos (all swept to changeAddress)
+     * @param toAddress    External destination for RVN
+     * @param amountSat    RVN amount to send in satoshis
+     * @param feeSat       Miner fee in satoshis
+     * @param changeAddress Fresh address that receives all assets and remaining RVN
+     * @param privKeyBytes Raw 32-byte private key
+     * @param pubKeyBytes  Compressed 33-byte public key
+     * @return [SignedTx] ready to broadcast
+     */
+    fun buildAndSignRvnSendWithAssetSweep(
+        rvnUtxos: List<Utxo>,
+        assetUtxos: Map<String, List<AssetUtxo>>,
+        toAddress: String,
+        amountSat: Long,
+        feeSat: Long,
+        changeAddress: String,
+        privKeyBytes: ByteArray,
+        pubKeyBytes: ByteArray
+    ): SignedTx {
+        // Calculate dust for all asset outputs
+        var dustForAssets = 0L
+        val assetOutputs = mutableListOf<AssetOutput>()
+
+        for ((assetName, utxos) in assetUtxos) {
+            val totalRawAmount = utxos.sumOf { it.assetRawAmount }
+            if (totalRawAmount > 0) {
+                assetOutputs.add(AssetOutput(assetName, totalRawAmount, changeAddress))
+                val inputDust = utxos.sumOf { it.utxo.satoshis }
+                if (inputDust > 0) dustForAssets += 600L
+            }
+        }
+
+        // Total RVN needed: amount + fee + dust for assets
+        // Include satoshis from BOTH RVN-only and asset-carrying UTXOs
+        val totalIn = rvnUtxos.sumOf { it.satoshis } + assetUtxos.values.flatten().sumOf { it.utxo.satoshis }
+        val rvnChange = totalIn - amountSat - feeSat - dustForAssets
+
+        require(totalIn >= amountSat + feeSat + dustForAssets) {
+            "Insufficient RVN: have ${totalIn / 1e8} RVN, " +
+            "need ${amountSat / 1e8} RVN + ${feeSat / 1e8} RVN fee + ${dustForAssets / 1e8} RVN dust"
+        }
+
+        // Combine all inputs: RVN + assets
+        val allInputs = mutableListOf<Utxo>()
+        allInputs.addAll(rvnUtxos)
+        assetUtxos.values.forEach { allInputs.addAll(it.map { au -> au.utxo }) }
+
+        // Build outputs in consensus order: all P2PKH first, then OP_RVN_ASSET
+        val outputs = mutableListOf<ScriptedOutput>()
+
+        // 1. RVN to external destination (P2PKH)
+        outputs.add(ScriptedOutput(amountSat, p2pkhScript(toAddress)))
+
+        // 2. RVN change (P2PKH, must come before OP_RVN_ASSET outputs)
+        val effectiveRvnChange = if (rvnChange > 546) rvnChange else 0L
+        if (effectiveRvnChange > 0) {
+            outputs.add(ScriptedOutput(effectiveRvnChange, p2pkhScript(changeAddress)))
+        }
+
+        // 3. All assets to changeAddress (OP_RVN_ASSET, always after all P2PKH outputs)
+        for (assetOutput in assetOutputs) {
+            val inputDust = assetUtxos[assetOutput.assetName]?.sumOf { it.utxo.satoshis } ?: 0L
+            val dustForThisOutput = if (inputDust > 0) 600L else 0L
+            outputs.add(ScriptedOutput(dustForThisOutput,
+                buildAssetTransferScript(changeAddress, assetOutput.assetName, assetOutput.rawAmount)))
+        }
+
+        // Sign each input
+        val signatures = allInputs.mapIndexed { idx, utxo ->
+            val sigHash = sigHashWithScriptedOutputs(allInputs, outputs, idx, utxo.script)
+            signEcdsa(sigHash, privKeyBytes)
+        }
+
+        val raw = serializeTxWithScripts(allInputs, outputs, signatures, pubKeyBytes)
+        val txid = txid(raw)
+        return SignedTx(raw.toHex(), txid)
+    }
+
     // ── Signature hash (BIP143 NOT used, Ravencoin uses legacy P2PKH signing) ──
+
+    /**
+     * Build and sign a single atomic transaction that sends RVN to an external address
+     * while sweeping ALL remaining assets and RVN from ANY number of HD addresses to
+     * a fresh quantum-safe change address.
+     *
+     * Each input is signed with the private key of its own address, so inputs from
+     * multiple BIP44 derived addresses are fully supported.
+     *
+     * Input groups:
+     *   [currentRvnInputs]  - RVN UTXOs from the current spending address. These fund
+     *                         the [amountSat] send, the fee, and the dust for asset outputs.
+     *   [extraRvnInputs]    - RVN UTXOs from old HAS_OUTGOING addresses, swept to [changeAddress].
+     *   [assetInputsByName] - All asset UTXOs (any address) keyed by asset name, swept to [changeAddress].
+     *
+     * Output order:
+     *   1. [amountSat] RVN to [toAddress]
+     *   2. RVN change to [changeAddress]
+     *   3. Each asset (full balance) to [changeAddress]
+     */
+    fun buildAndSignMultiAddressSend(
+        currentRvnInputs: List<KeyedUtxo>,
+        extraRvnInputs: List<KeyedUtxo>,
+        assetInputsByName: Map<String, List<KeyedAssetUtxo>>,
+        toAddress: String,
+        amountSat: Long,
+        feeSat: Long,
+        changeAddress: String
+    ): SignedTx {
+        // Dust for asset outputs: 0 if input had 0 sat (issued with dustOut=0), else 600
+        val assetOutputs = mutableListOf<AssetOutput>()
+        var dustForAssets = 0L
+        for ((assetName, keyedUtxos) in assetInputsByName) {
+            val totalRaw = keyedUtxos.sumOf { it.assetUtxo.assetRawAmount }
+            if (totalRaw > 0) {
+                assetOutputs.add(AssetOutput(assetName, totalRaw, changeAddress))
+                val inputDust = keyedUtxos.sumOf { it.assetUtxo.utxo.satoshis }
+                if (inputDust > 0) dustForAssets += 600L
+            }
+        }
+
+        val currentRvnTotal = currentRvnInputs.sumOf { it.utxo.satoshis }
+        val extraRvnTotal   = extraRvnInputs.sumOf { it.utxo.satoshis }
+        // Include satoshis from all asset inputs (dust)
+        val assetRvnTotal   = assetInputsByName.values.flatten().sumOf { it.assetUtxo.utxo.satoshis }
+        val totalRvnIn      = currentRvnTotal + extraRvnTotal + assetRvnTotal
+
+        require(totalRvnIn >= amountSat + feeSat + dustForAssets) {
+            "Insufficient RVN: have ${totalRvnIn / 1e8} RVN, " +
+            "need ${amountSat / 1e8} send + ${feeSat / 1e8} fee + ${dustForAssets / 1e8} dust"
+        }
+
+        // Build ordered input list (current RVN, extra RVN, assets)
+        data class InputEntry(val utxo: Utxo, val privKey: ByteArray, val pubKey: ByteArray)
+        val allEntries = mutableListOf<InputEntry>()
+        currentRvnInputs.forEach { allEntries.add(InputEntry(it.utxo, it.privKey, it.pubKey)) }
+        extraRvnInputs.forEach  { allEntries.add(InputEntry(it.utxo, it.privKey, it.pubKey)) }
+        assetInputsByName.values.flatten().forEach {
+            allEntries.add(InputEntry(it.assetUtxo.utxo, it.privKey, it.pubKey))
+        }
+
+        // Build outputs: consensus order: P2PKH first (external + change), then OP_RVN_ASSET
+        val rvnChange = totalRvnIn - amountSat - feeSat - dustForAssets
+        val outputs = mutableListOf<ScriptedOutput>()
+
+        // 1. External RVN (P2PKH)
+        outputs.add(ScriptedOutput(amountSat, p2pkhScript(toAddress)))
+
+        // 2. RVN change (P2PKH, must come before OP_RVN_ASSET)
+        if (rvnChange > 546) outputs.add(ScriptedOutput(rvnChange, p2pkhScript(changeAddress)))
+
+        // 3. Asset sweep (OP_RVN_ASSET, always after all P2PKH outputs)
+        for (ao in assetOutputs) {
+            val inputDust = assetInputsByName[ao.assetName]?.sumOf { it.assetUtxo.utxo.satoshis } ?: 0L
+            val dustForThisOutput = if (inputDust > 0) 600L else 0L
+            outputs.add(ScriptedOutput(dustForThisOutput, buildAssetTransferScript(changeAddress, ao.assetName, ao.rawAmount)))
+        }
+
+        val allInputs = allEntries.map { it.utxo }
+        val sigsAndKeys = allEntries.mapIndexed { idx, entry ->
+            val sigHash = sigHashWithScriptedOutputs(allInputs, outputs, idx, entry.utxo.script)
+            Pair(signEcdsa(sigHash, entry.privKey), entry.pubKey)
+        }
+
+        val raw = serializeTxMultiKey(allInputs, outputs, sigsAndKeys)
+        return SignedTx(raw.toHex(), txid(raw))
+    }
 
     /**
      * Compute the legacy P2PKH signature hash for input at [sigIdx].
@@ -515,8 +924,9 @@ object RavencoinTxBuilder {
             outputs.add(ScriptedOutput(0L, preservedOwnerScript))
         }
         if (!isUnique) {
-            // Root/sub issuance always mints the new owner token output.
-            val ownerScript = buildOwnerTokenScript(toAddress, assetName)
+            // The new owner token ALWAYS goes to changeAddress (the issuer's next address),
+            // never to toAddress which may be an external recipient.
+            val ownerScript = buildOwnerTokenScript(changeAddress, assetName)
             outputs.add(ScriptedOutput(ownerDust, ownerScript))
         }
         // Issuance output is always last (consensus rule).
@@ -527,6 +937,256 @@ object RavencoinTxBuilder {
             val sigHash = sigHashWithScriptedOutputs(allInputs, outputs, idx, utxo.script)
             signEcdsa(sigHash, privKeyBytes)
         }
+        val raw = serializeTxWithScripts(allInputs, outputs, signatures, pubKeyBytes)
+        return SignedTx(raw.toHex(), txid(raw))
+    }
+
+    // ── Public API: asset issuance with asset sweep (post-quantum safe) ──────
+
+    /**
+     * Build and sign a Ravencoin asset issuance transaction that also sweeps ALL
+     * other existing assets to a fresh address in a SINGLE transaction.
+     *
+     * This ensures post-quantum safety by completely emptying the current address:
+     *   - The new asset is issued to [toAddress]
+     *   - ALL other existing assets are transferred to [changeAddress] (currentIndex + 1)
+     *   - All remaining RVN goes to [changeAddress]
+     *
+     * Output order (Ravencoin consensus, assets.cpp):
+     *   1. Burn output: [burnSat] RVN to the canonical issuance burn address
+     *   2. RVN change to [changeAddress] (omitted if below dust limit)
+     *   3. Asset sweep outputs: all other assets to [changeAddress] (OP_RVN_ASSET)
+     *   4. Parent owner-token return (rvnt): for sub-assets/unique tokens
+     *   5. New owner-token output (rvno): for root/sub-assets
+     *   6. Issuance output (rvnq): always last (consensus requirement)
+     *
+     * @param utxos          RVN UTXOs (must cover burnSat + feeSat + dustForAssets)
+     * @param ownerAssetUtxos Owner-token UTXOs for sub-asset/unique issuance (empty for root)
+     * @param otherAssetUtxos Map of other asset names to their AssetUtxos (all swept to changeAddress)
+     * @param assetName      Full asset name: "ROOT", "ROOT/SUB", or "ROOT/SUB#UNIQUE"
+     * @param qtyRaw         Asset quantity in native units (qty * 10^[units])
+     * @param toAddress      Address that receives the newly-issued asset
+     * @param changeAddress  Address that receives RVN change and all swept assets
+     * @param units          Divisibility 0-8
+     * @param reissuable     Whether more supply can be issued later
+     * @param ipfsHash       Optional CIDv0 base58 IPFS hash ("Qm...") for metadata
+     * @param burnSat        RVN to burn: use BURN_ROOT_SAT / BURN_SUB_SAT / BURN_UNIQUE_SAT
+     * @param feeSat         Miner fee in satoshis
+     * @param privKeyBytes   Raw 32-byte private key
+     * @param pubKeyBytes    Compressed 33-byte public key
+     * @return [SignedTx] ready to broadcast
+     */
+    fun buildAndSignAssetIssueWithAssetSweep(
+        utxos: List<Utxo>,
+        ownerAssetUtxos: List<Utxo> = emptyList(),
+        otherAssetUtxos: Map<String, List<AssetUtxo>> = emptyMap(),
+        assetName: String,
+        qtyRaw: Long,
+        toAddress: String,
+        changeAddress: String,
+        units: Int = 0,
+        reissuable: Boolean = false,
+        ipfsHash: String? = null,
+        burnSat: Long,
+        feeSat: Long,
+        privKeyBytes: ByteArray,
+        pubKeyBytes: ByteArray
+    ): SignedTx {
+        val isUnique = assetName.contains('#')
+
+        val preservedOwnerAssetName = when {
+            assetName.contains('#') -> assetName.substringBefore('#') + "!"
+            assetName.contains('/') -> assetName.substringBefore('/') + "!"
+            else -> null
+        }
+
+        val preservedOwnerAmount = 100_000_000L
+        val ownerDust = 0L
+        val dustOut = 0L
+
+        // Calculate dust for all asset sweep outputs
+        var dustForSweptAssets = 0L
+        val assetSweepOutputs = mutableListOf<AssetOutput>()
+
+        for ((assetNameOther, utxosOther) in otherAssetUtxos) {
+            val totalRawAmount = utxosOther.sumOf { it.assetRawAmount }
+            if (totalRawAmount > 0) {
+                assetSweepOutputs.add(AssetOutput(assetNameOther, totalRawAmount, changeAddress))
+                val inputDust = utxosOther.sumOf { it.utxo.satoshis }
+                if (inputDust > 0) dustForSweptAssets += 600L
+            }
+        }
+
+        val rvnAndOwnerInputs = utxos + ownerAssetUtxos
+        val otherAssetSatoshis = otherAssetUtxos.values.flatten().sumOf { it.utxo.satoshis }
+        val totalIn = rvnAndOwnerInputs.sumOf { it.satoshis } + otherAssetSatoshis
+        val required = burnSat + ownerDust + dustOut + feeSat + dustForSweptAssets
+
+        require(totalIn >= required) {
+            "Insufficient RVN: have ${"%.4f".format(totalIn / 1e8)} RVN, " +
+            "need ${"%.4f".format(required / 1e8)} RVN (burn + fee + asset dust)"
+        }
+
+        if (preservedOwnerAssetName != null) {
+            require(ownerAssetUtxos.isNotEmpty()) {
+                "Missing owner asset input for $assetName: require $preservedOwnerAssetName"
+            }
+        }
+
+        val changeSat = totalIn - burnSat - ownerDust - dustOut - feeSat - dustForSweptAssets
+
+        val burnAddress = when {
+            assetName.contains('#') -> BURN_ADDRESS_UNIQUE
+            assetName.contains('/') -> BURN_ADDRESS_SUB
+            else -> BURN_ADDRESS_ROOT
+        }
+        val burnScript = p2pkhScript(burnAddress)
+        val issueScript = buildAssetIssueScript(toAddress, assetName, qtyRaw, units, reissuable, ipfsHash)
+
+        // Build outputs in consensus order:
+        // 1. Burn
+        // 2. RVN change
+        // 3. Asset sweep outputs (other assets to changeAddress)
+        // 4. Parent owner-token return
+        // 5. New owner-token output
+        // 6. Issuance output (ALWAYS LAST)
+        val outputs = mutableListOf<ScriptedOutput>()
+
+        // 1. Burn output
+        outputs.add(ScriptedOutput(burnSat, burnScript))
+
+        // 2. RVN change
+        if (changeSat > 546) outputs.add(ScriptedOutput(changeSat, p2pkhScript(changeAddress)))
+
+        // 3. Asset sweep outputs (all other assets to changeAddress)
+        for (assetOutput in assetSweepOutputs) {
+            val inputDust = otherAssetUtxos[assetOutput.assetName]?.sumOf { it.utxo.satoshis } ?: 0L
+            val dustForThisOutput = if (inputDust > 0) 600L else 0L
+            outputs.add(ScriptedOutput(dustForThisOutput,
+                buildAssetTransferScript(changeAddress, assetOutput.assetName, assetOutput.rawAmount)))
+        }
+
+        // 4. Return the spent parent owner token to the issuer
+        if (preservedOwnerAssetName != null) {
+            val preservedOwnerScript = buildAssetTransferScript(
+                changeAddress,
+                preservedOwnerAssetName,
+                preservedOwnerAmount
+            )
+            Log.i(
+                "RavencoinTxBuilder",
+                "owner-return asset=$preservedOwnerAssetName amountRaw=$preservedOwnerAmount script=${preservedOwnerScript.toHex()}"
+            )
+            outputs.add(ScriptedOutput(0L, preservedOwnerScript))
+        }
+
+        // 5. New owner-token output (root/sub issuance only).
+        // The owner token ALWAYS goes to changeAddress (the issuer's next quantum-safe address),
+        // never to toAddress, which may be an external customer address.
+        // Sending it to an external address would permanently transfer control of the asset
+        // (sub-asset issuance rights) to the recipient.
+        if (!isUnique) {
+            val ownerScript = buildOwnerTokenScript(changeAddress, assetName)
+            outputs.add(ScriptedOutput(ownerDust, ownerScript))
+        }
+
+        // 6. Issuance output (ALWAYS LAST - consensus rule)
+        outputs.add(ScriptedOutput(dustOut, issueScript))
+
+        // Combine all inputs: RVN + owner assets + swept assets
+        val allInputs = mutableListOf<Utxo>()
+        allInputs.addAll(rvnAndOwnerInputs)
+        otherAssetUtxos.values.forEach { allInputs.addAll(it.map { au -> au.utxo }) }
+
+        val signatures = allInputs.mapIndexed { idx, utxo ->
+            val sigHash = sigHashWithScriptedOutputs(allInputs, outputs, idx, utxo.script)
+            signEcdsa(sigHash, privKeyBytes)
+        }
+
+        val raw = serializeTxWithScripts(allInputs, outputs, signatures, pubKeyBytes)
+        return SignedTx(raw.toHex(), txid(raw))
+    }
+
+    // ── Public API: full address sweep (assets + RVN in ONE tx) ──────────────
+
+    /**
+     * Build and sign a Ravencoin transaction that sweeps ALL assets and ALL RVN
+     * from an old address to a fresh, clean address in a SINGLE transaction.
+     *
+     * This is the post-quantum safe sweep operation that ensures an old address
+     * (with HAS_OUTGOING status) is completely emptied.
+     *
+     * Output order (Ravencoin consensus: P2PKH before OP_RVN_ASSET):
+     *   1. RVN output: all remaining RVN to [changeAddress]
+     *   2. All asset outputs: all assets to [changeAddress]
+     *
+     * @param assetUtxos   Map of asset names to their AssetUtxos (all swept to changeAddress)
+     * @param rvnUtxos     RVN-only UTXOs (covers fee + dust for assets)
+     * @param feeSat       Miner fee in satoshis
+     * @param changeAddress Fresh address that receives ALL assets and remaining RVN
+     * @param privKeyBytes Raw 32-byte private key of the old address being swept
+     * @param pubKeyBytes  Compressed 33-byte public key of the old address
+     * @return [SignedTx] ready to broadcast
+     */
+    fun buildAndSignFullAddressSweep(
+        assetUtxos: Map<String, List<AssetUtxo>>,
+        rvnUtxos: List<Utxo>,
+        feeSat: Long,
+        changeAddress: String,
+        privKeyBytes: ByteArray,
+        pubKeyBytes: ByteArray
+    ): SignedTx {
+        // Calculate dust for all asset outputs
+        var dustForAssets = 0L
+        val assetOutputs = mutableListOf<AssetOutput>()
+
+        for ((assetName, utxos) in assetUtxos) {
+            val totalRawAmount = utxos.sumOf { it.assetRawAmount }
+            if (totalRawAmount > 0) {
+                assetOutputs.add(AssetOutput(assetName, totalRawAmount, changeAddress))
+                val inputDust = utxos.sumOf { it.utxo.satoshis }
+                if (inputDust > 0) dustForAssets += 600L
+            }
+        }
+
+        // Calculate total RVN inputs
+        val rvnTotalIn = rvnUtxos.sumOf { it.satoshis }
+
+        // RVN change = total RVN - fee - dust for assets
+        val rvnChange = rvnTotalIn - feeSat - dustForAssets
+        require(rvnChange >= 0 || rvnTotalIn >= feeSat) {
+            "Insufficient RVN: have ${rvnTotalIn / 1e8} RVN, " +
+            "need ${feeSat / 1e8} RVN fee + ${dustForAssets / 1e8} RVN dust"
+        }
+
+        // Combine all inputs: RVN + assets
+        val allInputs = mutableListOf<Utxo>()
+        allInputs.addAll(rvnUtxos)
+        assetUtxos.values.forEach { allInputs.addAll(it.map { au -> au.utxo }) }
+
+        // Build outputs in consensus order: P2PKH first, then OP_RVN_ASSET
+        val outputs = mutableListOf<ScriptedOutput>()
+
+        // 1. All RVN to changeAddress
+        val effectiveRvnChange = if (rvnChange > 546) rvnChange else 0L
+        if (effectiveRvnChange > 0) {
+            outputs.add(ScriptedOutput(effectiveRvnChange, p2pkhScript(changeAddress)))
+        }
+
+        // 2. All assets to changeAddress
+        for (assetOutput in assetOutputs) {
+            val inputDust = assetUtxos[assetOutput.assetName]?.sumOf { it.utxo.satoshis } ?: 0L
+            val dustForThisOutput = if (inputDust > 0) 600L else 0L
+            outputs.add(ScriptedOutput(dustForThisOutput,
+                buildAssetTransferScript(changeAddress, assetOutput.assetName, assetOutput.rawAmount)))
+        }
+
+        // Sign each input
+        val signatures = allInputs.mapIndexed { idx, utxo ->
+            val sigHash = sigHashWithScriptedOutputs(allInputs, outputs, idx, utxo.script)
+            signEcdsa(sigHash, privKeyBytes)
+        }
+
         val raw = serializeTxWithScripts(allInputs, outputs, signatures, pubKeyBytes)
         return SignedTx(raw.toHex(), txid(raw))
     }
@@ -782,6 +1442,38 @@ object RavencoinTxBuilder {
             buf.writeLE64(out.satoshis)
             buf.writeVarInt(out.script.size)
             buf.write(out.script) // pre-built script written verbatim
+        }
+        buf.writeLE32(LOCKTIME.toInt())
+        return buf.toByteArray()
+    }
+
+    /**
+     * Serialize a fully-signed transaction where each input may come from a
+     * different address and is therefore signed with its own (signature, pubKey) pair.
+     */
+    private fun serializeTxMultiKey(
+        inputs: List<Utxo>,
+        outputs: List<ScriptedOutput>,
+        sigsAndPubKeys: List<Pair<ByteArray, ByteArray>>
+    ): ByteArray {
+        val buf = ByteArrayOutputStream()
+        buf.writeLE32(VERSION)
+        buf.writeVarInt(inputs.size)
+        inputs.forEachIndexed { i, utxo ->
+            buf.write(utxo.txid.hexToBytes().reversedArray())
+            buf.writeLE32(utxo.outputIndex)
+            val (sig, pubKey) = sigsAndPubKeys[i]
+            val scriptSig = byteArrayOf(sig.size.toByte()) + sig +
+                byteArrayOf(pubKey.size.toByte()) + pubKey
+            buf.writeVarInt(scriptSig.size)
+            buf.write(scriptSig)
+            buf.writeLE32U(SEQUENCE)
+        }
+        buf.writeVarInt(outputs.size)
+        outputs.forEach { out ->
+            buf.writeLE64(out.satoshis)
+            buf.writeVarInt(out.script.size)
+            buf.write(out.script)
         }
         buf.writeLE32(LOCKTIME.toInt())
         return buf.toByteArray()

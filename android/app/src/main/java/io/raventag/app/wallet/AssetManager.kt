@@ -17,10 +17,12 @@
  */
 package io.raventag.app.wallet
 
+import android.content.Context
 import android.util.Log
 import com.google.gson.Gson
 import com.google.gson.JsonObject
 import io.raventag.app.BuildConfig
+import io.raventag.app.security.AdminKeyStorage
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -169,15 +171,25 @@ data class DerivedChipKeys(
  * All write operations (issue, revoke, transfer) require a valid admin key sent via the
  * X-Admin-Key header. The revocation check endpoint is public (no auth required).
  *
- * @param apiBaseUrl  Base URL of the RavenTag backend, from BuildConfig.API_BASE_URL.
- * @param adminKey    Brand admin key (ADMIN_KEY env var on backend side).
+ * @param context       Application context used to access encrypted admin key storage.
+ * @param apiBaseUrl    Base URL of the RavenTag backend, from BuildConfig.API_BASE_URL.
+ * @param adminKeyStorage Encrypted storage wrapper for the admin key.
  */
 class AssetManager(
+    private val context: Context,
     private val apiBaseUrl: String = BuildConfig.API_BASE_URL,
-    private val adminKey: String = ""
+    private val adminKeyStorage: AdminKeyStorage
 ) {
     private val gson = Gson()
     private val json = "application/json".toMediaType()
+
+    /**
+     * Admin key retrieved from encrypted storage.
+     * Throws IllegalStateException if the admin key is not configured.
+     */
+    private val adminKey: String
+        get() = adminKeyStorage.getAdminKey()
+            ?: throw IllegalStateException("Admin key not configured. Configure in Settings.")
 
     /** OkHttp client with generous timeouts for blockchain operations that may take several seconds. */
     private val http = OkHttpClient.Builder()
@@ -440,9 +452,10 @@ class AssetManager(
      *
      * @param tagUidHex  7-byte chip UID as lowercase hex string.
      */
+    // SECURITY: tagUid parameter is NOT logged to prevent exfiltration via log aggregation services
+    // Only nfcPubId (public identifier) is logged on success
     fun deriveChipKeys(tagUidHex: String): DerivedChipKeys? {
         return try {
-            Log.i("AssetManager", "deriveChipKeys request tagUid=$tagUidHex")
             val body = mapOf("tag_uid" to tagUidHex.lowercase())
             val resp = adminRequest("POST", "/api/brand/derive-chip-key", body)
             fun hexToBytes(hex: String) = ByteArray(hex.length / 2) { i ->
@@ -453,10 +466,10 @@ class AssetManager(
             val sdmEncKey = hexToBytes(resp["sdm_enc_key"]?.asString ?: return null)
             val sdmMacKey = hexToBytes(resp["sdm_mac_key"]?.asString ?: return null)
             val nfcPubId = resp["nfc_pub_id"]?.asString ?: return null
-            Log.i("AssetManager", "deriveChipKeys success tagUid=$tagUidHex nfcPubId=$nfcPubId")
+            Log.i("AssetManager", "deriveChipKeys success nfcPubId=$nfcPubId")
             DerivedChipKeys(appMasterKey, sdmmacInputKey, sdmEncKey, sdmMacKey, nfcPubId)
         } catch (e: Exception) {
-            Log.e("AssetManager", "deriveChipKeys failed tagUid=$tagUidHex error=${e.message}", e)
+            Log.e("AssetManager", "deriveChipKeys failed error=${e.message}", e)
             null
         }
     }
@@ -524,18 +537,19 @@ class AssetManager(
      * @param assetName  Ravencoin asset name (uppercased before submission).
      * @param tagUid     7-byte chip UID in hex (uppercased before submission).
      */
+    // SECURITY: tagUid parameter is NOT logged to prevent exfiltration via log aggregation services
     fun registerChip(assetName: String, tagUid: String): AssetOperationResult {
         return try {
-            Log.i("AssetManager", "registerChip request asset=$assetName tagUid=$tagUid")
+            Log.i("AssetManager", "registerChip request asset=$assetName")
             val body = mapOf("asset_name" to assetName.uppercase(), "tag_uid" to tagUid.uppercase())
             val resp = adminRequest("POST", "/api/brand/register-chip", body)
-            Log.i("AssetManager", "registerChip success asset=$assetName tagUid=$tagUid")
+            Log.i("AssetManager", "registerChip success asset=$assetName")
             AssetOperationResult(
                 success = resp["success"]?.asBoolean == true,
                 assetName = resp["asset_name"]?.asString
             )
         } catch (e: Exception) {
-            Log.e("AssetManager", "registerChip failed asset=$assetName tagUid=$tagUid error=${e.message}", e)
+            Log.e("AssetManager", "registerChip failed asset=$assetName error=${e.message}", e)
             AssetOperationResult(success = false, error = e.message)
         }
     }

@@ -54,16 +54,18 @@ services:
     secrets:
       - admin_key
     command: >
-      sh -c "apk add --no-cache openssl > /dev/null 2>&1;
+      sh -c "apk add --no-cache openssl sqlite > /dev/null 2>&1;
         while true; do
           TIMESTAMP=$$(date +%Y%m%d_%H%M%S);
+          sqlite3 /data/raventag.db \".backup /tmp/raventag_snap.db\";
           openssl enc -aes-256-cbc -pbkdf2 -iter 100000 \
             -pass file:/run/secrets/admin_key \
-            -in /data/raventag.db \
+            -in /tmp/raventag_snap.db \
             -out /backups/raventag_$${TIMESTAMP}.db.enc 2>/dev/null \
             && echo \"[Backup] raventag_$${TIMESTAMP}.db.enc (encrypted)\";
-          ls -t /backups/raventag_*.db.enc 2>/dev/null | tail -n +8 | xargs rm -f;
-          sleep 86400;
+          rm -f /tmp/raventag_snap.db;
+          ls -t /backups/raventag_*.db.enc 2>/dev/null | tail -n +4 | xargs rm -f;
+          sleep 21600;
         done"
     depends_on:
       backend:

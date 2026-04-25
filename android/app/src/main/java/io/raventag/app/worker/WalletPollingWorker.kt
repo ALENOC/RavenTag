@@ -41,22 +41,31 @@ class WalletPollingWorker(
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         try {
+            // D-11/D-12: background workers may run before MainActivity has a
+            // chance to init() the health monitor, so init defensively here.
+            io.raventag.app.wallet.health.NodeHealthMonitor.init(applicationContext)
+
             // Respect the user's notification preference
             val appPrefs = applicationContext.getSharedPreferences("raventag_app", Context.MODE_PRIVATE)
             if (!appPrefs.getBoolean("notifications_enabled", true)) return@withContext Result.success()
 
             val walletManager = WalletManager(applicationContext)
-            // getAddress() requires Keystore; returns null if wallet is not set up or device locked
-            val address = walletManager.getAddress() ?: return@withContext Result.success()
+            // getCurrentAddress() requires Keystore; returns null if wallet is not set up or device locked
+            walletManager.getCurrentAddress() ?: return@withContext Result.success()
+            val currentIndex = walletManager.getCurrentAddressIndex()
 
-            val node = RavencoinPublicNode()
+            val node = RavencoinPublicNode(applicationContext)
 
-            // ── RVN balance check ──────────────────────────────────────────────
-            val balance = node.getBalance(address)
-            val newRvnSat = balance.confirmed + balance.unconfirmed
+            // Derive all addresses with a single Keystore decrypt
+            val addresses = walletManager.getAddressBatch(0, 0..currentIndex).values.toList()
+
+            // ── RVN balance check (single batch TLS call for all addresses) ────
+            val newRvnSat = (node.getTotalBalance(addresses) * 1e8).toLong()
             val lastRvnSat = prefs.getLong("poll_rvn_sat", -1L)
 
+            var incomingDetected = false
             if (lastRvnSat >= 0 && newRvnSat > lastRvnSat) {
+                incomingDetected = true
                 val receivedRvn = (newRvnSat - lastRvnSat) / 1e8
                 NotificationHelper.notify(
                     applicationContext,
@@ -67,8 +76,11 @@ class WalletPollingWorker(
             }
             prefs.edit().putLong("poll_rvn_sat", newRvnSat).apply()
 
-            // ── Asset balance check ────────────────────────────────────────────
-            val assets = node.getAssetBalances(address)
+            // ── Asset balance check (single batch TLS call for all addresses) ──
+            val assetTotals = node.getTotalAssetBalances(addresses)
+            val assets = assetTotals.map { (name, amount) ->
+                io.raventag.app.wallet.ElectrumAssetBalance(name, amount)
+            }
             val lastAssetsType = object : TypeToken<Map<String, Long>>() {}.type
             val lastAssets: Map<String, Long> = gson.fromJson(
                 prefs.getString("poll_assets", "{}"), lastAssetsType
@@ -81,6 +93,7 @@ class WalletPollingWorker(
                 newAssets[asset.name] = newSat
                 val lastSat = lastAssets[asset.name] ?: -1L
                 if (lastSat >= 0 && newSat > lastSat) {
+                    incomingDetected = true
                     val diff = (newSat - lastSat) / 1e8
                     NotificationHelper.notify(
                         applicationContext,
@@ -91,6 +104,67 @@ class WalletPollingWorker(
                 }
             }
             prefs.edit().putString("poll_assets", gson.toJson(newAssets)).apply()
+
+            // ── D-06: per-address scripthash-status diff pass (plan 30-08). Fires
+            //    IncomingTxNotificationHelper on a positive balance delta once a
+            //    baseline has been established. First-ever observation only records
+            //    the baseline (avoids retroactive spam on install/restore).
+            try {
+                val currentAddr = walletManager.getCurrentAddress()
+                if (!currentAddr.isNullOrBlank()) {
+                    val status: String? = try {
+                        node.subscribeScripthashRpc(currentAddr)
+                    } catch (_: Exception) {
+                        null
+                    }
+                    val prev = prefs.getString("last_status_$currentAddr", null)
+                    if (status != prev) {
+                        prefs.edit().putString("last_status_$currentAddr", status).apply()
+                        if (prev != null) {
+                            val balance = try { node.getBalance(currentAddr) } catch (_: Exception) { null }
+                            val confirmedSat = balance?.confirmed ?: 0L
+                            val unconfirmedSat = balance?.unconfirmed ?: 0L
+                            val cachedSat = prefs.getLong("poll_rvn_sat", 0L)
+                            val deltaSat = confirmedSat + unconfirmedSat - cachedSat
+                            if (deltaSat > 0L) {
+                                val history = try {
+                                    node.getTransactionHistory(currentAddr, limit = 3, offset = 0)
+                                } catch (_: Exception) { emptyList() }
+                                val lastNotified = prefs.getString("last_notified_txid", null)
+                                val newestNew = history.firstOrNull { it.txid != lastNotified }
+                                if (newestNew != null) {
+                                    IncomingTxNotificationHelper.showIncoming(
+                                        context = applicationContext,
+                                        txid = newestNew.txid,
+                                        rvnAmount = deltaSat / 1e8,
+                                        confirmations = newestNew.confirmations
+                                    )
+                                    prefs.edit()
+                                        .putString("last_notified_txid", newestNew.txid)
+                                        .putLong("poll_rvn_sat", confirmedSat + unconfirmedSat)
+                                        .apply()
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (_: java.io.IOException) {
+                return@withContext Result.retry()
+            } catch (_: Exception) {
+                // D-06 is a silent path; swallow.
+            }
+
+            // ── Auto-sweep: if any incoming transfer was detected, consolidate funds
+            //    from HAS_OUTGOING addresses to the current quantum-safe address.
+            //    Addresses that only received funds (RECEIVE_ONLY) are never touched.
+            if (incomingDetected) {
+                try {
+                    walletManager.sweepOldAddresses()
+                } catch (_: Exception) {
+                    // Sweep failure is non-fatal: funds stay on the old address until
+                    // the next polling cycle or the user opens the app.
+                }
+            }
 
         } catch (_: java.io.IOException) {
             // Network error: retry with backoff so we don't silently miss a run
