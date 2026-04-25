@@ -429,22 +429,22 @@ const val BURN_UNIQUE_SAT = 500_000_000L     // 5 RVN
 | A3 | `RavencoinPublicNode.callElectrumRawOrNull(method, params)` can query `blockchain.transaction.get` for timeout-check | Confirmation Tracking | If `callElectrumRawOrNull` cannot reach any server, timeout handling degrades to "assume failure, prompt retry" which is the D-08 fallback |
 | A4 | The `walletInfo.balanceRvn` value is current enough for pre-issuance balance check | Pre-issuance Validation | If wallet balance is stale (not refreshed), the check may pass when on-chain balance is insufficient. The `issueAssetLocal()` will fail with its own error. This is acceptable as a best-effort pre-check |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Backend name uniqueness endpoint?**
    - What we know: `AssetManager` has `issueAsset`/`issueSubAsset`/`issueUniqueToken` but no dedicated "check name exists" endpoint. The ownedAssets list in the frontend cache is the closest proxy.
    - What's unclear: Whether the backend provides an endpoint like `/api/brand/check-name` or if we should just check against the local cache.
-   - Recommendation: Use local ownedAssets list for pre-flight check (ownedAssets contains all brand assets). Consider adding a backend endpoint in Phase 50 if needed.
+   - RESOLVED: Use local ownedAssets list for pre-flight check (ownedAssets contains all brand assets). Consider adding a backend endpoint in Phase 50 if needed.
 
 2. **Exact error strings from WalletManager.issueAssetLocal()?**
    - What we know: Uses `error("...")` (IllegalStateException), `require(...)` (IllegalArgumentException), and exceptions from RavencoinTxBuilder and RavencoinPublicNode.
    - What's unclear: The full set of possible error messages without running the code against all failure modes.
-   - Recommendation: Use broad message pattern matching (.contains) in the classification function. Add logging (`Log.e`) of the original message for debugging. Fall through to raw message for unclassified errors.
+   - RESOLVED: Use broad message pattern matching (.contains) in the classification function. Add logging (`Log.e`) of the original message for debugging. Fall through to raw message for unclassified errors.
 
 3. **getrawtransaction availability?**
    - What we know: `RavencoinPublicNode` uses ElectrumX protocol, which provides `blockchain.transaction.get`. This is available via `callElectrumRawOrNull`.
    - What's unclear: Whether the verbose=true format returns a `height` field for all tx states (mempool vs confirmed).
-   - Recommendation: In timeout handling, check if `blockchain.transaction.get` returns a result. If height > 0, tx is confirmed. If height == null or result is error, tx not found.
+   - RESOLVED: In timeout handling, check if `blockchain.transaction.get` returns a result. If height > 0, tx is confirmed. If height == null or result is error, tx not found.
 
 ## Validation Architecture
 
