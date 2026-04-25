@@ -461,11 +461,21 @@ class WalletManager(private val context: Context) {
 
     fun deleteWallet() {
         cachedAddress = null
+        // Wipe ALL wallet-related prefs so a fresh restore does not inherit
+        // stale state (backup gate, integrity tags, HMAC material, address index).
         prefs().edit()
             .remove(KEY_SEED_ENC).remove(KEY_SEED_IV)
             .remove(KEY_MNEMONIC_ENC).remove(KEY_MNEMONIC_IV)
             .remove(KEY_ADDRESS_INDEX)
+            .remove(KEY_BACKUP_COMPLETED)
+            .remove(KEY_HMAC_MATERIAL_CT).remove(KEY_HMAC_MATERIAL_IV)
+            .remove(KEY_SEED_HMAC).remove(KEY_MNEMONIC_HMAC)
             .apply()
+        // Wipe cached balance / utxos / tx history so restore preconditions
+        // (D-14 forced-backup gate) do not flag a wallet that no longer exists.
+        try { io.raventag.app.wallet.cache.WalletCacheDao.clearAll() } catch (_: Throwable) {}
+        try { io.raventag.app.wallet.cache.TxHistoryDao.clearAll() } catch (_: Throwable) {}
+        try { io.raventag.app.wallet.cache.ReservedUtxoDao.clearAll() } catch (_: Throwable) {}
         try {
             val ks = KeyStore.getInstance("AndroidKeyStore")
             ks.load(null)
