@@ -30,6 +30,11 @@ object TxHistoryDao {
 
     fun init(context: Context) = WalletReliabilityDb.init(context)
 
+    /** Wipe all cached tx history. Used by deleteWallet. */
+    fun clearAll() {
+        WalletReliabilityDb.getDatabase().execSQL("DELETE FROM $TABLE")
+    }
+
     fun upsert(rows: List<TxHistoryRow>) {
         if (rows.isEmpty()) return
         val db = WalletReliabilityDb.getDatabase()

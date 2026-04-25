@@ -176,14 +176,15 @@ fun WalletScreen(
     }
 
     // D-02, D-26: 30-second periodic refresh while foreground and not power-save.
+    // Background refresh must be INVISIBLE: do NOT toggle isRefreshing — that flag
+    // is reserved for the manual Refresh icon so the linear progress bar / asset and
+    // tx-history header spinners only appear when the user explicitly asked for it.
     LaunchedEffect(Unit) {
         while (true) {
             kotlinx.coroutines.delay(30_000L)
             val pm = context.getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
             if (pm?.isPowerSaveMode != true) {
-                isRefreshing = true
                 onRefreshBalance()
-                isRefreshing = false
                 cachedLastRefreshedAt = WalletCacheDao.getLastRefreshedAt()
                 cachedBannerVisible = false
             }
@@ -436,7 +437,16 @@ fun WalletScreen(
                 }
                 Row {
                     if (hasWallet) {
-                        IconButton(onClick = onRefreshBalance) {
+                        IconButton(onClick = {
+                            // Manual refresh: surface the linear progress bar and header
+                            // spinners. Cleared by the next walletInfo.isLoading == false.
+                            isRefreshing = true
+                            onRefreshBalance()
+                            scope.launch {
+                                kotlinx.coroutines.delay(2500)
+                                isRefreshing = false
+                            }
+                        }) {
                             Icon(Icons.Default.Refresh, contentDescription = "Refresh", tint = RavenOrange)
                         }
                         IconButton(onClick = { showDeleteDialog = true }) {
@@ -655,7 +665,7 @@ fun WalletScreen(
             item(key = "assets_header") {
                 Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                     Text(s.walletMyAssets, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = RavenMuted)
-                    if (assetsLoading || walletInfo.isLoading) CircularProgressIndicator(color = RavenOrange, modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                    if (isRefreshing) CircularProgressIndicator(color = RavenOrange, modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
                 }
             }
             item(key = "assets_header_spacer") { Spacer(modifier = Modifier.height(10.dp)) }
@@ -707,7 +717,7 @@ fun WalletScreen(
             item(key = "tx_header") {
                 Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                     Text(s.walletTxHistory, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = RavenMuted)
-                    if (txHistoryLoading) CircularProgressIndicator(color = RavenOrange, modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                    if (isRefreshing) CircularProgressIndicator(color = RavenOrange, modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
                 }
             }
             item(key = "tx_header_spacer") { Spacer(modifier = Modifier.height(10.dp)) }
@@ -968,19 +978,23 @@ private fun BalanceCard(s: AppStrings, info: WalletInfo, rvnPrice: Double? = nul
             Spacer(modifier = Modifier.height(12.dp))
             Text(
                 text = run {
-                    val full = String.format(java.util.Locale.US, "%.8f", info.balanceRvn)
-                    val dotIdx = full.indexOf('.')
-                    buildAnnotatedString {
-                        append(full.substring(0, dotIdx))
-                        withStyle(SpanStyle(fontSize = 18.sp)) {
-                            append(",${full.substring(dotIdx + 1)} RVN")
+                    if (info.isLoading && info.balanceRvn == 0.0) {
+                        AnnotatedString(s.walletLoading)
+                    } else {
+                        val full = String.format(java.util.Locale.US, "%.8f", info.balanceRvn)
+                        val dotIdx = full.indexOf('.')
+                        buildAnnotatedString {
+                            append(full.substring(0, dotIdx))
+                            withStyle(SpanStyle(fontSize = 18.sp)) {
+                                append(",${full.substring(dotIdx + 1)} RVN")
+                            }
                         }
                     }
                 },
                 style = MaterialTheme.typography.headlineMedium,
                 fontWeight = FontWeight.Bold,
                 color = RavenOrange,
-                fontSize = 28.sp
+                fontSize = if (info.isLoading && info.balanceRvn == 0.0) 18.sp else 28.sp
             )
             // Always reserve the USD/price rows when rvnPrice is known, even during refresh,
             // so the card height never contracts on a loading flip.
@@ -1259,6 +1273,19 @@ private fun TxCard(s: AppStrings, tx: TxHistoryEntry) {
                             style = MaterialTheme.typography.labelSmall,
                             color = AuthenticGreen
                         )
+                        // Outgoing tx that also cycles assets back to wallet:
+                        // show count + tap-to-list dialog (kept compact).
+                        if (tx.incomingAssetNames.isNotEmpty()) {
+                            Spacer(Modifier.height(2.dp))
+                            val n = tx.incomingAssetNames.size
+                            Text(
+                                "Ciclati $n asset",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = AuthenticGreen.copy(alpha = 0.85f),
+                                modifier = Modifier.clickable { showAssetListDialog = true },
+                                textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline
+                            )
+                        }
                         Spacer(Modifier.height(2.dp))
                         Text(
                             text = "${s.txHistoryFeePrefix} $feeStr RVN",
