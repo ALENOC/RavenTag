@@ -1009,6 +1009,26 @@ private fun TxCard(s: AppStrings, tx: TxHistoryEntry) {
     val ctx = LocalContext.current
     val isSelf     = tx.isSelfTransfer
     val isIncoming = tx.isIncoming && !isSelf
+    var showAssetListDialog by remember { mutableStateOf(false) }
+    if (showAssetListDialog) {
+        AlertDialog(
+            onDismissRequest = { showAssetListDialog = false },
+            containerColor = RavenCard,
+            title = { Text("Asset ciclati", color = Color.White, fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    tx.incomingAssetNames.forEach { name ->
+                        Text(name, color = AuthenticGreen, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showAssetListDialog = false }) {
+                    Text("Chiudi", color = RavenOrange)
+                }
+            }
+        )
+    }
     // D-08 dot color: red 0 conf, amber 1..5, green >=6.
     val dotColor   = when {
         tx.confirmations == 0 -> NotAuthenticRed
@@ -1147,7 +1167,17 @@ private fun TxCard(s: AppStrings, tx: TxHistoryEntry) {
                             style = MaterialTheme.typography.labelSmall,
                             color = AuthenticGreen
                         )
-                        if (tx.assetName != null) {
+                        if (tx.incomingAssetNames.size > 1) {
+                            // Multi-asset cycle: show compact "Ciclati N asset", tap → dialog.
+                            Spacer(Modifier.height(2.dp))
+                            Text(
+                                "Ciclati ${tx.incomingAssetNames.size} asset",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = AuthenticGreen.copy(alpha = 0.85f),
+                                modifier = Modifier.clickable { showAssetListDialog = true },
+                                textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline
+                            )
+                        } else if (tx.assetName != null) {
                             Spacer(Modifier.height(2.dp))
                             val raw = tx.assetAmount
                             val display = if (raw % 100_000_000L == 0L) (raw / 100_000_000L).toString()

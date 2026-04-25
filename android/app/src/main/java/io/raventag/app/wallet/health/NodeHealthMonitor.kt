@@ -47,7 +47,7 @@ object NodeHealthMonitor {
     )
 
     private const val QUARANTINE_DURATION_MS: Long = 3_600_000L       // D-11: 1 hour
-    private const val TRANSIENT_COOLDOWN_MS: Long = 30_000L
+    private const val TRANSIENT_COOLDOWN_MS: Long = 8_000L
     private const val YELLOW_FAILURE_WINDOW_MS: Long = 30_000L
     private const val GREEN_SUCCESS_WINDOW_MS: Long = 60_000L
 
