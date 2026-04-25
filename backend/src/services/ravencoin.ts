@@ -181,11 +181,11 @@ class RavencoinService {
    * List sub-assets and unique tokens of a parent asset.
    * Includes both PARENT/CHILD (sub-assets) and PARENT/CHILD#TAG (unique tokens).
    */
-  async listSubAssets(parentAsset: string): Promise<string[]> {
+  async listSubAssets(parentAsset: string, limit = 200, offset = 0): Promise<string[]> {
     try {
       const [subs, uniques] = await Promise.all([
-        this.call<string[]>('listassets', [`${parentAsset}/*`, false, 200, 0]).catch(() => [] as string[]),
-        this.call<string[]>('listassets', [`${parentAsset}/#*`, false, 200, 0]).catch(() => [] as string[])
+        this.call<string[]>('listassets', [`${parentAsset}/*`, false, limit, offset]).catch(() => [] as string[]),
+        this.call<string[]>('listassets', [`${parentAsset}/#*`, false, limit, offset]).catch(() => [] as string[])
       ])
       return [...(subs ?? []), ...(uniques ?? [])]
     } catch {
@@ -217,8 +217,8 @@ class RavencoinService {
   /**
    * Get full asset hierarchy (parent + subs + variants).
    */
-  async getAssetHierarchy(parentAsset: string): Promise<AssetHierarchy> {
-    const subAssets = await this.listSubAssets(parentAsset)
+  async getAssetHierarchy(parentAsset: string, limit = 200, offset = 0): Promise<AssetHierarchy> {
+    const subAssets = await this.listSubAssets(parentAsset, limit, offset)
     const variants: Record<string, string[]> = {}
     const errors: Array<{ assetName: string; error: string }> = []
 
