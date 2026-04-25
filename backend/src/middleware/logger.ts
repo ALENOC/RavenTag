@@ -130,3 +130,36 @@ export function getRequestStats(hours = 24): object {
     top_paths: topPaths
   }
 }
+
+/**
+ * Start periodic cleanup of request_logs and rate_limit_events tables.
+ * Deletes rows older than RETENTION_DAYS. Runs once at startup and then
+ * every CLEANUP_INTERVAL_MS.
+ *
+ * SECURITY: nfc_counters is the NTAG 424 DNA anti-replay mechanism (HIGH-3).
+ * It MUST NEVER be cleaned up — deleting counters would allow tag replay attacks.
+ * This function intentionally excludes the nfc_counters table.
+ */
+export function startLogCleanup(): NodeJS.Timeout {
+  const CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000 // 24 hours
+  const RETENTION_SECONDS = 30 * 24 * 60 * 60     // 30 days
+
+  const cleanup = () => {
+    try {
+      const db = getDb()
+      const threshold = Math.floor(Date.now() / 1000) - RETENTION_SECONDS
+      const r1 = db.prepare('DELETE FROM request_logs WHERE created_at < ?').run(threshold)
+      const r2 = db.prepare('DELETE FROM rate_limit_events WHERE created_at < ?').run(threshold)
+      if (r1.changes > 0 || r2.changes > 0) {
+        console.log(`[Cleanup] Removed ${r1.changes} request_logs rows, ${r2.changes} rate_limit_events rows (older than 30 days)`)
+      }
+    } catch (err) {
+      console.error('[Cleanup] Failed:', err)
+    }
+  }
+
+  // Run once at startup to catch accumulated logs since last restart
+  cleanup()
+  // Then periodically
+  return setInterval(cleanup, CLEANUP_INTERVAL_MS)
+}

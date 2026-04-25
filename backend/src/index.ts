@@ -23,7 +23,7 @@ import adminRouter from './routes/admin.js'
 import brandRouter from './routes/brand.js'
 import registryRouter from './routes/registry.js'
 import { getDb } from './middleware/cache.js'
-import { requestLogger, logRateLimitEvent, getRequestStats } from './middleware/logger.js'
+import { requestLogger, logRateLimitEvent, getRequestStats, startLogCleanup } from './middleware/logger.js'
 import { requireAdminKey } from './middleware/auth.js'
 
 // ── CRIT-2: Docker secrets support (_FILE convention) ────────────────────────
@@ -263,6 +263,7 @@ process.on('uncaughtException', (err: Error) => {
 const server = app.listen(PORT, () => {
   console.log(`RavenTag API running on http://localhost:${PORT}`)
   console.log(`Protocol: RTP-1 | Env: ${process.env.NODE_ENV ?? 'development'}`)
+  startLogCleanup()
 })
 
 export default app
