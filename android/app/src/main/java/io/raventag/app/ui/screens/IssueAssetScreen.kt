@@ -24,6 +24,7 @@ package io.raventag.app.ui.screens
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -41,6 +42,12 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import android.content.Intent
+import android.net.Uri
+import androidx.compose.ui.platform.LocalContext
+import io.raventag.app.IssueStep
+import io.raventag.app.WarningType
+import io.raventag.app.config.AppConfig
 import io.raventag.app.ravencoin.AssetType
 import io.raventag.app.ravencoin.OwnedAsset
 import io.raventag.app.ui.theme.*
@@ -83,6 +90,9 @@ fun IssueAssetScreen(
     isLoading: Boolean,
     resultMessage: String?,
     resultSuccess: Boolean?,
+    currentStep: IssueStep = IssueStep.Idle,
+    issuedTxid: String? = null,
+    warningType: WarningType? = null,
     prefilledAddress: String = "",
     ownedAssets: List<OwnedAsset> = emptyList(),
     savedAdminKey: String = "",
@@ -99,6 +109,7 @@ fun IssueAssetScreen(
     onIssueUniqueAndWriteTag: ((parentSub: String, serial: String, toAddress: String, ipfsHash: String?, description: String?) -> Unit)? = null
 ) {
     val s = LocalStrings.current
+    val context = LocalContext.current
     // Read API base URL from BuildConfig so the IPFS uploader can reach the backend.
     val apiBaseUrl = io.raventag.app.BuildConfig.API_BASE_URL
 
@@ -259,13 +270,38 @@ fun IssueAssetScreen(
                 border = BorderStroke(1.dp, if (success) AuthenticGreen.copy(0.4f) else NotAuthenticRed.copy(0.4f)),
                 shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth()
             ) {
-                Row(modifier = Modifier.padding(16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(if (success) Icons.Default.CheckCircle else Icons.Default.Error, contentDescription = null,
-                        tint = if (success) AuthenticGreen else NotAuthenticRed, modifier = Modifier.size(20.dp))
-                    Text(resultMessage ?: "", color = if (success) AuthenticGreen else NotAuthenticRed, style = MaterialTheme.typography.bodySmall)
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(if (success) Icons.Default.CheckCircle else Icons.Default.Error, contentDescription = null,
+                            tint = if (success) AuthenticGreen else NotAuthenticRed, modifier = Modifier.size(20.dp))
+                        Text(resultMessage ?: "", color = if (success) AuthenticGreen else NotAuthenticRed, style = MaterialTheme.typography.bodySmall)
+                    }
+                    // Tappable txid: opens block explorer when txid is available
+                    if (success && issuedTxid != null) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = issuedTxid,
+                            color = AuthenticGreen,
+                            style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                            modifier = Modifier
+                                .clickable {
+                                    val uri = Uri.parse(AppConfig.EXPLORER_URL + issuedTxid)
+                                    try {
+                                        context.startActivity(Intent(Intent.ACTION_VIEW, uri))
+                                    } catch (_: Exception) { }
+                                }
+                                .heightIn(min = 48.dp)
+                        )
+                    }
                 }
             }
             Spacer(modifier = Modifier.height(16.dp))
+        }
+
+        // Phase 40: Inline pre-issuance warning (driven by ViewModel warningType)
+        if (warningType != null) {
+            PreIssuanceWarning(warningType = warningType)
+            Spacer(modifier = Modifier.height(12.dp))
         }
 
         // Form fields: each branch shows only the inputs relevant to its mode.
@@ -296,8 +332,12 @@ fun IssueAssetScreen(
                 val effectiveIpfs = imageState.value.ipfsCid
                 val currentReissuable = reissuable
                 // Minimum validation: asset name at least 3 chars and a plausible RVN address length.
-                SubmitButton(s.btnIssueRoot, isLoading, assetName.length >= 3 && toAddress.length >= 26, RavenOrange) {
-                    onIssueRoot(assetName, qty.toLongOrNull() ?: 1, toAddress, effectiveIpfs, currentReissuable)
+                if (currentStep is IssueStep.Idle) {
+                    SubmitButton(s.btnIssueRoot, isLoading, assetName.length >= 3 && toAddress.length >= 26, RavenOrange) {
+                        onIssueRoot(assetName, qty.toLongOrNull() ?: 1, toAddress, effectiveIpfs, currentReissuable)
+                    }
+                } else {
+                    MultiStepProgressIndicator(currentStep = currentStep, showNfcStep = false)
                 }
             }
 
@@ -338,8 +378,12 @@ fun IssueAssetScreen(
                 val subEffectiveIpfs = imageState.value.ipfsCid
                 val subEnabled = parentAsset.length >= 3 && childName.length >= 1 && toAddress.length >= 26
 
-                SubmitButton(s.btnIssueSub, isLoading, subEnabled, RavenOrange) {
-                    onIssueSub(parentAsset, childName, qty.toLongOrNull() ?: 1, toAddress, subEffectiveIpfs, currentReissuable)
+                if (currentStep is IssueStep.Idle) {
+                    SubmitButton(s.btnIssueSub, isLoading, subEnabled, RavenOrange) {
+                        onIssueSub(parentAsset, childName, qty.toLongOrNull() ?: 1, toAddress, subEffectiveIpfs, currentReissuable)
+                    }
+                } else {
+                    MultiStepProgressIndicator(currentStep = currentStep, showNfcStep = false)
                 }
             }
 
@@ -402,14 +446,18 @@ fun IssueAssetScreen(
                 // If the caller provides a combined issue-and-write callback, use that button instead.
                 // This path is taken when the screen is launched from the "Issue + Write Tag" flow,
                 // allowing the asset issuance and NFC programming to happen in a single user action.
-                if (onIssueUniqueAndWriteTag != null) {
-                    SubmitButton(s.btnIssueAndWrite, isLoading, uniqueEnabled, AuthenticGreen) {
-                        onIssueUniqueAndWriteTag(subAsset, serial, toAddress, uniqueEffectiveIpfs, uniqueDescription)
+                if (currentStep is IssueStep.Idle) {
+                    if (onIssueUniqueAndWriteTag != null) {
+                        SubmitButton(s.btnIssueAndWrite, isLoading, uniqueEnabled, AuthenticGreen) {
+                            onIssueUniqueAndWriteTag(subAsset, serial, toAddress, uniqueEffectiveIpfs, uniqueDescription)
+                        }
+                    } else {
+                        SubmitButton(s.btnIssueUnique, isLoading, uniqueEnabled, AuthenticGreen) {
+                            onIssueUnique(subAsset, serial, toAddress, uniqueEffectiveIpfs, uniqueDescription)
+                        }
                     }
                 } else {
-                    SubmitButton(s.btnIssueUnique, isLoading, uniqueEnabled, AuthenticGreen) {
-                        onIssueUnique(subAsset, serial, toAddress, uniqueEffectiveIpfs, uniqueDescription)
-                    }
+                    MultiStepProgressIndicator(currentStep = currentStep, showNfcStep = onIssueUniqueAndWriteTag != null)
                 }
             }
 
@@ -684,6 +732,147 @@ private fun RavenSwitch(label: String, checked: Boolean, onCheckedChange: (Boole
             colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = RavenOrange))
     }
 }
+
+@Composable
+private fun PreIssuanceWarning(warningType: WarningType) {
+    when (warningType) {
+        WarningType.INSUFFICIENT_BALANCE -> {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = RavenCard),
+                border = BorderStroke(1.dp, AmberWarning.copy(alpha = 0.4f)),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(Icons.Default.Warning, contentDescription = null,
+                        tint = AmberWarning, modifier = Modifier.size(16.dp))
+                    Text("Insufficient balance for this asset type.",
+                        color = AmberWarning, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
+        WarningType.DUPLICATE_NAME -> {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = RavenCard),
+                border = BorderStroke(1.dp, RavenOrange.copy(alpha = 0.4f)),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(Icons.Default.Info, contentDescription = null,
+                        tint = RavenOrange, modifier = Modifier.size(16.dp))
+                    Text("Asset name already exists. Choose a different name.",
+                        color = RavenOrange, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun StepRow(stepName: IssueStep.StepName, currentStep: IssueStep) {
+    val isActive = currentStep is IssueStep.InProgress && currentStep.step == stepName
+    val isDone = currentStep is IssueStep.Success && currentStep.step == stepName
+    val isFailed = currentStep is IssueStep.Failed && currentStep.step == stepName
+    val labelColor = when {
+        isActive -> RavenOrange
+        isDone -> AuthenticGreen.copy(alpha = 0.7f)
+        isFailed -> NotAuthenticRed
+        else -> RavenMuted
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(modifier = Modifier.width(28.dp), contentAlignment = Alignment.Center) {
+            when {
+                isActive -> CircularProgressIndicator(
+                    modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = RavenOrange
+                )
+                isDone -> Icon(Icons.Default.CheckCircle, contentDescription = null,
+                    tint = AuthenticGreen, modifier = Modifier.size(20.dp))
+                isFailed -> Icon(Icons.Default.Error, contentDescription = null,
+                    tint = NotAuthenticRed, modifier = Modifier.size(20.dp))
+                else -> Box(
+                    modifier = Modifier.size(20.dp)
+                        .border(2.dp, RavenBorder, RoundedCornerShape(10.dp))
+                )
+            }
+        }
+        Column(modifier = Modifier.weight(1f).padding(start = 8.dp)) {
+            Text(stepLabel(stepName), color = labelColor, style = MaterialTheme.typography.bodySmall)
+            if (currentStep is IssueStep.Failed) {
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(currentStep.error, color = NotAuthenticRed, style = MaterialTheme.typography.labelSmall)
+            }
+        }
+    }
+}
+
+private fun stepLabel(step: IssueStep.StepName): String = when (step) {
+    IssueStep.StepName.IPFS_UPLOAD -> "Uploading to IPFS..."
+    IssueStep.StepName.BALANCE_CHECK -> "Checking balance..."
+    IssueStep.StepName.NAME_CHECK -> "Checking name..."
+    IssueStep.StepName.ISSUING -> "Issuing on Ravencoin..."
+    IssueStep.StepName.CONFIRMING -> "Confirming..."
+    IssueStep.StepName.NFC_PROGRAMMING -> "Programming NFC tag..."
+}
+
+@Composable
+private fun MultiStepProgressIndicator(currentStep: IssueStep, showNfcStep: Boolean) {
+    val steps = buildList {
+        add(IssueStep.StepName.IPFS_UPLOAD)
+        add(IssueStep.StepName.BALANCE_CHECK)
+        add(IssueStep.StepName.NAME_CHECK)
+        add(IssueStep.StepName.ISSUING)
+        add(IssueStep.StepName.CONFIRMING)
+        if (showNfcStep) add(IssueStep.StepName.NFC_PROGRAMMING)
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(0.dp)) {
+        steps.forEachIndexed { index, step ->
+            if (index > 0) {
+                Box(
+                    modifier = Modifier
+                        .width(2.dp)
+                        .height(16.dp)
+                        .background(RavenBorder)
+                        .padding(start = 13.dp)
+                )
+            }
+            StepRow(step, currentStep)
+        }
+    }
+}
+
+@Composable
+private fun ConfirmationProgressRow(confirmations: Int) {
+    val s = LocalStrings.current
+    Row(
+        modifier = Modifier.padding(start = 36.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            if (confirmations >= 6) Icons.Default.CheckCircle else Icons.Default.Schedule,
+            contentDescription = null,
+            tint = if (confirmations >= 6) AuthenticGreen else AmberWarning,
+            modifier = Modifier.size(14.dp)
+        )
+        Text(
+            if (confirmations >= 6) s.confirmComplete else s.confirmProgress.replace("%1\$d", confirmations.toString()),
+            color = if (confirmations >= 6) AuthenticGreen else AmberWarning,
+            style = MaterialTheme.typography.bodySmall
+        )
+    }
+}
+
+/** Amber warning color token. */
+private val AmberWarning = Color(0xFFF59E0B)
 
 /**
  * Full-width submit button shared across all form modes.
