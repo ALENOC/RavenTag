@@ -113,7 +113,10 @@ data class TxHistoryEntry(
     // Asset transfer detection: when this tx delivers an asset to one of our
     // addresses, [assetName] and [assetAmount] describe the asset; otherwise null/0.
     val assetName: String? = null,
-    val assetAmount: Long = 0L  // raw asset amount (sats * 10^divisions)
+    val assetAmount: Long = 0L,  // raw asset amount (sats * 10^divisions)
+    // Full list of asset names cycled/received in this tx (toUs vouts).
+    // Used by the UI to compact the row to "Ciclati N asset" with a tap-to-list dialog.
+    val incomingAssetNames: List<String> = emptyList()
 )
 
 /**
@@ -1048,6 +1051,7 @@ class RavencoinPublicNode(private val context: Context) {
             var incomingAssetAmount: Long = 0L
             var outgoingAssetName: String? = null
             var outgoingAssetAmount: Long = 0L
+            val incomingAssetNamesSet = LinkedHashSet<String>()
             tx.getAsJsonArray("vout")?.forEach { vout ->
                 try {
                     val obj = vout.asJsonObject
@@ -1066,6 +1070,7 @@ class RavencoinPublicNode(private val context: Context) {
                     if (hex.contains("72766e")) {
                         parseAssetPayload(hex)?.let { (name, amount) ->
                             if (ours) {
+                                incomingAssetNamesSet.add(name)
                                 if (incomingAssetName == null) {
                                     incomingAssetName = name; incomingAssetAmount = amount
                                 }
@@ -1112,8 +1117,11 @@ class RavencoinPublicNode(private val context: Context) {
             val timestamp = tx.get("blocktime")?.asLong ?: tx.get("time")?.asLong ?: 0L
             // Fee only attributable to us when we contributed inputs.
             val feeSat = if (fromUs > 0L && totalVin > totalVout) totalVin - totalVout else 0L
-            val isOutgoing = fromUs > 0L && toOthers > 0L
-            val isSelfTransfer = fromUs > 0L && toOthers == 0L && toUs > 0L
+            // Asset transfers can ride on a 0-sat dust output (Ravencoin allows this when
+            // the receiving address is also paid via a separate RVN output in the same tx).
+            // Include "asset to non-owned address" as outgoing even when toOthers == 0.
+            val isOutgoing = fromUs > 0L && (toOthers > 0L || outgoingAssetName != null)
+            val isSelfTransfer = fromUs > 0L && !isOutgoing && toUs > 0L
             // The scripthash query returned this tx, so our address is involved in
             // some way the parser may have missed (asset OP_RVN_ASSET script with
             // no addresses[] and no inner hash160 hex match — happens on some
@@ -1144,7 +1152,8 @@ class RavencoinPublicNode(private val context: Context) {
                     incomingAssetName != null -> incomingAssetAmount
                     isOutgoing -> outgoingAssetAmount
                     else -> 0L
-                }
+                },
+                incomingAssetNames = incomingAssetNamesSet.toList()
             )
         }
     }
@@ -1836,8 +1845,13 @@ class RavencoinPublicNode(private val context: Context) {
         repeat(SERVERS.size) {
             val candidate = io.raventag.app.wallet.health.NodeHealthMonitor.nextHealthyNode()
                 ?: run {
-                    Log.w(TAG, "All nodes quarantined for batch of ${requests.size} requests")
-                    return List(requests.size) { null }
+                    Log.w(TAG, "All nodes quarantined for batch of ${requests.size} — falling back to per-request singles")
+                    // Sequential single-RPC fallback: slower but resilient when batch
+                    // pipelining fails on every server (common on flaky mobile networks
+                    // where the first batch hits a TLS race that closes the socket).
+                    return requests.map { (method, params) ->
+                        try { callWithFailover(method, params) } catch (_: Exception) { null }
+                    }
                 }
             val (host, portStr) = candidate.split(":", limit = 2)
             val server = ElectrumServer(host, portStr.toInt())
