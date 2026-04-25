@@ -160,8 +160,11 @@ class RavencoinPublicNode(private val context: Context) {
     companion object {
         private const val TAG = "ElectrumX"
 
-        /** Timeout for the TCP connection handshake in milliseconds. */
-        private const val CONNECT_TIMEOUT_MS = 5_000
+        /** Timeout for the TCP connection handshake in milliseconds.
+         *  Kept tight so a dead server does not stall the cold-start failover
+         *  rotation: 5 servers × 5 s previously meant up to 25 s of "Reconnecting…"
+         *  on app resume; 2.5 s caps that at ~12 s worst case. */
+        private const val CONNECT_TIMEOUT_MS = 2_500
 
         /** Timeout for reading a response line from the server in milliseconds. */
         private const val READ_TIMEOUT_MS = 15_000

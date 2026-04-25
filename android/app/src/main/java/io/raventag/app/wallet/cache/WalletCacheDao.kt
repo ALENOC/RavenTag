@@ -95,6 +95,22 @@ object WalletCacheDao {
         db.insertWithOnConflict(TABLE, null, cv, SQLiteDatabase.CONFLICT_REPLACE)
     }
 
+    /** Lightweight write that updates only the block height + last-refreshed
+     *  timestamp, preserving balance/UTXO/asset payloads. */
+    fun writeBlockHeight(blockHeight: Int) {
+        val prev = readState()
+        val db = WalletReliabilityDb.getDatabase()
+        val cv = ContentValues().apply {
+            put("wallet_id", WALLET_ID)
+            put("balance_sat", prev?.balanceSat ?: 0L)
+            put("utxos_json", gson.toJson(prev?.utxos ?: emptyList<Utxo>()))
+            put("asset_utxos_json", gson.toJson(prev?.assetUtxos ?: emptyMap<String, List<AssetUtxo>>()))
+            put("block_height", blockHeight)
+            put("last_refreshed_at", System.currentTimeMillis())
+        }
+        db.insertWithOnConflict(TABLE, null, cv, SQLiteDatabase.CONFLICT_REPLACE)
+    }
+
     /** Wipe all cached wallet state. Used by deleteWallet so a fresh restore
      *  does not inherit stale balance/UTXO data from the previous wallet. */
     fun clearAll() {

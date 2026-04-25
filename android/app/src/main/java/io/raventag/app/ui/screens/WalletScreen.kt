@@ -75,7 +75,7 @@ import kotlinx.coroutines.flow.collect
 
 data class WalletInfo(
     val address: String,
-    val balanceRvn: Double,
+    val balanceRvn: Double?, // null = not yet loaded / fetch failed; non-null = confirmed balance
     val mnemonic: String? = null,
     val isLoading: Boolean = false,
     val error: String? = null
@@ -112,7 +112,7 @@ fun WalletScreen(
     onReceive: () -> Unit,
     onSend: () -> Unit,
     onTransferAsset: ((asset: OwnedAsset) -> Unit)? = null,
-    walletBalance: Double = 0.0,
+    walletBalance: Double? = null,
     txHistory: List<TxHistoryEntry> = emptyList(),
     txHistoryLoading: Boolean = false,
     txHistoryTotal: Int = 0,
@@ -258,7 +258,7 @@ fun WalletScreen(
         val assetsCount = ownedAssets?.size ?: 0
         RestoreWalletConfirmDialog(
             hasBackedUp = hasBackedUp,
-            rvnAmount = walletBalance,
+            rvnAmount = walletBalance ?: 0.0,
             assetsCount = assetsCount,
             onDismiss = {
                 showRestoreConfirmDialog = false
@@ -316,7 +316,7 @@ fun WalletScreen(
         if (walletInfo != null && walletInfo.isLoading == false) everLoaded = true
         if ((walletInfo?.balanceRvn ?: 0.0) > 0.0 || !ownedAssets.isNullOrEmpty()) everLoaded = true
     }
-    if (hasWallet && !everLoaded && walletInfo?.isLoading == true && walletInfo.balanceRvn == 0.0 && ownedAssets.isNullOrEmpty()) {
+    if (hasWallet && !everLoaded && walletInfo?.isLoading == true && (walletInfo.balanceRvn == null || walletInfo.balanceRvn == 0.0) && ownedAssets.isNullOrEmpty()) {
         Box(
             modifier = modifier.fillMaxSize().background(RavenBg),
             contentAlignment = Alignment.Center
@@ -497,7 +497,7 @@ fun WalletScreen(
                         // variant when `backup_completed` is false.
                         val phrase = restoreWords.joinToString(" ")
                         val assetsCount = ownedAssets?.size ?: 0
-                        val hasFunds = walletBalance > 0.0 || assetsCount > 0
+                        val hasFunds = (walletBalance ?: 0.0) > 0.0 || assetsCount > 0
                         if (hasFunds) {
                             pendingRestoreArgs = phrase to controlKey
                             showRestoreConfirmDialog = true
@@ -581,7 +581,7 @@ fun WalletScreen(
                 }
             }
             item(key = "after_actions_spacer") { Spacer(modifier = Modifier.height(16.dp)) }
-            if (!isBrandApp && walletBalance < 0.01 && hasWallet && !assetsLoading && !ownedAssets.isNullOrEmpty() && walletInfo?.isLoading != true) {
+            if (!isBrandApp && (walletBalance ?: 0.0) < 0.01 && hasWallet && !assetsLoading && !ownedAssets.isNullOrEmpty() && walletInfo?.isLoading != true) {
                 item(key = "low_rvn") {
                     Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF2D1A00)), border = BorderStroke(1.dp, RavenOrange.copy(alpha = 0.5f)), shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp)) {
                         Row(modifier = Modifier.padding(12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -967,8 +967,8 @@ private fun BalanceCard(s: AppStrings, info: WalletInfo, rvnPrice: Double? = nul
             Spacer(modifier = Modifier.height(12.dp))
             Text(
                 text = run {
-                    if (info.isLoading && info.balanceRvn == 0.0) {
-                        AnnotatedString(s.walletLoading)
+                    if (info.balanceRvn == null) {
+                        AnnotatedString(if (info.isLoading) s.walletLoading else (info.error ?: s.walletLoading))
                     } else {
                         val full = String.format(java.util.Locale.US, "%.8f", info.balanceRvn)
                         val dotIdx = full.indexOf('.')
@@ -983,18 +983,18 @@ private fun BalanceCard(s: AppStrings, info: WalletInfo, rvnPrice: Double? = nul
                 style = MaterialTheme.typography.headlineMedium,
                 fontWeight = FontWeight.Bold,
                 color = RavenOrange,
-                fontSize = if (info.isLoading && info.balanceRvn == 0.0) 18.sp else 28.sp
+                fontSize = if (info.balanceRvn == null) 18.sp else 28.sp
             )
             // Always reserve the USD/price rows when rvnPrice is known, even during refresh,
             // so the card height never contracts on a loading flip.
             if (rvnPrice != null) {
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "\u2248 ${"$%.2f".format(info.balanceRvn * rvnPrice)} USD",
+                    text = if (info.balanceRvn != null) "\u2248 ${"$%.2f".format(info.balanceRvn * rvnPrice)} USD" else "",
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.SemiBold,
                     color = AuthenticGreen,
-                    modifier = Modifier.alpha(if (info.balanceRvn > 0) 1f else 0f)
+                    modifier = Modifier.alpha(if ((info.balanceRvn ?: 0.0) > 0) 1f else 0f)
                 )
                 Text(text = "1 RVN = ${"$%.4f".format(rvnPrice)}", style = MaterialTheme.typography.bodySmall, color = RavenMuted)
             }
