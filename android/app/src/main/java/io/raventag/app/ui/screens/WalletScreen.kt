@@ -314,9 +314,9 @@ fun WalletScreen(
     var everLoaded by remember { mutableStateOf(false) }
     LaunchedEffect(walletInfo?.isLoading, walletInfo?.balanceRvn, ownedAssets) {
         if (walletInfo != null && walletInfo.isLoading == false) everLoaded = true
-        if ((walletInfo?.balanceRvn ?: 0.0) > 0.0 || !ownedAssets.isNullOrEmpty()) everLoaded = true
+        if ((walletInfo?.balanceRvn ?: 0.0) > 0.0) everLoaded = true
     }
-    if (hasWallet && !everLoaded && walletInfo?.isLoading == true && (walletInfo.balanceRvn == null || walletInfo.balanceRvn == 0.0) && ownedAssets.isNullOrEmpty()) {
+    if (hasWallet && !everLoaded && walletInfo?.isLoading == true && (walletInfo.balanceRvn == null || walletInfo.balanceRvn == 0.0)) {
         Box(
             modifier = modifier.fillMaxSize().background(RavenBg),
             contentAlignment = Alignment.Center
