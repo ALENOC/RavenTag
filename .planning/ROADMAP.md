@@ -140,7 +140,7 @@ Plans:
 - SQLite backups use proper API, not file copies
 
 **Plans:**
-Not yet planned
+6/6 plans complete
 
 ---
 
