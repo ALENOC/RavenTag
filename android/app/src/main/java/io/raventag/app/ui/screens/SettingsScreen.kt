@@ -86,6 +86,9 @@ fun SettingsScreen(
     onAllowScreenshotsChange: (Boolean) -> Unit = {},
     notificationsEnabled: Boolean = true,
     onNotificationsEnabledChange: (Boolean) -> Unit = {},
+    currentAdminKey: String = "",
+    onAdminKeySave: (String) -> Unit = {},
+    adminKeyStatus: MainViewModel.AdminKeyStatus = MainViewModel.AdminKeyStatus.UNKNOWN,
     modifier: Modifier = Modifier
 ) {
     val s = LocalStrings.current
@@ -112,6 +115,9 @@ fun SettingsScreen(
 
     var kuboNodeUrlInput by remember(currentKuboNodeUrl) { mutableStateOf(currentKuboNodeUrl) }
     var kuboNodeUrlSaved by remember { mutableStateOf(false) }
+
+    var adminKeyInput by remember(currentAdminKey) { mutableStateOf(currentAdminKey) }
+    var adminKeySaved by remember { mutableStateOf(false) }
 
     Column(
         modifier = modifier
@@ -208,6 +214,35 @@ fun SettingsScreen(
                 SettingsSaveButton(kuboNodeUrlSaved, s) {
                     onKuboNodeUrlSave(kuboNodeUrlInput.trim())
                     kuboNodeUrlSaved = true
+                }
+            }
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // Admin API Key: required for brand operations (issue, revoke, program tags).
+            // Validated against the backend server. Status chip shows verification result.
+            SectionLabelWithAdminStatus(
+                label = s.adminKey,
+                status = adminKeyStatus,
+                serverOnline = true,
+                s = s,
+                validLabel = s.settingsAdminKeyValid,
+                invalidLabel = s.settingsAdminKeyInvalid,
+                checkingLabel = s.settingsAdminKeyChecking,
+                wrongTypeLabel = s.settingsAdminKeyWrongType
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+            SettingsCard {
+                SettingsTextField(
+                    s.adminKey,
+                    s.adminKeyHint,
+                    adminKeyInput,
+                    { adminKeyInput = it; adminKeySaved = false },
+                    placeholder = "",
+                    password = true
+                )
+                SettingsSaveButton(adminKeySaved, s) {
+                    onAdminKeySave(adminKeyInput.trim())
+                    adminKeySaved = true
                 }
             }
             Spacer(modifier = Modifier.height(24.dp))

@@ -204,9 +204,18 @@ router.get('/:assetName/hierarchy', async (req: Request, res: Response) => {
     return
   }
 
+  const limit = Math.min(Math.max(Number(req.query['limit']) || 200, 1), 1000)
+  const offset = Math.max(Number(req.query['offset']) || 0, 0)
+
   try {
-    const hierarchy = await ravencoinService.getAssetHierarchy(assetName)
-    res.json(hierarchy)
+    const hierarchy = await ravencoinService.getAssetHierarchy(assetName, limit, offset)
+    res.json({
+      ...hierarchy,
+      total: hierarchy.subAssets.length,
+      limit,
+      offset,
+      hasMore: hierarchy.subAssets.length === limit
+    })
   } catch (err: unknown) {
     console.error('[assets/:name/hierarchy]', err)
     res.status(502).json({ error: 'Service temporarily unavailable', code: 'NODE_ERROR' })

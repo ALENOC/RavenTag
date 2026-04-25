@@ -6,6 +6,9 @@ import com.google.gson.Gson
 import com.google.gson.JsonObject
 import com.google.gson.annotations.SerializedName
 import io.raventag.app.ipfs.IpfsResolver
+import io.raventag.app.network.executeSuspend
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -105,7 +108,7 @@ class RpcClient(
         val params: List<Any>
     )
 
-    private fun rpcCall(method: String, params: List<Any> = emptyList()): JsonObject {
+    private suspend fun rpcCall(method: String, params: List<Any> = emptyList()): JsonObject {
         val payload = RpcPayload(method = method, params = params)
         val body = gson.toJson(payload).toRequestBody(json)
         val request = Request.Builder()
@@ -113,7 +116,7 @@ class RpcClient(
             .post(body)
             .build()
 
-        val response = http.newCall(request).execute()
+        val response = http.newCall(request).executeSuspend()
         if (!response.isSuccessful) {
             throw IOException("RPC HTTP error: ${response.code}")
         }
@@ -132,9 +135,9 @@ class RpcClient(
      * Get raw asset data via ElectrumX blockchain.asset.get_meta (no backend required).
      * Falls back to backend proxy if ElectrumX call fails.
      */
-    fun getAssetData(assetName: String): AssetData? {
+    suspend fun getAssetData(assetName: String): AssetData? {
         val meta = try {
-            io.raventag.app.wallet.RavencoinPublicNode().getAssetMeta(assetName.uppercase())
+            context?.let { io.raventag.app.wallet.RavencoinPublicNode(it).getAssetMeta(assetName.uppercase()) }
         } catch (_: Exception) { null }
         if (meta != null) {
             return AssetData(
@@ -151,7 +154,7 @@ class RpcClient(
             val request = Request.Builder()
                 .url("$rpcUrl/api/assets/${assetName.uppercase()}")
                 .get().build()
-            val response = http.newCall(request).execute()
+            val response = http.newCall(request).executeSuspend()
             if (!response.isSuccessful) return null
             val obj = gson.fromJson(response.body?.string(), JsonObject::class.java)
             AssetData(
@@ -168,7 +171,7 @@ class RpcClient(
     /**
      * Fetch metadata JSON from IPFS gateway.
      */
-    fun fetchIpfsMetadata(ipfsUri: String): RaventagMetadata? {
+    suspend fun fetchIpfsMetadata(ipfsUri: String): RaventagMetadata? {
         val urls = IpfsResolver.candidateUrls(ipfsUri).ifEmpty {
             when {
                 ipfsUri.startsWith("ipfs://") -> listOf(ipfsGateway + ipfsUri.removePrefix("ipfs://"))
@@ -179,7 +182,7 @@ class RpcClient(
         urls.forEach { url ->
             runCatching {
                 val request = Request.Builder().url(url).get().build()
-                val response = http.newCall(request).execute()
+                val response = http.newCall(request).executeSuspend()
                 if (!response.isSuccessful) {
                     Log.w(TAG, "fetchIpfsMetadata $ipfsUri via $url http=${response.code}")
                     return@runCatching null
@@ -196,12 +199,12 @@ class RpcClient(
     /**
      * Search assets by name pattern via backend proxy.
      */
-    fun searchAssets(query: String): List<String> {
+    suspend fun searchAssets(query: String): List<String> {
         return try {
             val request = Request.Builder()
                 .url("$rpcUrl/api/assets?search=${query.uppercase()}")
                 .get().build()
-            val response = http.newCall(request).execute()
+            val response = http.newCall(request).executeSuspend()
             if (!response.isSuccessful) return emptyList()
             val obj = gson.fromJson(response.body?.string(), JsonObject::class.java)
             val arr = obj["assets"]?.asJsonArray ?: return emptyList()
@@ -213,7 +216,8 @@ class RpcClient(
      * List all Ravencoin assets owned by a given address via ElectrumX (no backend required).
      */
     fun listAssetsByAddress(address: String): List<OwnedAsset> {
-        val node = io.raventag.app.wallet.RavencoinPublicNode()
+        val node = context?.let { io.raventag.app.wallet.RavencoinPublicNode(it) }
+            ?: return emptyList()
         val assetBalances = node.getAssetBalances(address)
         
         // Parallelize metadata fetching using a fixed thread pool or coroutines scope
@@ -243,7 +247,7 @@ class RpcClient(
      * IPFS metadata is cached by IPFS hash to avoid redundant network calls
      * while ensuring each asset gets its own correct metadata.
      */
-    fun enrichWithIpfsData(asset: OwnedAsset): OwnedAsset {
+    suspend fun enrichWithIpfsData(asset: OwnedAsset): OwnedAsset {
         // Use ipfsHash already fetched in listAssetsByAddress when available,
         // falling back to a fresh getAssetData call only if needed.
         val hash = asset.ipfsHash ?: run {
@@ -267,7 +271,7 @@ class RpcClient(
             data class Result(val imageUrl: String?, val description: String?)
             val found: Result? = try {
                 val req = Request.Builder().url(url).get().build()
-                http.newCall(req).execute().use { resp ->
+                http.newCall(req).executeSuspend().use { resp ->
                     if (!resp.isSuccessful) {
                         Log.w(TAG, "enrichWithIpfsData ${asset.name} HTTP ${resp.code} via $url")
                         return@use null
@@ -286,8 +290,8 @@ class RpcClient(
                         when {
                             img.startsWith("http") -> img
                             img.startsWith("ipfs://") -> img
-                            img.startsWith("/ipfs/") -> "ipfs://${img.removePrefix("/ipfs/")}"
-                            else -> "ipfs://$img"
+                            img.startsWith("/ipfs/") -> img.removePrefix("/ipfs/")
+                            else -> img  // Already a bare CID
                         }
                     }
                     val description = json["description"]?.takeIf { !it.isJsonNull }?.asString
@@ -311,7 +315,7 @@ class RpcClient(
     /**
      * Get asset with RTP-1 metadata.
      */
-    fun getAssetWithMetadata(assetName: String): Pair<AssetData, RaventagMetadata?>? {
+    suspend fun getAssetWithMetadata(assetName: String): Pair<AssetData, RaventagMetadata?>? {
         val asset = getAssetData(assetName) ?: return null
         val metadata = asset.ipfsHash?.let {
             try { fetchIpfsMetadata("ipfs://$it") } catch (e: Exception) { null }

@@ -8,9 +8,8 @@
  * (e.g. a Raspberry Pi on the same LAN, or a VPS) instead of the Pinata cloud service.
  * The node URL is stored in app settings and passed to each upload call at runtime.
  *
- * All network calls are synchronous and must be dispatched from a background coroutine
- * or thread by the caller. No suspend functions are used here; OkHttp's blocking API
- * is used directly.
+ * All network calls are suspend functions using Kotlin coroutines with suspendCancellableCoroutine,
+ * allowing proper dispatcher switching and preventing UI thread blocking.
  *
  * Relevant Kubo API endpoints used:
  *   POST /api/v0/add?pin=true   Upload and pin a file, returns JSON with "Hash" field.
@@ -20,6 +19,7 @@ package io.raventag.app.ipfs
 
 import com.google.gson.Gson
 import com.google.gson.JsonObject
+import io.raventag.app.network.executeSuspend
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
@@ -79,7 +79,7 @@ object KuboUploader {
      * @throws Exception if the HTTP response is not successful or the response body
      *                   does not contain a "Hash" field.
      */
-    fun uploadFile(bytes: ByteArray, mimeType: String, filename: String, nodeUrl: String): String {
+    suspend fun uploadFile(bytes: ByteArray, mimeType: String, filename: String, nodeUrl: String): String {
         // Build a multipart body with the file content as the "file" part.
         val body = MultipartBody.Builder()
             .setType(MultipartBody.FORM)
@@ -89,7 +89,7 @@ object KuboUploader {
             .url("${apiBase(nodeUrl)}/add?pin=true")  // pin=true keeps the content alive
             .post(body)
             .build()
-        http.newCall(request).execute().use { response ->
+        http.newCall(request).executeSuspend().use { response ->
             if (!response.isSuccessful) throw Exception("Kubo upload failed: ${response.code}")
             // Kubo returns a JSON object like: {"Name":"metadata.json","Hash":"Qm...","Size":"123"}
             val json = Gson().fromJson(response.body!!.string(), JsonObject::class.java)
@@ -107,7 +107,7 @@ object KuboUploader {
      * @param nodeUrl Base URL of the Kubo node.
      * @return The IPFS CID of the uploaded JSON file.
      */
-    fun uploadJson(json: String, nodeUrl: String): String =
+    suspend fun uploadJson(json: String, nodeUrl: String): String =
         uploadFile(json.toByteArray(Charsets.UTF_8), "application/json", "metadata.json", nodeUrl)
 
     /**
@@ -122,13 +122,13 @@ object KuboUploader {
      * @param url Base URL of the Kubo node to test.
      * @return true if the node is reachable and returns a valid version response, false otherwise.
      */
-    fun testNode(url: String): Boolean {
+    suspend fun testNode(url: String): Boolean {
         val request = Request.Builder()
             .url("${apiBase(url)}/version")
             // Kubo's /api/v0/version requires a POST; an empty body is sufficient.
             .post(ByteArray(0).toRequestBody(null))
             .build()
-        return http.newCall(request).execute().use { response ->
+        return http.newCall(request).executeSuspend().use { response ->
             if (!response.isSuccessful) return@use false
             val body = response.body?.string().orEmpty()
             // A valid Kubo response contains a JSON "Version" field.
