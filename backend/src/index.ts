@@ -22,6 +22,7 @@ import verifyRouter from './routes/verify.js'
 import adminRouter from './routes/admin.js'
 import brandRouter from './routes/brand.js'
 import registryRouter from './routes/registry.js'
+import { getDb } from './middleware/cache.js'
 import { requestLogger, logRateLimitEvent, getRequestStats } from './middleware/logger.js'
 import { requireAdminKey } from './middleware/auth.js'
 
@@ -227,7 +228,39 @@ app.use((err: Error, _req: express.Request, res: express.Response, _next: expres
   res.status(500).json({ error: 'Internal server error', code: 'INTERNAL_ERROR' })
 })
 
-app.listen(PORT, () => {
+// ── Process-level error handlers ──────────────────────────────────────────────
+// Express error middleware only catches sync errors in route handlers.
+// Unhandled promise rejections and uncaught exceptions would crash the process
+// without graceful cleanup. These handlers log the error and shut down cleanly
+// so Docker can restart the container with a fresh state.
+
+process.on('unhandledRejection', (reason: unknown, _promise: Promise<unknown>) => {
+  const message = reason instanceof Error ? reason.message : String(reason)
+  const stack = reason instanceof Error ? reason.stack : undefined
+  console.error('[FATAL] Unhandled Rejection:', message)
+  if (stack) console.error(stack)
+  // Attempt graceful shutdown: close HTTP server first, then SQLite
+  try {
+    server.close(() => {
+      try { getDb().close() } catch { /* DB may not be open */ }
+      process.exit(1)
+    })
+    // Force exit after 5s if graceful shutdown hangs
+    setTimeout(() => process.exit(1), 5000)
+  } catch {
+    process.exit(1)
+  }
+})
+
+process.on('uncaughtException', (err: Error) => {
+  console.error('[FATAL] Uncaught Exception:', err.message)
+  console.error(err.stack)
+  // Uncaught exceptions leave the process in an undefined state.
+  // Exit immediately — do not attempt graceful shutdown.
+  process.exit(1)
+})
+
+const server = app.listen(PORT, () => {
   console.log(`RavenTag API running on http://localhost:${PORT}`)
   console.log(`Protocol: RTP-1 | Env: ${process.env.NODE_ENV ?? 'development'}`)
 })
