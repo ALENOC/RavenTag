@@ -144,6 +144,27 @@ RavenTag/
 └── LICENSE         RavenTag Source License (RTSL-1.0)
 ```
 
+## 数据库浏览器
+
+用于在运行中的后端实例上探索 SQLite 数据库的只读交互式 Shell。
+
+```bash
+docker exec -it raventag-backend node dist/db-explore.js
+```
+
+可用命令:
+
+| 命令 | 描述 |
+|---|---|
+| `.assets` | 列出已注册芯片 (chip_registry) |
+| `.brands` | 列出已注册品牌 (brand_registry) |
+| `.revoked` | 列出已撤销资产 (revoked_assets) |
+| `.stats` | 显示所有表的行数 |
+| `.help` | 显示可用命令 |
+| `.exit` | 关闭数据库并退出 |
+
+Shell 以只读模式打开数据库，不暴露任何写操作。
+
 ## 法律文件
 
 - [服务条款](legal/TERMS_OF_SERVICE.md)
