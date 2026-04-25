@@ -53,10 +53,16 @@ object AppConfig {
      * rotation leaves 3 operational which is acceptable for D-09).
      */
     val ELECTRUM_SERVERS: List<Pair<String, Int>> = listOf(
+        // Verified live (probed via server.version + headers.subscribe). The bare
+        // IPs that used to live here pointed to the same hosts as the rvn4lyfe.com /
+        // rvn-dashboard.com domains and were dropped after the cert rotation. Cipig
+        // (KomodoPlatform) operates the three "rvn.electrumN.cipig.net" mirrors
+        // and they are listed in coins_config.json.
         "rvn4lyfe.com" to 50002,
         "rvn-dashboard.com" to 50002,
-        "162.19.153.65" to 50002,
-        "51.222.139.25" to 50002,
+        "rvn.electrum1.cipig.net" to 20051,
+        "rvn.electrum2.cipig.net" to 20051,
+        "rvn.electrum3.cipig.net" to 20051,
     )
 
     /**
