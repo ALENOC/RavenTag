@@ -123,6 +123,24 @@ import java.util.concurrent.TimeUnit
 // ViewModel
 // ============================================================
 
+sealed class IssueStep {
+    object Idle : IssueStep()
+    data class InProgress(val step: StepName) : IssueStep()
+    data class Success(val step: StepName) : IssueStep()
+    data class Failed(val step: StepName, val error: String, val canRetry: Boolean) : IssueStep()
+
+    enum class StepName {
+        IPFS_UPLOAD,
+        BALANCE_CHECK,
+        NAME_CHECK,
+        ISSUING,
+        CONFIRMING,
+        NFC_PROGRAMMING
+    }
+}
+
+enum class WarningType { INSUFFICIENT_BALANCE, DUPLICATE_NAME }
+
 /**
  * MainViewModel holds all application state and drives the coroutine-heavy
  * business logic (NFC verification, asset issuance, wallet operations).
@@ -262,6 +280,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** True = last operation succeeded, false = failed, null = not yet run. */
     var issueSuccess by mutableStateOf<Boolean?>(null)
+
+    /** Phase 40: Current step in the multi-step issuance flow. */
+    var issueStep by mutableStateOf<IssueStep>(IssueStep.Idle)
+
+    /** Phase 40: Transaction ID of the most recently issued asset (for explorer link). */
+    var issuedTxid by mutableStateOf<String?>(null)
+
+    /** Phase 40: Inline pre-issuance warning type (null = no warning). */
+    var warningType by mutableStateOf<WarningType?>(null)
 
     /** nfc_pub_id returned by a chip registration response (shown in the result UI). */
     var registerNfcPubId by mutableStateOf<String?>(null)
@@ -1768,8 +1795,42 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun clearIssueResult() {
         issueResult = null
         issueSuccess = null
+        issueStep = IssueStep.Idle
+        issuedTxid = null
+        warningType = null
         registerNfcPubId = null
         prefilledTransferAssetName = null
+    }
+
+    /**
+     * Phase 40: Classify an exception caught during asset issuance into a localized
+     * user-facing error message. Falls back to raw exception message for unknown errors.
+     */
+    private fun classifyIssuanceError(e: Throwable, s: AppStrings): String {
+        val msg = e.message?.lowercase() ?: ""
+        return when {
+            msg.contains("insufficient funds") || msg.contains("fondi insufficienti")
+                || msg.contains("no spendable") || msg.contains("nessun rvn spendibile")
+                -> s.issueErrorInsufficientFunds
+            msg.contains("duplicate") || msg.contains("already exists") || msg.contains("gia esiste")
+                -> s.issueErrorDuplicateName
+            msg.contains("connection refused") || msg.contains("unreachable") || msg.contains("irraggiungibile")
+                || msg.contains("unknownhost")
+                -> s.issueErrorNodeUnreachable
+            msg.contains("timeout")
+                -> s.issueErrorTimeout
+            msg.contains("fee") && (msg.contains("estimate") || msg.contains("commissione"))
+                -> s.issueErrorFeeEstimation
+            msg.contains("pinata") && (msg.contains("jwt") || msg.contains("auth") || msg.contains("scaduto"))
+                -> s.issueErrorIpfsAuth
+            msg.contains("ipfs") || msg.contains("caricamento ipfs fallito")
+                -> s.issueErrorIpfsFailed
+            msg.contains("invalid address") || msg.contains("indirizzo non valido")
+                -> s.issueErrorInvalidAddress
+            msg.contains("wallet non disponibile") || msg.contains("no wallet")
+                -> s.issueErrorNoWallet
+            else -> "${s.issueFailed}: ${e.message ?: ""}"
+        }
     }
 
     /**
