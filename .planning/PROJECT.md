@@ -2,20 +2,19 @@
 
 ## Current Milestone: v1.0 Security, Performance & Reliability
 
-**Goal:** Hardening sicurezza, ottimizzazione performance Android, e affidabilita' end-to-end del wallet Ravencoin.
+**Status:** ✅ SHIPPED 2026-04-26
 
-**Target features:**
-- Sicurezza: ADMIN_KEY rimosso da APK, TLS ElectrumX abilitato, fingerprint TOFU persistenti, SELECT * fix
-- Android performance: blocking OkHttp → suspend functions, wallet restore ottimizzato, invio RVN non-bloccante
-- Wallet: saldo RVN affidabile, invio/ricezione, sincronizzazione UTXO
-- Emissione asset (Brand): gestione errori RPC, feedback utente chiaro
-- Backend: unhandledRejection handler, Promise.all per gerarchia, paginazione listassets, cleanup retention, backup SQLite sicuro
+**What shipped:**
+- Sicurezza Android: ADMIN_KEY rimosso da APK, TLS ElectrumX abilitato, TOFU fingerprint persistenti in SQLite, SELECT * fix, derive-chip-key mai loggato
+- Performance Android: blocking OkHttp → suspend functions con withContext(IO), restore wallet parallelo (~3x speedup), retry con exponential backoff
+- Wallet: saldo RVN affidabile, UTXO sync/reservation, scripthash subscription, fee estimation, consolidation reliability
+- Mnemonic safety: BiometricGate + CryptoObject, HMAC integrity, FLAG_SECURE
+- Asset emission UX: error classification (8 categorie), multi-step progress indicator, confirmation polling
+- Backend: unhandledRejection/process-level handlers, Promise.allSettled chunked per gerarchia asset, paginazione, retention cleanup, backup SQLite via .backup() API, CLI explorer read-only
 
 ## What This Is
 
 Framework open-source trustless (RTP-1) che collega tag NFC NTAG 424 DNA ad asset Ravencoin. Tre deployment target: backend Node.js/Express, frontend Next.js 14, e app Android Kotlin/Compose. La verifica crittografica gira interamente client-side, senza fidarsi del server.
-
-Questo milestone: hardening sicurezza, ottimizzazione performance Android, e affidabilita' end-to-end del wallet Ravencoin.
 
 ## Core Value
 
@@ -25,49 +24,46 @@ La catena crittografica da chip NFC a blockchain deve essere sicura e reattiva. 
 
 ### Validated
 
-- ✓ Verifica SUN NTAG 424 DNA client-side (AES-CMAC Bouncy Castle + Web Crypto API) — existing
-- ✓ Flusso emissione asset/sub-asset on-device signing + ElectrumX broadcast — existing
-- ✓ Wallet HD BIP44/BIP39 con mnemonic protetto da Android Keystore — existing
-- ✓ Revocazione soft (SQLite) + hard (burn on-chain) — existing
-- ✓ Backend REST API con verify, asset, brand, admin, registry — existing
-- ✓ Frontend Next.js con Web NFC scanning — existing
-- ✓ Docker deployment con healthcheck e backup cifrato — existing
-- ✓ CI/CD GitHub Actions — existing
-
-### Validated (Phase 50)
-
-- ✓ Aggiungere unhandledRejection handler nel backend
-- ✓ Sostituire sequential loop in getAssetHierarchy con Promise.all
-- ✓ Paginazione o limite documentato per listassets (cap 200)
-- ✓ Cleanup periodico request_logs (nfc_counters escluso per sicurezza anti-replay)
-- ✓ Backup SQLite sicuro (sostituire raw file copy con .backup API)
-- ✓ CLI database explorer read-only (db:explore)
+- ✓ Verifica SUN NTAG 424 DNA client-side (AES-CMAC Bouncy Castle + Web Crypto API) — v1.0
+- ✓ Flusso emissione asset/sub-asset on-device signing + ElectrumX broadcast — v1.0
+- ✓ Wallet HD BIP44/BIP39 con mnemonic protetto da Android Keystore — v1.0
+- ✓ Revocazione soft (SQLite) + hard (burn on-chain) — v1.0
+- ✓ Backend REST API con verify, asset, brand, admin, registry — v1.0
+- ✓ Frontend Next.js con Web NFC scanning — v1.0
+- ✓ Docker deployment con healthcheck e backup cifrato — v1.0
+- ✓ CI/CD GitHub Actions — v1.0
+- ✓ ADMIN_KEY rimosso da BuildConfig → EncryptedSharedPreferences AES-256-GCM — v1.0
+- ✓ TLS ElectrumX abilitato con rejectUnauthorized + TOFU fingerprint persistito in SQLite — v1.0
+- ✓ SELECT * query sostituite con column list esplicite — v1.0
+- ✓ derive-chip-key payload mai loggato da proxy/CDN — v1.0
+- ✓ Chiamate OkHttp bloccanti → suspend functions con withContext(IO) — v1.0
+- ✓ Wallet restore ottimizzato parallelo (~3x speedup) — v1.0
+- ✓ Invio RVN e asset non-bloccante con notification progress — v1.0
+- ✓ Wallet RVN: saldo affidabile, invio/ricezione, sincronizzazione UTXO — v1.0
+- ✓ Emissione asset (Brand): gestione errori RPC, feedback utente — v1.0
+- ✓ Sicurezza wallet: protezione mnemonic, keystore integrity, export/import — v1.0
+- ✓ unhandledRejection + uncaughtException handler con graceful shutdown — v1.0
+- ✓ Asset hierarchy parallelizzato con Promise.allSettled — v1.0
+- ✓ Paginazione listassets (default 50, cap 200) — v1.0
+- ✓ Cleanup periodico request_logs con retention — v1.0
+- ✓ Backup SQLite via .backup() API (non raw file copy) — v1.0
+- ✓ CLI database explorer read-only — v1.0
 
 ### Active
 
-- [ ] Rimuovere ADMIN_KEY da BuildConfig Android, richiedere sempre da EncryptedSharedPreferences
-- [ ] Abilitare rejectUnauthorized per ElectrumX TLS o pinning SHA-256 fingerprint
-- [ ] Persistere fingerprint TOFU in SQLite (sopravvivono a restart)
-- [ ] Usare column list esplicite nelle SELECT admin (no SELECT *)
-- [ ] Verificare che nessun proxy/CDN logghi il body di derive-chip-key
-- [ ] Convertire chiamate bloccanti Android (enrichWithIpfsData, execute()) in suspend functions con withContext(IO)
-- [ ] Ottimizzare restore wallet: ridurre blocking I/O e sincronizzazione sequenziale
-- [ ] Garantire che invio RVN e asset non blocchi la UI
-- [ ] Wallet RVN: saldo affidabile, invio/ricezione, sincronizzazione UTXO
-- [ ] Emissione asset (Brand): gestione errori RPC, feedback utente chiaro
-- [ ] Sicurezza wallet: protezione mnemonic, keystore integrity, export/import
+*Nessuna requirement attiva. Pronto per prossimo milestone.*
 
 ### Out of Scope
 
 - Multi-instance backend / horizontal scaling — progetto self-hosted, single-instance accettabile
 - Structured logging (pino) — miglioramento operativo, non critico per sicurezza
-- Frontend web performance — focus su Android per questo milestone
+- Frontend web performance — focus su Android per v1.0
 - Migrare registered_tags a chip_registry — technical debt, non vulnerabilita'
 - Testing suite backend — importante ma scope separato
 
 ## Context
 
-Il codebase esiste gia' con tre deployment target funzionanti. Il CONCERNS.md identifica vulnerabilita' di sicurezza concrete (ADMIN_KEY nell'APK, TLS disabilitato, fingerprint non persistenti) e problemi di performance (chiamate RPC bloccanti sulla UI Android, N+1 query nel backend, tabelle SQLite senza retention). L'app Android ha un wallet HD con gestione RVN e asset, ma il restore e' lento e le operazioni di invio bloccano la GUI a causa di chiamate OkHttp sincrone su thread worker.
+v1.0 shipped con 30 plan, 5 fasi, ~120 task. Android: 28,768 LOC Kotlin/Compose. Backend: Node.js 20 + Express + better-sqlite3. Frontend: Next.js 14 + Tailwind. L'app Android ha ora wallet HD affidabile con restore parallelo, operazioni di invio non-bloccanti, e sicurezza crittografica end-to-end. Il backend ha error handling robusto, paginazione, backup sicuri, e CLI explorer.
 
 ## Constraints
 
@@ -81,10 +77,16 @@ Il codebase esiste gia' con tre deployment target funzionanti. Il CONCERNS.md id
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| Fix sicurezza prima di performance | Vulnerabilita' attive hanno impatto reale, performance e' degrado | — Pending |
-| Focus Android su suspend functions | Blocking OkHttp execute() causa ANR e freeze UI | — Pending |
-| Persistere TOFU fingerprint in SQLite | In-process Map si resetta a ogni restart, lasciando finestra MITM | — Pending |
-| Rimuovere BuildConfig.ADMIN_KEY | Chiave compilata nell'APK e' estrabile per decompilazione | — Pending |
+| Fix sicurezza prima di performance | Vulnerabilita' attive hanno impatto reale, performance e' degrado | ✓ Good |
+| Focus Android su suspend functions | Blocking OkHttp execute() causa ANR e freeze UI | ✓ Good |
+| Persistere TOFU fingerprint in SQLite | In-process Map si resetta a ogni restart, lasciando finestra MITM | ✓ Good |
+| Rimuovere BuildConfig.ADMIN_KEY | Chiave compilata nell'APK e' estrabile per decompilazione | ✓ Good |
+| Lambda-injectable FeeEstimator per testabilita' | Pure function pattern, no DI framework overhead | ✓ Good |
+| BiometricPrompt bound via CryptoObject | Authentication bypassabile se basata solo su boolean callback | ✓ Good |
+| NodeHealthMonitor singleton | Single source of truth per RPC + subscription quarantine | ✓ Good |
+| computeSpendableBalanceSat pure function | Testable senza mock, no side effects | ✓ Good |
+| Wallet Cache DB tables co-located in wallet_reliability.db | Single DB connection, simpler migrations | ✓ Good |
+| CharArray zero-fill usa space (0x20) non NUL | Coerente con decisione progetto D-16 | ✓ Good |
 
 ## Evolution
 
@@ -104,9 +106,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-25 after Phase 50 completion*
-- Encrypted admin key storage (AES-256-GCM)
-- TOFU certificate fingerprint persistence (SQLite)
-- Explicit SQL column lists in backend
-- Secure logging (no sensitive data in logs)
-
+*Last updated: 2026-04-26 after v1.0 milestone*
