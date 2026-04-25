@@ -109,7 +109,11 @@ data class TxHistoryEntry(
     val timestamp: Long = 0L,  // Unix timestamp in seconds (0 if unknown)
     // D-19 three-value breakdown (0 when unknown / not yet enriched):
     val cycledSat: Long = 0L,  // satoshis paying the change / currentIndex+1 address
-    val feeSat: Long = 0L      // fee paid (sum(vin) - sum(vout))
+    val feeSat: Long = 0L,     // fee paid (sum(vin) - sum(vout))
+    // Asset transfer detection: when this tx delivers an asset to one of our
+    // addresses, [assetName] and [assetAmount] describe the asset; otherwise null/0.
+    val assetName: String? = null,
+    val assetAmount: Long = 0L  // raw asset amount (sats * 10^divisions)
 )
 
 /**
@@ -967,6 +971,16 @@ class RavencoinPublicNode(private val context: Context) {
     ): List<TxHistoryEntry> {
         val scripthash = addressToScripthash(address)
         val owned = if (ownedAddresses.isEmpty()) setOf(address) else ownedAddresses
+        // Hash160 of each owned address (lowercase hex). Asset outputs wrap a P2PKH
+        // payload inside an OP_RVN_ASSET script; some ElectrumX servers do not expose
+        // the inner address in `scriptPubKey.addresses`, so we fall back to hex match.
+        val ownedHashes: Set<String> = owned.mapNotNull { addr ->
+            try {
+                val decoded = base58Decode(addr)
+                if (decoded.size < 21) null
+                else decoded.copyOfRange(1, 21).joinToString("") { "%02x".format(it) }
+            } catch (_: Exception) { null }
+        }.toSet()
 
         // Batch step 1: fetch block height + address history in a single TLS connection
         val step1 = callWithFailoverBatch(listOf(
@@ -1030,6 +1044,10 @@ class RavencoinPublicNode(private val context: Context) {
             var toUs = 0L        // vout back to any owned address (incl. change at currentIndex+1)
             var toOthers = 0L    // vout to external addresses (true external send)
             var totalVout = 0L
+            var incomingAssetName: String? = null
+            var incomingAssetAmount: Long = 0L
+            var outgoingAssetName: String? = null
+            var outgoingAssetAmount: Long = 0L
             tx.getAsJsonArray("vout")?.forEach { vout ->
                 try {
                     val obj = vout.asJsonObject
@@ -1037,8 +1055,27 @@ class RavencoinPublicNode(private val context: Context) {
                     totalVout += valueSat
                     val spk = obj.getAsJsonObject("scriptPubKey")
                     val addresses = spk?.getAsJsonArray("addresses")
-                    if (addresses?.any { it.asString in owned } == true) toUs += valueSat
-                    else toOthers += valueSat
+                    val hex = spk?.get("hex")?.asString?.lowercase() ?: ""
+                    val byAddr = addresses?.any { it.asString in owned } == true
+                    val byHex = !byAddr && hex.isNotEmpty() && ownedHashes.any { hex.contains(it) }
+                    val ours = byAddr || byHex
+                    if (ours) toUs += valueSat else toOthers += valueSat
+
+                    // Detect asset payload (OP_RVN_ASSET) and tag it as incoming or
+                    // outgoing depending on whether the output is to one of our addresses.
+                    if (hex.contains("72766e")) {
+                        parseAssetPayload(hex)?.let { (name, amount) ->
+                            if (ours) {
+                                if (incomingAssetName == null) {
+                                    incomingAssetName = name; incomingAssetAmount = amount
+                                }
+                            } else {
+                                if (outgoingAssetName == null) {
+                                    outgoingAssetName = name; outgoingAssetAmount = amount
+                                }
+                            }
+                        }
+                    }
                 } catch (_: Exception) {}
             }
 
@@ -1057,7 +1094,12 @@ class RavencoinPublicNode(private val context: Context) {
                     totalVin += prevValueSat
                     val prevSpk = prevVoutObj.getAsJsonObject("scriptPubKey")
                     val prevAddresses = prevSpk?.getAsJsonArray("addresses")
-                    if (prevAddresses?.any { it.asString in owned } == true) fromUs += prevValueSat
+                    val prevByAddr = prevAddresses?.any { it.asString in owned } == true
+                    val prevByHex = if (!prevByAddr) {
+                        val hex = prevSpk?.get("hex")?.asString?.lowercase() ?: ""
+                        hex.isNotEmpty() && ownedHashes.any { hex.contains(it) }
+                    } else false
+                    if (prevByAddr || prevByHex) fromUs += prevValueSat
                 } catch (_: Exception) {}
             }
 
@@ -1072,6 +1114,12 @@ class RavencoinPublicNode(private val context: Context) {
             val feeSat = if (fromUs > 0L && totalVin > totalVout) totalVin - totalVout else 0L
             val isOutgoing = fromUs > 0L && toOthers > 0L
             val isSelfTransfer = fromUs > 0L && toOthers == 0L && toUs > 0L
+            // The scripthash query returned this tx, so our address is involved in
+            // some way the parser may have missed (asset OP_RVN_ASSET script with
+            // no addresses[] and no inner hash160 hex match — happens on some
+            // ElectrumX server variants). Treat as incoming when nothing else
+            // tagged it as outgoing or self.
+            val isHiddenIncoming = !isOutgoing && !isSelfTransfer && fromUs == 0L && toUs == 0L
             TxHistoryEntry(
                 txid = txHash,
                 height = height,
@@ -1080,9 +1128,23 @@ class RavencoinPublicNode(private val context: Context) {
                 sentSat = if (isOutgoing) toOthers else 0L,
                 cycledSat = if (isOutgoing || isSelfTransfer) toUs else 0L,
                 feeSat = feeSat,
-                isIncoming = netSat > 0 && !isOutgoing,
+                isIncoming = (netSat > 0 && !isOutgoing) || isHiddenIncoming,
                 isSelfTransfer = isSelfTransfer,
-                timestamp = timestamp
+                timestamp = timestamp,
+                // For outgoing tx, prefer the asset sent to others; for incoming, the
+                // asset received. Self-transfer reports the cycled asset name.
+                assetName = when {
+                    isOutgoing && outgoingAssetName != null -> outgoingAssetName
+                    incomingAssetName != null -> incomingAssetName
+                    isOutgoing -> outgoingAssetName
+                    else -> null
+                },
+                assetAmount = when {
+                    isOutgoing && outgoingAssetName != null -> outgoingAssetAmount
+                    incomingAssetName != null -> incomingAssetAmount
+                    isOutgoing -> outgoingAssetAmount
+                    else -> 0L
+                }
             )
         }
     }
@@ -1569,6 +1631,54 @@ class RavencoinPublicNode(private val context: Context) {
      * @return Raw byte array.
      * @throws IllegalArgumentException if the string contains an invalid character.
      */
+    /**
+     * Parse a Ravencoin OP_RVN_ASSET payload from a scriptPubKey hex string.
+     * Returns (assetName, rawAmount) when the script carries a transfer/issue/owner
+     * marker, null otherwise. Amount is the on-chain integer (sats * 10^divisions).
+     */
+    private fun parseAssetPayload(hex: String): Pair<String, Long>? {
+        // "rvn" magic prefix in hex = 72 76 6e
+        var i = hex.indexOf("72766e")
+        while (i >= 0) {
+            // After "rvn" comes a 1-byte type marker: t=transfer, q=issue, o=owner, r=reissue.
+            val typeIdx = i + 6
+            if (typeIdx + 2 > hex.length) return null
+            val type = hex.substring(typeIdx, typeIdx + 2)
+            if (type !in setOf("74", "71", "6f", "72")) {
+                i = hex.indexOf("72766e", i + 1); continue
+            }
+            // After the type byte, 1 byte = name length (hex pair).
+            val lenIdx = typeIdx + 2
+            if (lenIdx + 2 > hex.length) return null
+            val nameLen = hex.substring(lenIdx, lenIdx + 2).toIntOrNull(16) ?: return null
+            if (nameLen <= 0 || nameLen > 32) {
+                i = hex.indexOf("72766e", i + 1); continue
+            }
+            val nameStart = lenIdx + 2
+            val nameEnd = nameStart + nameLen * 2
+            if (nameEnd > hex.length) return null
+            val nameBytes = ByteArray(nameLen) { k ->
+                hex.substring(nameStart + k * 2, nameStart + k * 2 + 2).toInt(16).toByte()
+            }
+            val name = String(nameBytes, Charsets.US_ASCII)
+            if (!name.all { it.isLetterOrDigit() || it in "/#_-." }) {
+                i = hex.indexOf("72766e", i + 1); continue
+            }
+            // Owner tokens (rvno) carry no amount — return amount 0.
+            if (type == "6f") return name to 0L
+            // For transfer / issue / reissue, 8 bytes amount little-endian follow.
+            val amtEnd = nameEnd + 16
+            if (amtEnd > hex.length) return name to 0L
+            var amount = 0L
+            for (b in 0 until 8) {
+                val byteHex = hex.substring(nameEnd + b * 2, nameEnd + b * 2 + 2)
+                amount = amount or ((byteHex.toLong(16) and 0xff) shl (b * 8))
+            }
+            return name to amount
+        }
+        return null
+    }
+
     private fun base58Decode(input: String): ByteArray {
         var num = BigInteger.ZERO
         for (char in input) {

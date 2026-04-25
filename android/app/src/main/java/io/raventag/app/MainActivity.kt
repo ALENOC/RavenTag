@@ -771,9 +771,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         asset
                     }
                 }
-                ownedAssets = merged
+                // Avoid wiping the visible asset list when a transient network error
+                // returns an empty `basic`. Keep the previous list visible.
+                if (merged.isNotEmpty() || ownedAssets.isNullOrEmpty()) {
+                    ownedAssets = merged
+                    saveAssetsCache(merged)
+                }
                 assetsLoading = false
-                saveAssetsCache(merged)
 
                 // Only fetch metadata for assets not yet enriched.
                 val needsEnrichment = merged.filter { it.imageUrl == null }
@@ -1417,10 +1421,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
             withContext(Dispatchers.Main) {
-                ownedAssets = merged
+                if (merged.isNotEmpty() || ownedAssets.isNullOrEmpty()) {
+                    ownedAssets = merged
+                }
                 assetsLoading = false
             }
-            saveAssetsCache(merged)
+            if (merged.isNotEmpty()) saveAssetsCache(merged)
         } catch (_: Throwable) {
             withContext(Dispatchers.Main) {
                 assetsLoadError = true
@@ -1851,10 +1857,33 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     isLoading = true
                 )
 
-                // Give the network ~3s to propagate the broadcast before re-querying;
-                // querying immediately can return the pre-broadcast balance.
-                kotlinx.coroutines.delay(3000)
+                // Optimistically remove the sent asset from the visible list so the
+                // user does not see it lingering after a UNIQUE token transfer.
+                // For fungible assets, decrement the local quantity by `qty`.
+                ownedAssets = ownedAssets?.mapNotNull { a ->
+                    if (a.name == assetName) {
+                        val remaining = (a.balance - qty.toDouble()).coerceAtLeast(0.0)
+                        if (remaining <= 0.0) null else a.copy(balance = remaining)
+                    } else a
+                }
+
+                // Snapshot the pre-broadcast balance so we can reject obviously wrong
+                // (mempool race) refresh values that would temporarily double the total.
+                val preBalance = walletInfo?.balanceRvn ?: 0.0
+
+                // Wait longer for ElectrumX to settle: with a 1s block-cycle emulator
+                // the mempool view across multiple servers stabilizes around 8s.
+                kotlinx.coroutines.delay(8000)
                 loadWalletBalance()
+                // Sanity guard: if the just-loaded balance is more than 1.05× the
+                // pre-send balance, ElectrumX is in a transient inconsistent state.
+                // Keep the user-trusted previous balance and try again shortly.
+                val postBalance = walletInfo?.balanceRvn ?: 0.0
+                if (preBalance > 0.0 && postBalance > preBalance * 1.05) {
+                    walletInfo = walletInfo?.copy(balanceRvn = preBalance, isLoading = true)
+                    kotlinx.coroutines.delay(5000)
+                    loadWalletBalance()
+                }
                 loadOwnedAssets()
             } catch (e: Throwable) {
                 // Show failed notification (D-05, D-06)

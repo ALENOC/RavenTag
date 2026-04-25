@@ -862,10 +862,14 @@ internal fun IpfsPreviewImage(
 ) {
     val context = LocalContext.current
     val imageLoader = remember(context) { NetworkModule.getImageLoader(context) }
-    // Track which URL index we are currently trying
-    var urlIndex by remember(urls) { mutableStateOf(0) }
-    var resolvedUrl by remember(urls) { mutableStateOf<String?>(urls.firstOrNull()) }
-    var resolveFailed by remember(urls) { mutableStateOf(false) }
+    // Key state on a STABLE identifier (the first URL string) instead of the
+    // list reference, otherwise every recomposition that produces a new List
+    // object resets retry state and refires the network race condition that
+    // makes the preview look "intermittent" — sometimes works, sometimes not.
+    val key = urls.firstOrNull() ?: ""
+    var urlIndex by remember(key) { mutableStateOf(0) }
+    var resolvedUrl by remember(key) { mutableStateOf<String?>(urls.firstOrNull()) }
+    var resolveFailed by remember(key) { mutableStateOf(false) }
 
     if (resolvedUrl != null && !resolveFailed) {
         SubcomposeAsyncImage(
@@ -1086,11 +1090,56 @@ private fun TxCard(s: AppStrings, tx: TxHistoryEntry) {
             Column(horizontalAlignment = Alignment.End) {
                 when {
                     isIncoming -> {
-                        // UNCHANGED incoming layout.
-                        Text(bigAmountAnnotated, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold, color = amtColor)
+                        if (tx.assetName != null) {
+                            // Asset receive: split the hierarchical name across lines so
+                            // long ROOT/SUB#UNIQUE chains stay readable inside the right column.
+                            val raw = tx.assetAmount
+                            val display = if (raw % 100_000_000L == 0L) (raw / 100_000_000L).toString()
+                                          else String.format(java.util.Locale.US, "%.8f", raw / 1e8).trimEnd('0').trimEnd('.')
+                            val name = tx.assetName
+                            val slashIdx = name.indexOf('/')
+                            val hashIdx = name.indexOf('#')
+                            val root = when {
+                                slashIdx > 0 -> name.substring(0, slashIdx)
+                                hashIdx > 0 -> name.substring(0, hashIdx)
+                                else -> name
+                            }
+                            val sub = if (slashIdx > 0) {
+                                if (hashIdx > slashIdx) name.substring(slashIdx, hashIdx)
+                                else name.substring(slashIdx)
+                            } else null
+                            val unique = if (hashIdx > 0) name.substring(hashIdx) else null
+                            Column(horizontalAlignment = Alignment.End) {
+                                Text(
+                                    "+$display $root",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = amtColor
+                                )
+                                if (sub != null) {
+                                    Text(
+                                        sub,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = amtColor.copy(alpha = 0.85f)
+                                    )
+                                }
+                                if (unique != null) {
+                                    Text(
+                                        unique,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = amtColor.copy(alpha = 0.7f)
+                                    )
+                                }
+                            }
+                        } else {
+                            Text(bigAmountAnnotated, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold, color = amtColor)
+                        }
                     }
                     isSelf -> {
                         // D-19 self-transfer variant: "Ciclato" green, "Fee" muted on new line.
+                        // When the self-transfer carries an asset payload (e.g. cycling a
+                        // unique token to a fresh address), surface the asset name too so
+                        // the user can tell what was moved instead of seeing only the RVN dust.
                         val cycledStr = sat2Rvn(if (cycledSat > 0L) cycledSat else tx.amountSat)
                         val feeStr = sat2Rvn(feeSat)
                         Text(
@@ -1098,6 +1147,32 @@ private fun TxCard(s: AppStrings, tx: TxHistoryEntry) {
                             style = MaterialTheme.typography.labelSmall,
                             color = AuthenticGreen
                         )
+                        if (tx.assetName != null) {
+                            Spacer(Modifier.height(2.dp))
+                            val raw = tx.assetAmount
+                            val display = if (raw % 100_000_000L == 0L) (raw / 100_000_000L).toString()
+                                          else String.format(java.util.Locale.US, "%.8f", raw / 1e8).trimEnd('0').trimEnd('.')
+                            val name = tx.assetName
+                            val slashIdx = name.indexOf('/')
+                            val hashIdx = name.indexOf('#')
+                            val root = when {
+                                slashIdx > 0 -> name.substring(0, slashIdx)
+                                hashIdx > 0 -> name.substring(0, hashIdx)
+                                else -> name
+                            }
+                            val sub = if (slashIdx > 0) {
+                                if (hashIdx > slashIdx) name.substring(slashIdx, hashIdx)
+                                else name.substring(slashIdx)
+                            } else null
+                            val unique = if (hashIdx > 0) name.substring(hashIdx) else null
+                            Text(
+                                "$display $root",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = AuthenticGreen.copy(alpha = 0.85f)
+                            )
+                            if (sub != null) Text(sub, style = MaterialTheme.typography.labelSmall, color = AuthenticGreen.copy(alpha = 0.7f))
+                            if (unique != null) Text(unique, style = MaterialTheme.typography.labelSmall, color = AuthenticGreen.copy(alpha = 0.6f))
+                        }
                         Spacer(Modifier.height(2.dp))
                         Text(
                             text = "${s.txHistoryFeePrefix} $feeStr RVN",
@@ -1110,12 +1185,44 @@ private fun TxCard(s: AppStrings, tx: TxHistoryEntry) {
                         val sentStr = sat2Rvn(sentSat)
                         val cycledStr = sat2Rvn(cycledSat)
                         val feeStr = sat2Rvn(feeSat)
-                        Text(
-                            text = "${s.txHistorySentPrefix} -$sentStr RVN",
-                            style = MaterialTheme.typography.bodySmall,
-                            fontWeight = FontWeight.SemiBold,
-                            color = NotAuthenticRed
-                        )
+                        if (tx.assetName != null) {
+                            // Outgoing asset: show "-N ASSET" instead of plain RVN amount.
+                            val raw = tx.assetAmount
+                            val display = if (raw % 100_000_000L == 0L) (raw / 100_000_000L).toString()
+                                          else String.format(java.util.Locale.US, "%.8f", raw / 1e8).trimEnd('0').trimEnd('.')
+                            val name = tx.assetName
+                            val slashIdx = name.indexOf('/')
+                            val hashIdx = name.indexOf('#')
+                            val root = when {
+                                slashIdx > 0 -> name.substring(0, slashIdx)
+                                hashIdx > 0 -> name.substring(0, hashIdx)
+                                else -> name
+                            }
+                            val sub = if (slashIdx > 0) {
+                                if (hashIdx > slashIdx) name.substring(slashIdx, hashIdx)
+                                else name.substring(slashIdx)
+                            } else null
+                            val unique = if (hashIdx > 0) name.substring(hashIdx) else null
+                            Text(
+                                "${s.txHistorySentPrefix} -$display $root",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = NotAuthenticRed
+                            )
+                            if (sub != null) {
+                                Text(sub, style = MaterialTheme.typography.labelSmall, color = NotAuthenticRed.copy(alpha = 0.85f))
+                            }
+                            if (unique != null) {
+                                Text(unique, style = MaterialTheme.typography.labelSmall, color = NotAuthenticRed.copy(alpha = 0.7f))
+                            }
+                        } else {
+                            Text(
+                                text = "${s.txHistorySentPrefix} -$sentStr RVN",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = NotAuthenticRed
+                            )
+                        }
                         Spacer(Modifier.height(2.dp))
                         Text(
                             text = "${s.txHistoryCycledPrefix} $cycledStr RVN",
