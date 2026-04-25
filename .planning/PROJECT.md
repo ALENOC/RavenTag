@@ -34,6 +34,15 @@ La catena crittografica da chip NFC a blockchain deve essere sicura e reattiva. 
 - ✓ Docker deployment con healthcheck e backup cifrato — existing
 - ✓ CI/CD GitHub Actions — existing
 
+### Validated (Phase 50)
+
+- ✓ Aggiungere unhandledRejection handler nel backend
+- ✓ Sostituire sequential loop in getAssetHierarchy con Promise.all
+- ✓ Paginazione o limite documentato per listassets (cap 200)
+- ✓ Cleanup periodico request_logs (nfc_counters escluso per sicurezza anti-replay)
+- ✓ Backup SQLite sicuro (sostituire raw file copy con .backup API)
+- ✓ CLI database explorer read-only (db:explore)
+
 ### Active
 
 - [ ] Rimuovere ADMIN_KEY da BuildConfig Android, richiedere sempre da EncryptedSharedPreferences
@@ -47,11 +56,6 @@ La catena crittografica da chip NFC a blockchain deve essere sicura e reattiva. 
 - [ ] Wallet RVN: saldo affidabile, invio/ricezione, sincronizzazione UTXO
 - [ ] Emissione asset (Brand): gestione errori RPC, feedback utente chiaro
 - [ ] Sicurezza wallet: protezione mnemonic, keystore integrity, export/import
-- [ ] Aggiungere unhandledRejection handler nel backend
-- [ ] Sostituire sequential loop in getAssetHierarchy con Promise.all
-- [ ] Paginazione o limite documentato per listassets (cap 200)
-- [ ] Cleanup periodico request_logs e nfc_counters
-- [ ] Backup SQLite sicuro (sostituire raw file copy con .backup API)
 
 ### Out of Scope
 
@@ -100,7 +104,7 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-13 after initialization*# Phase 10 Complete — Android Security Hardening
+*Last updated: 2026-04-25 after Phase 50 completion*
 - Encrypted admin key storage (AES-256-GCM)
 - TOFU certificate fingerprint persistence (SQLite)
 - Explicit SQL column lists in backend
