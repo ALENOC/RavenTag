@@ -1248,6 +1248,12 @@ class WalletManager(private val context: Context) {
             val node = RavencoinPublicNode(context)
             val currentIndex = getCurrentAddressIndex()
             val addresses = getAddressBatch(0, 0..currentIndex).values.toList()
+            // If the Keystore is locked (device asleep + screen lock),
+            // getSeed() returns null and getAddressBatch yields an empty map.
+            // getTotalBalance(empty) returns 0.0, which would overwrite the
+            // last-known correct balance. Return null so callers preserve
+            // the cached balance instead of flashing "0.00000000 RVN".
+            if (addresses.isEmpty()) return@withContext null
             node.getTotalBalance(addresses)
         } catch (_: Exception) { null }
     }
