@@ -111,8 +111,13 @@ Phase 50: Backend Stability
 - User feedback for success/failure is clear
 - No silent failures during issuance
 
-**Plans:**
-Not yet planned
+**Plans:** 4 plans in 3 waves
+
+Plans:
+- [ ] 40-01-PLAN.md — Wave 0: Test scaffolding + AppStrings localization (32 keys EN+IT+clones)
+- [ ] 40-02-PLAN.md — Wave 1: ViewModel error handling core (IssueStep, classifyIssuanceError, retry wrapping, revoke fix)
+- [ ] 40-03-PLAN.md — Wave 2: Composable UI (MultiStepProgressIndicator, PreIssuanceWarning, tappable txid, ConfirmationProgressRow)
+- [ ] 40-04-PLAN.md — Wave 2: Confirmation polling (N/6, auto-dismiss) + combined flow enhancement (step states, classification)
 
 ---
 
@@ -161,4 +166,4 @@ Not yet planned
 **Target Release:** TBD
 
 *Created: 2026-04-13*
-*Updated: 2026-04-24, Phase 30 complete (10/10 plans)*
+*Updated: 2026-04-25, Phase 40 planned (4 plans in 3 waves)*
