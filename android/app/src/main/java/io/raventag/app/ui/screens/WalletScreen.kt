@@ -181,13 +181,13 @@ fun WalletScreen(
     // tx-history header spinners only appear when the user explicitly asked for it.
     LaunchedEffect(Unit) {
         while (true) {
-            kotlinx.coroutines.delay(30_000L)
             val pm = context.getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
             if (pm?.isPowerSaveMode != true) {
                 onRefreshBalance()
                 cachedLastRefreshedAt = WalletCacheDao.getLastRefreshedAt()
                 cachedBannerVisible = false
             }
+            kotlinx.coroutines.delay(30_000L)
         }
     }
 
