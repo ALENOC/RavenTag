@@ -50,7 +50,7 @@ object NodeHealthMonitor {
     )
 
     private const val QUARANTINE_DURATION_MS: Long = 3_600_000L       // D-11: 1 hour
-    private const val TRANSIENT_COOLDOWN_MS: Long = 8_000L
+    private const val TRANSIENT_COOLDOWN_MS: Long = 2_000L
     private const val YELLOW_FAILURE_WINDOW_MS: Long = 30_000L
     private const val GREEN_SUCCESS_WINDOW_MS: Long = 60_000L
     private const val PREFS_NAME = "node_health_prefs"
@@ -80,8 +80,12 @@ object NodeHealthMonitor {
 
     /**
      * Returns the next host in "host:port" form that is NOT currently
-     * quarantined and is outside the 8s transient-failure cooldown, or null
-     * if every pool entry is unavailable.
+     * quarantined (1h TOFU ban) and is outside the transient-failure cooldown.
+     *
+     * When ALL pool nodes are in transient cooldown, falls back to the
+     * least-recently-failed node so the app never enters a dead state
+     * where no RPC can be attempted. Without this, a network blip that
+     * touches every node once quarantines the entire pool for 2 s.
      *
      * Tries the last known good host (persisted across restarts) first so
      * cold starts skip the failover rotation and connect immediately.
@@ -91,8 +95,6 @@ object NodeHealthMonitor {
         val quarantinedHosts = activeQuarantineHosts(now)
 
         // Fast path: try the persisted last-good host first on cold start.
-        // This avoids TCP connect timeout (5s) × N servers when the first
-        // server in rotation order happens to be down.
         val preferred = getPreferredHost()
         if (preferred != null && preferred !in quarantinedHosts) {
             val failedAt = lastFailureAt[preferred]
@@ -102,15 +104,23 @@ object NodeHealthMonitor {
             }
         }
 
-        // Fallback: standard rotation order
+        // Standard rotation: non-quarantined nodes outside transient cooldown.
         val candidate = AppConfig.ELECTRUM_SERVERS.firstOrNull { (host, port) ->
             val key = "$host:$port"
             if (key in quarantinedHosts) return@firstOrNull false
             val failedAt = lastFailureAt[key]
             failedAt == null || (now - failedAt) > TRANSIENT_COOLDOWN_MS
         }?.let { (h, p) -> "$h:$p" }
+        if (candidate != null) { recomputeState(); return candidate }
+
+        // All nodes are in transient cooldown: fall back to the least recently
+        // failed non-quarantined node so the app never deadlocks.
+        val fallback = AppConfig.ELECTRUM_SERVERS
+            .map { (h, p) -> "$h:$p" }
+            .filter { it !in quarantinedHosts }
+            .minByOrNull { lastFailureAt[it] ?: 0L }
         recomputeState()
-        return candidate
+        return fallback
     }
 
     fun reportSuccess(host: String) {
