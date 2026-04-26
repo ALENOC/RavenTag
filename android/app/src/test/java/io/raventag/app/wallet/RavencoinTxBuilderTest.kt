@@ -402,7 +402,148 @@ class RavencoinTxBuilderTest {
         assertTrue(result.hex.startsWith("02000000"))
         assertEquals(2, result.hex.substring(8, 10).toInt(16))
         assertTrue(result.hex.contains("72766e7410524156454e5441472f4954454d30312100e1f50500000000"))
-        assertTrue(result.hex.contains("72766e7116524156454e5441472f4954454d303123534e30303032"))
+        assertTrue(result.hex.contains("72766e7116524156454e5441472f4954454d303123534e3030303200e1f50500000000000000"))
+    }
+
+    @Test
+    fun `buildAndSignAssetIssueWithAssetSweep atomically sweeps unrelated assets and owner tokens`() {
+        val rvnUtxo = Utxo(
+            txid = "5".repeat(64),
+            outputIndex = 0,
+            satoshis = RavencoinTxBuilder.BURN_UNIQUE_SAT + 10_000_000L,
+            script = senderScript,
+            height = 330
+        )
+        val parentOwnerUtxo = Utxo(
+            txid = "6".repeat(64),
+            outputIndex = 1,
+            satoshis = 600L,
+            script = buildKnownOwnerScript(senderAddress, "RAVENTAG/ITEM01!"),
+            height = 331
+        )
+        val unrelatedOwner = AssetUtxo(
+            utxo = Utxo(
+                txid = "7".repeat(64),
+                outputIndex = 2,
+                satoshis = 0L,
+                script = buildKnownOwnerScript(senderAddress, "RAVENTAG/OTHER!"),
+                height = 332
+            ),
+            assetName = "RAVENTAG/OTHER!",
+            assetRawAmount = RavencoinTxBuilder.ASSET_UNIT_RAW
+        )
+        val oldUnique = AssetUtxo(
+            utxo = Utxo(
+                txid = "8".repeat(64),
+                outputIndex = 3,
+                satoshis = 600L,
+                script = buildKnownAssetScript(senderAddress, "RAVENTAG/OLD#A", RavencoinTxBuilder.ASSET_UNIT_RAW),
+                height = 333
+            ),
+            assetName = "RAVENTAG/OLD#A",
+            assetRawAmount = RavencoinTxBuilder.ASSET_UNIT_RAW
+        )
+
+        val result = RavencoinTxBuilder.buildAndSignAssetIssueWithAssetSweep(
+            utxos = listOf(rvnUtxo),
+            ownerAssetUtxos = listOf(parentOwnerUtxo),
+            otherAssetUtxos = mapOf(
+                unrelatedOwner.assetName to listOf(unrelatedOwner),
+                oldUnique.assetName to listOf(oldUnique)
+            ),
+            assetName = "RAVENTAG/ITEM01#SN02",
+            qtyRaw = RavencoinTxBuilder.ASSET_UNIT_RAW,
+            toAddress = senderAddress,
+            changeAddress = senderAddress,
+            units = 0,
+            reissuable = false,
+            ipfsHash = null,
+            burnSat = RavencoinTxBuilder.BURN_UNIQUE_SAT,
+            feeSat = 1_000_000L,
+            privKeyBytes = testPrivKey,
+            pubKeyBytes = testPubKey
+        )
+
+        assertTrue(result.hex.startsWith("02000000"))
+        assertEquals(4, result.hex.substring(8, 10).toInt(16))
+        assertTrue(result.hex.contains(assetTransferPayloadHex("RAVENTAG/OTHER!", RavencoinTxBuilder.ASSET_UNIT_RAW)))
+        assertTrue(result.hex.contains(assetTransferPayloadHex("RAVENTAG/OLD#A", RavencoinTxBuilder.ASSET_UNIT_RAW)))
+        assertTrue(result.hex.contains(assetTransferPayloadHex("RAVENTAG/ITEM01!", RavencoinTxBuilder.ASSET_UNIT_RAW)))
+        assertTrue(result.hex.contains("72766e71" + oneByteHex("RAVENTAG/ITEM01#SN02".length) + asciiHex("RAVENTAG/ITEM01#SN02")))
+    }
+
+    @Test
+    fun `buildAndSignMultiAddressSend consolidates old assets and current owner tokens to fresh address`() {
+        val oldPrivKey = ByteArray(31) { 0 } + byteArrayOf(2)
+        val oldPubKey = pubKeyFromPrivKey(oldPrivKey)
+        val oldAddress = testAddress(oldPrivKey)
+        val oldScript = p2pkhScriptHex(hash160(oldPubKey))
+        val targetPrivKey = ByteArray(31) { 0 } + byteArrayOf(3)
+        val targetAddress = testAddress(targetPrivKey)
+
+        val oldRvn = RavencoinTxBuilder.KeyedUtxo(
+            Utxo("9".repeat(64), 0, 5_000_000L, oldScript, 340),
+            oldPrivKey,
+            oldPubKey
+        )
+        val currentRvn = RavencoinTxBuilder.KeyedUtxo(
+            Utxo("a".repeat(64), 1, 5_000_000L, senderScript, 341),
+            testPrivKey,
+            testPubKey
+        )
+        val oldAsset = RavencoinTxBuilder.KeyedAssetUtxo(
+            AssetUtxo(
+                Utxo(
+                    "b".repeat(64),
+                    2,
+                    600L,
+                    buildKnownAssetScript(oldAddress, "RAVENTAG/OLD#A", RavencoinTxBuilder.ASSET_UNIT_RAW),
+                    342
+                ),
+                "RAVENTAG/OLD#A",
+                RavencoinTxBuilder.ASSET_UNIT_RAW
+            ),
+            oldPrivKey,
+            oldPubKey
+        )
+        val currentOwner = RavencoinTxBuilder.KeyedAssetUtxo(
+            AssetUtxo(
+                Utxo(
+                    "c".repeat(64),
+                    3,
+                    0L,
+                    buildKnownOwnerScript(senderAddress, "RAVENTAG/ITEM01!"),
+                    343
+                ),
+                "RAVENTAG/ITEM01!",
+                RavencoinTxBuilder.ASSET_UNIT_RAW
+            ),
+            testPrivKey,
+            testPubKey
+        )
+        val feeSat = 100_000L
+        val assetDust = 600L
+        val amountSat = oldRvn.utxo.satoshis + currentRvn.utxo.satoshis +
+                oldAsset.assetUtxo.utxo.satoshis + currentOwner.assetUtxo.utxo.satoshis -
+                feeSat - assetDust
+
+        val result = RavencoinTxBuilder.buildAndSignMultiAddressSend(
+            currentRvnInputs = listOf(currentRvn),
+            extraRvnInputs = listOf(oldRvn),
+            assetInputsByName = mapOf(
+                oldAsset.assetUtxo.assetName to listOf(oldAsset),
+                currentOwner.assetUtxo.assetName to listOf(currentOwner)
+            ),
+            toAddress = targetAddress,
+            amountSat = amountSat,
+            feeSat = feeSat,
+            changeAddress = targetAddress
+        )
+
+        assertTrue(result.hex.startsWith("02000000"))
+        assertEquals(4, result.hex.substring(8, 10).toInt(16))
+        assertTrue(result.hex.contains(assetTransferPayloadHex("RAVENTAG/OLD#A", RavencoinTxBuilder.ASSET_UNIT_RAW)))
+        assertTrue(result.hex.contains(assetTransferPayloadHex("RAVENTAG/ITEM01!", RavencoinTxBuilder.ASSET_UNIT_RAW)))
     }
 
     @Test(expected = IllegalArgumentException::class)
@@ -430,6 +571,17 @@ class RavencoinTxBuilderTest {
     }
 
     // ── Private helpers for asset tests ──────────────────────────────────────
+
+    private fun asciiHex(value: String): String =
+        value.toByteArray(Charsets.US_ASCII).joinToString("") { "%02x".format(it) }
+
+    private fun oneByteHex(value: Int): String = "%02x".format(value)
+
+    private fun le64Hex(value: Long): String =
+        (0 until 8).joinToString("") { i -> "%02x".format((value shr (8 * i)) and 0xff) }
+
+    private fun assetTransferPayloadHex(assetName: String, rawAmount: Long): String =
+        "72766e74" + oneByteHex(assetName.length) + asciiHex(assetName) + le64Hex(rawAmount)
 
     /**
      * Build a minimal OP_RVN_ASSET scriptPubKey hex for test UTXOs.
