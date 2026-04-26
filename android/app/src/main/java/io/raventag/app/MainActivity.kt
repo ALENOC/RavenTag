@@ -829,6 +829,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 assetsLoading = false
 
+                // Launch auto-sweep from detection result (no race with fixed delay)
+                if (needsConsolidation && !consolidationInProgress) {
+                    launchAutoSweep(wm)
+                }
+
                 // Only fetch metadata for assets not yet enriched.
                 val needsEnrichment = merged.filter { it.imageUrl == null }
                 if (needsEnrichment.isEmpty()) return@launch
@@ -1383,26 +1388,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     } catch (_: Exception) {}
                 }
 
-                // Only sweep when detection actually found old funds.
-                // needsConsolidation is set by loadOwnedAssets() which runs
-                // concurrently; wait briefly for it to complete its scan.
-                kotlinx.coroutines.delay(3_000L)
-                if (needsConsolidation) {
-                    try {
-                        autoSweepInProgress = true
-                        val txids = wm.sweepOldAddresses()
-                        if (txids.isNotEmpty()) {
-                            Log.i("MainViewModel", "Startup sweep: ${txids.size} txs")
-                            withContext(Dispatchers.Main) {
-                                needsConsolidation = false
-                                loadWalletBalance()
-                            }
-                        }
-                    } catch (_: Exception) {
-                    } finally {
-                        autoSweepInProgress = false
-                    }
-                }
+                // Auto-sweep is now triggered by loadOwnedAssets() when
+                // detection finds old funds (avoids race with 3s delay).
 
                 // Refresh address after sweep: sweep advances the index to a fresh address.
                 wm.getCurrentAddress()?.let { addr ->
@@ -1478,24 +1465,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
                 walletInfo = walletInfo?.copy(isLoading = false)
 
-                // Sweep after parallel refresh (still sequential as before)
-                try {
-                    autoSweepInProgress = true
-                    val txids = wm.sweepOldAddresses()
-                    if (txids.isNotEmpty()) {
-                        Log.i("MainViewModel", "Auto-sweep completed: ${txids.size} transactions")
-                        withContext(Dispatchers.Main) {
-                            needsConsolidation = false
-                            loadWalletBalanceInternal(wm)
-                            loadOwnedAssetsInternal(wm)
-                            loadTransactionHistoryInternal(wm)
-                        }
-                    }
-                } catch (e: Exception) {
-                    Log.e("MainActivity", "Auto-sweep failed", e)
-                } finally {
-                    autoSweepInProgress = false
-                }
+                // Auto-sweep is triggered by loadOwnedAssetsInternal() when
+                // detection finds old funds (launchAutoSweep).
             } catch (e: Exception) {
                 Log.e("MainActivity", "refreshBalance failed", e)
             } finally {
@@ -1627,6 +1598,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     ownedAssets = merged
                 }
                 assetsLoading = false
+                if (needsConsolidation && !consolidationInProgress) {
+                    launchAutoSweep(wm)
+                }
             }
             if (merged.isNotEmpty()) saveAssetsCache(merged)
 
@@ -2298,6 +2272,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 reportAsyncError(e, prefix = "Send failed")
 
                 android.util.Log.e("MainActivity", "sendRvn failed", e)
+            }
+        }
+    }
+
+    /**
+     * Auto-sweep launched from detection when old funds are found.
+     * Runs in background without blocking UI; shows sweep banner.
+     */
+    private fun launchAutoSweep(wm: io.raventag.app.wallet.WalletManager) {
+        if (autoSweepInProgress || consolidationInProgress) return
+        autoSweepInProgress = true
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val txids = wm.sweepOldAddresses()
+                if (txids.isNotEmpty()) {
+                    Log.i("MainViewModel", "Auto-sweep: ${txids.size} txs")
+                    withContext(Dispatchers.Main) {
+                        needsConsolidation = false
+                        loadWalletBalance()
+                    }
+                }
+            } catch (_: Exception) {
+            } finally {
+                withContext(Dispatchers.Main) { autoSweepInProgress = false }
             }
         }
     }
