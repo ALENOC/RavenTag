@@ -1759,8 +1759,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val s = getStrings()
                 issueResult = s.issueRootSuccess.replace("%1", assetName).replace("%2", "${txid.take(16)}...")
                 issuedTxid = txid
-                walletInfo = walletInfo?.copy(address = wm.getCurrentAddress() ?: walletInfo?.address ?: "")
+                walletInfo = walletInfo?.copy(address = wm.getCurrentAddress() ?: walletInfo?.address ?: "", isLoading = true)
                 notifyRavenTagRegistry(assetName, txid, "root")
+                // Rotate balance/assets to fresh address (currentIndex+1)
+                loadWalletBalance()
+                loadOwnedAssets()
 
                 // D-10: Start confirmation polling
                 issueStep = IssueStep.InProgress(IssueStep.StepName.CONFIRMING)
@@ -1861,8 +1864,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val s = getStrings()
                 issueResult = s.issueSubSuccess.replace("%1", fullName).replace("%2", "${txid.take(16)}...")
                 issuedTxid = txid
-                walletInfo = walletInfo?.copy(address = wm.getCurrentAddress() ?: walletInfo?.address ?: "")
+                walletInfo = walletInfo?.copy(address = wm.getCurrentAddress() ?: walletInfo?.address ?: "", isLoading = true)
                 notifyRavenTagRegistry(fullName, txid, "sub")
+                // Rotate balance/assets to fresh address (currentIndex+1)
+                loadWalletBalance()
+                loadOwnedAssets()
                 issueStep = IssueStep.InProgress(IssueStep.StepName.CONFIRMING)
                 viewModelScope.launch { pollingLoop(txid) }
             } catch (e: Throwable) {
@@ -1936,8 +1942,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val s = getStrings()
                 issueResult = s.issueUniqueSuccess.replace("%1", fullName).replace("%2", "${txid.take(16)}...")
                 issuedTxid = txid
-                walletInfo = walletInfo?.copy(address = wm.getCurrentAddress() ?: walletInfo?.address ?: "")
+                walletInfo = walletInfo?.copy(address = wm.getCurrentAddress() ?: walletInfo?.address ?: "", isLoading = true)
                 notifyRavenTagRegistry(fullName, txid, "unique")
+                // Rotate balance/assets to fresh address (currentIndex+1)
+                loadWalletBalance()
+                loadOwnedAssets()
                 issueStep = IssueStep.InProgress(IssueStep.StepName.CONFIRMING)
                 viewModelScope.launch { pollingLoop(txid) }
             } catch (e: Throwable) {
@@ -2620,8 +2629,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         Log.i("IssueWriteFlow", "processIssueAndWrite asset-issued asset=$fullName txid=$txid")
         issueStep = IssueStep.Success(IssueStep.StepName.ISSUING)
         issuedTxid = txid
-        // Update displayed address (rotated after issuance)
-        walletInfo = walletInfo?.copy(address = wm.getCurrentAddress() ?: walletInfo?.address ?: "")
+        // Update displayed address (rotated after issuance) and reload balance/assets
+        walletInfo = walletInfo?.copy(address = wm.getCurrentAddress() ?: walletInfo?.address ?: "", isLoading = true)
+        loadWalletBalance()
+        loadOwnedAssets()
         notifyRavenTagRegistry(
             assetName = fullName,
             txid = txid,
@@ -3765,7 +3776,8 @@ fun RavenTagApp(
     }
 
     // ── Issue / revoke overlay ────────────────────────────────────────────────
-    val walletAddress = viewModel.walletInfo?.address ?: ""
+    val walletAddress = viewModel.walletManager?.getNextAddress()
+        ?: viewModel.walletInfo?.address ?: ""
     if (issueMode != null) {
         IssueAssetScreen(
             mode = issueMode,

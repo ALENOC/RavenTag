@@ -492,6 +492,8 @@ class WalletManager(private val context: Context) {
 
     fun getCurrentAddress(): String? = getAddress(0, getCurrentAddressIndex())
 
+    fun getNextAddress(): String? = getAddress(0, getCurrentAddressIndex() + 1)
+
     fun reconcileCurrentAddressIndex(): Int = getCurrentAddressIndex()
 
     fun ensureCurrentAddressClean() {}
