@@ -1066,7 +1066,10 @@ object RavencoinTxBuilder {
                 buildAssetTransferScript(changeAddress, assetOutput.assetName, assetOutput.rawAmount)))
         }
 
-        // 4. Return the spent parent owner token to the issuer
+        // 4. Return the spent parent owner token to the issuer.
+        // Owner token return must use "rvnt" (asset transfer with explicit amount).
+        // The input is in "rvno" format (owner create, no amount), the output is
+        // "rvnt" (transfer, with amount=1 encoded as 100000000 raw units).
         if (preservedOwnerAssetName != null) {
             val preservedOwnerScript = buildAssetTransferScript(
                 changeAddress,
@@ -1075,7 +1078,7 @@ object RavencoinTxBuilder {
             )
             Log.i(
                 "RavencoinTxBuilder",
-                "owner-return asset=$preservedOwnerAssetName amountRaw=$preservedOwnerAmount script=${preservedOwnerScript.toHex()}"
+                "owner-return asset=$preservedOwnerAssetName amountRaw=$preservedOwnerAmount format=rvnt script=${preservedOwnerScript.toHex()}"
             )
             outputs.add(ScriptedOutput(0L, preservedOwnerScript))
         }
@@ -1098,13 +1101,19 @@ object RavencoinTxBuilder {
         allInputs.addAll(rvnAndOwnerInputs)
         otherAssetUtxos.values.forEach { allInputs.addAll(it.map { au -> au.utxo }) }
 
+        Log.i("RavencoinTxBuilder", "buildAndSign: allInputs=${allInputs.map { "${it.txid}:${it.outputIndex}" }}")
+
         val signatures = allInputs.mapIndexed { idx, utxo ->
             val sigHash = sigHashWithScriptedOutputs(allInputs, outputs, idx, utxo.script)
             signEcdsa(sigHash, privKeyBytes)
         }
 
         val raw = serializeTxWithScripts(allInputs, outputs, signatures, pubKeyBytes)
-        return SignedTx(raw.toHex(), txid(raw))
+        val rawHex = raw.toHex()
+        // Verify the vout bytes in the serialized output
+        val vout1Byte = raw[37] // input0 vout byte0 (offset: 1+4+32+0=37)
+        Log.i("RavencoinTxBuilder", "buildAndSign: vout0-byte0=${vout1Byte.toInt() and 0xff} rawHex-start=${rawHex.take(200)}")
+        return SignedTx(rawHex, txid(raw))
     }
 
     // ── Public API: full address sweep (assets + RVN in ONE tx) ──────────────

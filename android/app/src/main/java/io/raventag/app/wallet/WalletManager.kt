@@ -1831,6 +1831,8 @@ class WalletManager(private val context: Context) {
         val pubKey = keyPair.second
 
         return@withContext try {
+            android.util.Log.i("WalletManager", "issueAsset: ownerUtxo=${ownerAssetUtxos.map { "${it.txid}:${it.outputIndex}" }}, " +
+                "rvnUtxos=${rvnUtxos.map { "${it.txid}:${it.outputIndex}" }}, burnSat=$burnSat, feeSat=$feeSat")
             val tx = RavencoinTxBuilder.buildAndSignAssetIssueWithAssetSweep(
                 utxos = rvnUtxos.filterNot { rvn ->
                     ownerAssetUtxos.any { owner -> owner.txid == rvn.txid && owner.outputIndex == rvn.outputIndex }
