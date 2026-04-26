@@ -143,6 +143,12 @@ sealed class IssueStep {
 
 enum class WarningType { INSUFFICIENT_BALANCE, DUPLICATE_NAME }
 
+private fun ravencoinAssetNameLengthError(assetName: String): String? {
+    val max = RavencoinTxBuilder.MAX_ASSET_NAME_LENGTH
+    if (assetName.length <= max) return null
+    return "Asset name too long (${assetName.length}/$max): $assetName. Ravencoin requires the full name to be at most $max characters."
+}
+
 /**
  * MainViewModel holds all application state and drives the coroutine-heavy
  * business logic (NFC verification, asset issuance, wallet operations).
@@ -699,6 +705,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** True while consolidation is in progress (prevents banner from reappearing). */
     var consolidationInProgress by mutableStateOf(false)
 
+    /** True while automatic sweep is running (shows progress banner instead of manual button). */
+    var autoSweepInProgress by mutableStateOf(false)
+
     /**
      * Load the asset portfolio for the wallet address.
      *
@@ -728,11 +737,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun loadOwnedAssets() {
         val wm = walletManager ?: return
-
-        // Don't reset consolidation flag if consolidation is in progress
-        if (!consolidationInProgress) {
-            needsConsolidation = false
-        }
 
         viewModelScope.launch {
             assetsLoadError = false
@@ -766,15 +770,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         Pair(assetsDeferred.await(), rvnDeferred.await())
                     }
                     
-                    // Check if any old address still holds CONSOLIDATABLE funds.
-                    // Skip dust-only RVN residues (< 0.001 RVN) — common after a sweep
-                    // when ElectrumX leaves a few hundred sat as a mempool change leftover.
+                    // Consolidation banner logic:
+                    // Trigger if ANY address BEFORE the current one (0 until currentIndex) holds funds.
+                    // The current address (currentIndex) is safe until it spends, and will be
+                    // cycled automatically during the next outgoing transaction.
                     if (currentIndex > 0) {
                         val oldAddresses = wm.getAddressBatch(0, 0 until currentIndex).values.toList()
-                        val funded = try {
-                            node.getAddressesWithSignificantFunds(oldAddresses, minRvnSat = 100_000L)
-                        } catch (_: Exception) { emptySet() }
-                        needsConsolidation = funded.isNotEmpty()
+                        var hasOldFunds = try {
+                            node.getAddressesWithFunds(oldAddresses).isNotEmpty()
+                        } catch (_: Exception) { false }
+                        // Secondary check: getAddressesWithFunds relies on get_balance?asset=true
+                        // batch. If the server rejects asset=true, all responses come back null and
+                        // the fallback only detects RVN, missing asset-only addresses. Use
+                        // listunspent (standard ElectrumX, no asset=true needed) as reliable
+                        // fallback for addresses the primary check missed.
+                        if (!hasOldFunds) {
+                            hasOldFunds = try {
+                                oldAddresses.any { addr -> node.hasAnyUtxos(addr) }
+                            } catch (_: Exception) { false }
+                        }
+                        needsConsolidation = hasOldFunds
+                    } else {
+                        needsConsolidation = false
                     }
                     
                     totals.map { (name, amount) ->
@@ -1367,12 +1384,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
 
                 try {
+                    autoSweepInProgress = true
                     val txids = wm.sweepOldAddresses()
                     if (txids.isNotEmpty()) {
                         Log.i("MainViewModel", "Startup sweep: ${txids.size} txs")
-                        withContext(Dispatchers.Main) { loadWalletBalance() }
+                        withContext(Dispatchers.Main) {
+                            needsConsolidation = false
+                            loadWalletBalance()
+                        }
                     }
-                } catch (_: Exception) {}
+                } catch (_: Exception) {
+                } finally {
+                    autoSweepInProgress = false
+                }
 
                 // Refresh address after sweep: sweep advances the index to a fresh address.
                 wm.getCurrentAddress()?.let { addr ->
@@ -1450,10 +1474,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
                 // Sweep after parallel refresh (still sequential as before)
                 try {
+                    autoSweepInProgress = true
                     val txids = wm.sweepOldAddresses()
                     if (txids.isNotEmpty()) {
                         Log.i("MainViewModel", "Auto-sweep completed: ${txids.size} transactions")
                         withContext(Dispatchers.Main) {
+                            needsConsolidation = false
                             loadWalletBalanceInternal(wm)
                             loadOwnedAssetsInternal(wm)
                             loadTransactionHistoryInternal(wm)
@@ -1461,6 +1487,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 } catch (e: Exception) {
                     Log.e("MainActivity", "Auto-sweep failed", e)
+                } finally {
+                    autoSweepInProgress = false
                 }
             } catch (e: Exception) {
                 Log.e("MainActivity", "refreshBalance failed", e)
@@ -1556,6 +1584,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         ipfsHash = null
                     )
                 }.sortedWith(compareBy({ it.type.ordinal }, { it.name }))
+            }
+
+            // Consolidation banner logic: only trigger if addresses before currentIndex have funds
+            if (currentIndex > 0) {
+                val oldAddresses = wm.getAddressBatch(0, 0 until currentIndex).values.toList()
+                var hasOldFunds = try {
+                    node.getAddressesWithFunds(oldAddresses).isNotEmpty()
+                } catch (_: Exception) { false }
+                if (!hasOldFunds) {
+                    hasOldFunds = try {
+                        oldAddresses.any { addr -> node.hasAnyUtxos(addr) }
+                    } catch (_: Exception) { false }
+                }
+                withContext(Dispatchers.Main) {
+                    needsConsolidation = hasOldFunds
+                }
+            } else {
+                withContext(Dispatchers.Main) {
+                    needsConsolidation = false
+                }
             }
 
             // Merge balances with already-loaded metadata so images never disappear on refresh
@@ -1705,6 +1753,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             issueLoading = true
             try {
                 val assetName = name.uppercase()
+                ravencoinAssetNameLengthError(assetName)?.let { msg ->
+                    warningType = null
+                    issueResult = msg
+                    issueSuccess = false
+                    issueStep = IssueStep.Failed(IssueStep.StepName.NAME_CHECK, msg, canRetry = false)
+                    issueLoading = false
+                    return@launch
+                }
 
                 // D-04 Step 1: Wallet balance check
                 val modeBurnSat = RavencoinTxBuilder.BURN_ROOT_SAT
@@ -1814,6 +1870,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             issueLoading = true
             try {
                 val fullName = "${parent.uppercase()}/${child.uppercase()}"
+                ravencoinAssetNameLengthError(fullName)?.let { msg ->
+                    warningType = null
+                    issueResult = msg
+                    issueSuccess = false
+                    issueStep = IssueStep.Failed(IssueStep.StepName.NAME_CHECK, msg, canRetry = false)
+                    issueLoading = false
+                    return@launch
+                }
 
                 // D-04 Step 1: Wallet balance check
                 val modeBurnSat = RavencoinTxBuilder.BURN_SUB_SAT
@@ -1892,6 +1956,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             issueLoading = true
             try {
                 val fullName = "${parentSub.uppercase()}#${serial.uppercase()}"
+                ravencoinAssetNameLengthError(fullName)?.let { msg ->
+                    warningType = null
+                    issueResult = msg
+                    issueSuccess = false
+                    issueStep = IssueStep.Failed(IssueStep.StepName.NAME_CHECK, msg, canRetry = false)
+                    issueLoading = false
+                    return@launch
+                }
 
                 // D-04 Step 1: Wallet balance check
                 val modeBurnSat = RavencoinTxBuilder.BURN_UNIQUE_SAT
@@ -2377,10 +2449,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * transitions to WAIT_TAG.
      */
     fun startIssueSubAndWriteTag(parentAsset: String, childName: String, toAddress: String, ipfsHash: String?, adminKey: String) {
+        val fullName = "${parentAsset.uppercase()}/${childName.uppercase()}"
+        ravencoinAssetNameLengthError(fullName)?.let { msg ->
+            issueMode = null
+            issueResult = msg
+            issueSuccess = false
+            issueStep = IssueStep.Failed(IssueStep.StepName.NAME_CHECK, msg, canRetry = false)
+            return
+        }
         issueMode = null
         issueResult = null
         issueSuccess = null
-        writeTagAssetName = "${parentAsset.uppercase()}/${childName.uppercase()}"
+        writeTagAssetName = fullName
         writeTagAdminKey = adminKey
         pendingWriteArgs = WriteTagArgs(
             baseUrl = currentVerifyUrl,
@@ -2405,10 +2485,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * UNIQUE_TOKEN kind, and transitions to WAIT_TAG.
      */
     fun startIssueUniqueAndWriteTag(parentSub: String, serial: String, toAddress: String, ipfsHash: String?, description: String?, adminKey: String) {
+        val fullName = "${parentSub.uppercase()}#${serial.uppercase()}"
+        ravencoinAssetNameLengthError(fullName)?.let { msg ->
+            issueMode = null
+            issueResult = msg
+            issueSuccess = false
+            issueStep = IssueStep.Failed(IssueStep.StepName.NAME_CHECK, msg, canRetry = false)
+            return
+        }
         issueMode = null
         issueResult = null
         issueSuccess = null
-        writeTagAssetName = "${parentSub.uppercase()}#${serial.uppercase()}"
+        writeTagAssetName = fullName
         writeTagAdminKey = adminKey
         pendingWriteArgs = WriteTagArgs(
             baseUrl = currentVerifyUrl,
@@ -2563,6 +2651,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val uidHex = uid.toHex()
         val am = AssetManager(context = getApplication(), adminKeyStorage = adminKeyStorage!!)
         val fullName = args.fullAssetName
+        ravencoinAssetNameLengthError(fullName)?.let { return Result.failure(Exception(it)) }
         Log.i("IssueWriteFlow", "processIssueAndWrite start asset=$fullName uid=$uidHex kind=${args.assetKind}")
         val currentMasterKey = resolveInitialMasterKey()
             .getOrElse { return Result.failure(it) }
@@ -3871,6 +3960,7 @@ fun RavenTagApp(
                     assetsLoadError = viewModel.assetsLoadError,
                     needsConsolidation = viewModel.needsConsolidation,
                     consolidationInProgress = viewModel.consolidationInProgress,
+                    autoSweepInProgress = viewModel.autoSweepInProgress,
                     onConsolidateFunds = { viewModel.consolidateFunds() },
                     electrumStatus = viewModel.electrumStatus,
                     blockHeight = viewModel.blockHeight,
