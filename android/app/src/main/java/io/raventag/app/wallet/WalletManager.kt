@@ -648,6 +648,105 @@ class WalletManager(private val context: Context) {
         false
     }
 
+    /**
+     * Build and broadcast a single consolidation tx moving all UTXOs (RVN + assets)
+     * from [staleAddr] to [targetAddr]. Used after issuance to sweep leftover assets
+     * from the previous address into the new one in a single atomic transaction.
+     *
+     * @return txid on success, null if nothing to sweep or on failure.
+     */
+    private suspend fun sweepSingleAddress(
+        staleAddr: String,
+        staleIndex: Int,
+        targetAddr: String,
+        node: RavencoinPublicNode
+    ): String? {
+        val r = try { node.getUtxosAndAllAssetUtxosBatch(staleAddr) } catch (_: Exception) { return null }
+        val rvnUtxos = r.first
+        val assetMap = r.third
+        if (rvnUtxos.isEmpty() && assetMap.isEmpty()) return null
+
+        val keyPair = getKeyPair(0, staleIndex) ?: return null
+        val privKey = keyPair.first
+        val pubKey  = keyPair.second
+
+        val satPerByte = try { node.getMinRelayFeeRateSatPerByte() } catch (_: FeeUnavailableException) { 200L }
+
+        // Build keyed inputs
+        val rvnKeyed = rvnUtxos.map { RavencoinTxBuilder.KeyedUtxo(it, privKey, pubKey) }
+        val assetKeyed = mutableMapOf<String, MutableList<RavencoinTxBuilder.KeyedAssetUtxo>>()
+        for ((name, utxos) in assetMap) {
+            assetKeyed.getOrPut(name) { mutableListOf() }
+                .addAll(utxos.map { RavencoinTxBuilder.KeyedAssetUtxo(it, privKey, pubKey) })
+        }
+
+        // Use the first asset as "primary" so buildAndSignMultiAddressAssetTransfer
+        // has a valid asset name (avoids empty-name script output).
+        val primaryNames = assetKeyed.keys.sorted().toList()
+        if (primaryNames.isEmpty() && rvnUtxos.isEmpty()) return null
+        val primaryName = primaryNames.firstOrNull() ?: ""
+        val primaryInputs: List<RavencoinTxBuilder.KeyedAssetUtxo> =
+            if (primaryName.isNotEmpty()) assetKeyed.remove(primaryName) ?: emptyList()
+            else emptyList()
+        val otherInputs = assetKeyed // remaining assets after removing primary
+
+        val totalRvnIn = rvnKeyed.sumOf { it.utxo.satoshis } +
+            primaryInputs.sumOf { it.assetUtxo.utxo.satoshis } +
+            otherInputs.values.flatten().sumOf { it.assetUtxo.utxo.satoshis }
+        val primaryTotalRaw = primaryInputs.sumOf { it.assetUtxo.assetRawAmount }
+
+        // If no assets at all (only RVN), just send RVN to targetAddr
+        if (primaryName.isEmpty() && otherInputs.isEmpty()) {
+            return try {
+                val feeEstimate = 500L * maxOf(satPerByte, 200L)
+                val sendAmount = totalRvnIn - feeEstimate
+                if (sendAmount <= 546) return null
+                val tx = RavencoinTxBuilder.buildAndSign(
+                    utxos = rvnUtxos, toAddress = targetAddr, amountSat = sendAmount,
+                    feeSat = feeEstimate, changeAddress = targetAddr,
+                    privKeyBytes = privKey, pubKeyBytes = pubKey
+                )
+                val txid = node.broadcast(tx.hex)
+                android.util.Log.i("WalletManager", "sweepSingleAddr: moved ${"%.8f".format(totalRvnIn / 1e8)} RVN to $targetAddr, txid=$txid")
+                txid
+            } catch (e: Exception) {
+                android.util.Log.w("WalletManager", "sweepSingleAddr: RVN-only sweep failed: ${e.message}")
+                null
+            } finally {
+                privKey.fill(0)
+            }
+        }
+
+        val totalInputs = rvnKeyed.size + primaryInputs.size + otherInputs.values.sumOf { it.size }
+        val totalAssetOuts = (if (primaryTotalRaw > 0) 1 else 0) + otherInputs.size
+        val feeSat = (10L + 148L * totalInputs + 70L * totalAssetOuts + 34L) * maxOf(satPerByte, 200L)
+
+        if (totalRvnIn < feeSat + 600L * totalAssetOuts) {
+            android.util.Log.w("WalletManager", "sweepSingleAddr: insufficient RVN (have ${totalRvnIn / 1e8}, need ${(feeSat + 600L * totalAssetOuts) / 1e8})")
+            return null
+        }
+
+        try {
+            val tx = RavencoinTxBuilder.buildAndSignMultiAddressAssetTransfer(
+                primaryAssetInputs = primaryInputs,
+                otherAssetInputs   = otherInputs,
+                rvnInputs          = rvnKeyed,
+                primaryAsset       = RavencoinTxBuilder.AssetOutput(primaryName, primaryTotalRaw, targetAddr),
+                primaryAssetChange = 0L,
+                feeSat             = feeSat,
+                changeAddress      = targetAddr
+            )
+            val txid = node.broadcast(tx.hex)
+            android.util.Log.i("WalletManager", "sweepSingleAddr: moved ${rvnUtxos.size} RVN + ${assetMap.size} asset(s) from index $staleIndex to $targetAddr, txid=$txid")
+            return txid
+        } catch (e: Exception) {
+            android.util.Log.w("WalletManager", "sweepSingleAddr: failed: ${e.message}")
+            return null
+        } finally {
+            privKey.fill(0)
+        }
+    }
+
     suspend fun sweepOldAddresses(): List<String> {
         if (sweepRunning) return emptyList()
         sweepRunning = true
@@ -1705,7 +1804,10 @@ class WalletManager(private val context: Context) {
             listOf(singleOwnerUtxo.utxo.copy(satoshis = 0L))
         }.orEmpty()
 
-        val otherAssetUtxos: Map<String, List<AssetUtxo>> = allAssetMap.filterKeys { it != ownerAssetName }
+        // Asset issuance tx must NOT carry transfers of unrelated assets/owner tokens:
+        // Ravencoin consensus rejects it as "bad-txns-bad-asset-transaction".
+        // Sweep of other assets, if needed, must happen in a separate tx.
+        val otherAssetUtxos: Map<String, List<AssetUtxo>> = emptyMap()
 
         val burnSat = when {
             assetName.contains('#') -> RavencoinTxBuilder.BURN_UNIQUE_SAT
@@ -1750,9 +1852,32 @@ class WalletManager(private val context: Context) {
             val txid = node.broadcast(tx.hex)
 
             android.util.Log.i("WalletManager", "issueAsset: issued $qty $assetName to $actualToAddress, " +
-                "owner token + all other assets and RVN change to $nextAddress, txid=$txid")
+                "RVN change + owner token to $nextAddress, txid=$txid")
 
             setCurrentAddressIndex(currentIndex + 1)
+
+            // Sweep stale assets left behind on the old address to the new one.
+            // The issuance tx only moved RVN + the parent owner token; all other
+            // assets and owner tokens are still at the previous currentIndex.
+            // Build a separate consolidation tx to move them atomically.
+            val staleAddress = getAddress(0, currentIndex) // old index, now behind
+            if (staleAddress != null) {
+                try {
+                    val staleUtxos = node.getUtxosAndAllAssetUtxosBatch(staleAddress)
+                    val staleRvn = staleUtxos.first
+                    val staleAssets = staleUtxos.third
+                    if (staleAssets.isNotEmpty() || staleRvn.isNotEmpty()) {
+                        android.util.Log.i("WalletManager", "issueAsset: sweeping ${staleAssets.size} asset(s) + ${staleRvn.size} RVN UTXO(s) from old index $currentIndex to $nextAddress")
+                        val sweepTxid = sweepSingleAddress(staleAddress, currentIndex, nextAddress, node)
+                        if (sweepTxid != null) {
+                            android.util.Log.i("WalletManager", "issueAsset: sweep done, txid=$sweepTxid")
+                        }
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.w("WalletManager", "issueAsset: sweep of old index $currentIndex failed: ${e.message} (issuance tx $txid already confirmed)")
+                }
+            }
+
             txid
         } finally {
             privKey?.fill(0)
