@@ -88,7 +88,46 @@ class RpcClient(
         if (!prefs.contains("${hash}_img") && !prefs.contains("${hash}_desc")) return null
         val img = prefs.getString("${hash}_img", null)
         val desc = prefs.getString("${hash}_desc", null)
+        // If imageUrl was a file:// URL, check the file still exists
+        if (img != null && img.startsWith("file://")) {
+            val file = java.io.File(img.removePrefix("file://"))
+            if (!file.exists()) return null
+        }
         return Pair(img, desc)
+    }
+
+    /**
+     * Downloads image bytes from [url] and saves to the app's cache directory.
+     * Returns a file:// URL, or null on failure.
+     */
+    private fun cacheImageFile(hash: String, url: String): String? {
+        return try {
+            val dir = java.io.File(context?.cacheDir ?: return null, "ipfs_images")
+            if (!dir.exists()) dir.mkdirs()
+            val file = java.io.File(dir, hash)
+            if (file.exists()) return "file://${file.absolutePath}"
+            val req = Request.Builder().url(url).get().build()
+            http.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return null
+                resp.body?.byteStream()?.use { input ->
+                    java.io.FileOutputStream(file).use { output ->
+                        input.copyTo(output)
+                    }
+                }
+            }
+            android.util.Log.d("RpcClient", "cacheImageFile: saved $hash to ${file.absolutePath} (${file.length()} bytes)")
+            "file://${file.absolutePath}"
+        } catch (e: Exception) {
+            android.util.Log.w("RpcClient", "cacheImageFile: failed for $hash via $url: ${e.message}")
+            null
+        }
+    }
+
+    /** Returns cached local image file URL for [hash], or null if not cached. */
+    private fun getCachedImageFile(hash: String): String? {
+        val dir = java.io.File(context?.cacheDir ?: return null, "ipfs_images")
+        val file = java.io.File(dir, hash)
+        return if (file.exists()) "file://${file.absolutePath}" else null
     }
 
     private val gson = Gson()
@@ -253,18 +292,24 @@ class RpcClient(
         val hash = asset.ipfsHash ?: run {
             try { getAssetData(asset.name) } catch (_: Exception) { null }?.ipfsHash ?: return asset
         }
-        
-        // 1. Check memory cache
+
+        // 1. Check local image file cache (fastest, works offline)
+        getCachedImageFile(hash)?.let { fileUrl ->
+            val cached = ipfsMetadataCache[hash]
+            return asset.copy(ipfsHash = hash, imageUrl = fileUrl, description = cached?.second)
+        }
+
+        // 2. Check memory cache
         ipfsMetadataCache[hash]?.let { (cachedImageUrl, cachedDescription) ->
             return asset.copy(ipfsHash = hash, imageUrl = cachedImageUrl, description = cachedDescription)
         }
 
-        // 2. Check persistent disk cache
+        // 3. Check persistent disk cache (migrates old ipfs:// URLs to file cache)
         loadFromPersistentCache(hash)?.let { (cachedImageUrl, cachedDescription) ->
             ipfsMetadataCache[hash] = Pair(cachedImageUrl, cachedDescription)
             return asset.copy(ipfsHash = hash, imageUrl = cachedImageUrl, description = cachedDescription)
         }
-        
+
         Log.d(TAG, "enrichWithIpfsData FETCHING ${asset.name}: hash=$hash")
         val urls = IpfsResolver.candidateUrls(hash).ifEmpty { listOf("$ipfsGateway$hash") }
         for (url in urls) {
@@ -278,7 +323,10 @@ class RpcClient(
                     }
                     val contentType = resp.header("Content-Type").orEmpty().lowercase()
                     if (contentType.startsWith("image/")) {
-                        return@use Result("ipfs://$hash", null)
+                        // Download and cache image bytes locally so rendering
+                        // does not depend on IPFS gateway availability.
+                        val fileUrl = cacheImageFile(hash, url)
+                        return@use Result(fileUrl ?: "ipfs://$hash", null)
                     }
                     val body = resp.body?.string() ?: return@use null
                     val json = try {
@@ -304,9 +352,10 @@ class RpcClient(
             }
             if (found != null) {
                 Log.d(TAG, "enrichWithIpfsData ${asset.name} SUCCESS via $url: imageUrl=${found.imageUrl}")
-                ipfsMetadataCache[hash] = Pair(found.imageUrl, found.description)
-                saveToPersistentCache(hash, found.imageUrl, found.description)
-                return asset.copy(ipfsHash = hash, imageUrl = found.imageUrl, description = found.description)
+                val storedUrl = found.imageUrl ?: "ipfs://$hash"
+                ipfsMetadataCache[hash] = Pair(storedUrl, found.description)
+                saveToPersistentCache(hash, storedUrl, found.description)
+                return asset.copy(ipfsHash = hash, imageUrl = storedUrl, description = found.description)
             }
         }
         return asset.copy(ipfsHash = hash)

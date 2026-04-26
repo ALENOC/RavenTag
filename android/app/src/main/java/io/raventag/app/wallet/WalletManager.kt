@@ -34,6 +34,29 @@ class WalletManager(private val context: Context) {
     @Volatile private var sweepRunning = false
     @Volatile private var consolidationRunning = false
 
+    // UTXO cache for current address: avoids re-fetching individual asset UTXOs
+    // via slow getAssetUtxosFull calls on every send/issuance.
+    private var utxoCacheAddr: String? = null
+    private var utxoCacheTime: Long = 0L
+    private var utxoCacheRvn: List<Utxo> = emptyList()
+    private var utxoCacheAssetOutpoints: Set<String> = emptySet()
+    private var utxoCacheAssets: Map<String, List<AssetUtxo>> = emptyMap()
+
+    private fun getCachedUtxos(address: String): Triple<List<Utxo>, Set<String>, Map<String, List<AssetUtxo>>>? {
+        if (address == utxoCacheAddr && System.currentTimeMillis() - utxoCacheTime < 30_000L) {
+            return Triple(utxoCacheRvn, utxoCacheAssetOutpoints, utxoCacheAssets)
+        }
+        return null
+    }
+
+    private fun putCachedUtxos(address: String, rvn: List<Utxo>, assetOutpoints: Set<String>, assets: Map<String, List<AssetUtxo>>) {
+        utxoCacheAddr = address
+        utxoCacheTime = System.currentTimeMillis()
+        utxoCacheRvn = rvn
+        utxoCacheAssetOutpoints = assetOutpoints
+        utxoCacheAssets = assets
+    }
+
     companion object {
         private const val PREFS_NAME = "raventag_wallet"
         private const val KEY_SEED_ENC = "seed_enc"
@@ -489,6 +512,7 @@ class WalletManager(private val context: Context) {
     private fun setCurrentAddressIndex(index: Int) {
         prefs().edit().putInt(KEY_ADDRESS_INDEX, index).apply()
         cachedAddress = null
+        utxoCacheAddr = null // invalidate UTXO cache: funds moved to new address
     }
 
     fun getCurrentAddress(): String? = getAddress(0, getCurrentAddressIndex())
@@ -1331,10 +1355,17 @@ class WalletManager(private val context: Context) {
         var address = getAddress(0, currentIndex) ?: error("No wallet")
         val node = RavencoinPublicNode(context)
 
-        val (utxoResult, satPerByte) = coroutineScope {
-            val utxosDeferred = async { node.getUtxosAndAllAssetUtxosBatch(address, fetchMissingAssetUtxos = true) }
-            val feeDeferred   = async { node.getMinRelayFeeRateSatPerByte() }
-            Pair(utxosDeferred.await(), feeDeferred.await())
+        // Use cached UTXOs if still fresh (avoids slow per-asset getAssetUtxosFull calls)
+        val cached = getCachedUtxos(address)
+        val (utxoResult, satPerByte) = if (cached != null) {
+            android.util.Log.i("WalletManager", "sendRvn: using cached UTXOs for $address")
+            Pair(cached, node.getMinRelayFeeRateSatPerByte())
+        } else {
+            coroutineScope {
+                val utxosDeferred = async { node.getUtxosAndAllAssetUtxosBatch(address, fetchMissingAssetUtxos = true) }
+                val feeDeferred   = async { node.getMinRelayFeeRateSatPerByte() }
+                Pair(utxosDeferred.await(), feeDeferred.await())
+            }.also { (r, _) -> putCachedUtxos(address, r.first, r.second, r.third) }
         }
         var rvnUtxos:    List<Utxo>                    = utxoResult.first
         var assetUtxosMap: Map<String, List<AssetUtxo>> = utxoResult.third
