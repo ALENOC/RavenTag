@@ -3,6 +3,10 @@ package io.raventag.app.wallet
 import android.content.Context
 import android.util.Log
 import com.google.gson.Gson
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.withContext
 import com.google.gson.JsonElement
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
@@ -716,9 +720,9 @@ class RavencoinPublicNode(private val context: Context) {
      *   - assetOutpoints: set of "txid:vout" that carry assets (to exclude from fee inputs)
      *   - assetUtxosMap:  map from asset name to list of AssetUtxo (with on-chain scripts)
      */
-    fun getUtxosAndAllAssetUtxosBatch(
+    suspend fun getUtxosAndAllAssetUtxosBatch(
         address: String
-    ): Triple<List<Utxo>, Set<String>, Map<String, List<AssetUtxo>>> {
+    ): Triple<List<Utxo>, Set<String>, Map<String, List<AssetUtxo>>> = withContext(kotlinx.coroutines.Dispatchers.IO) {
         val rvnScript = p2pkhScriptHex(address)
         val rawList = listUnspentRaw(address)   // TLS 1
 
@@ -861,26 +865,34 @@ class RavencoinPublicNode(private val context: Context) {
 
         // Secondary asset check: some ElectrumX servers (e.g. Ravencoin mainnet nodes) do not
         // include asset UTXOs in blockchain.scripthash.listunspent. If listunspent returned no
-        // assets but get_balance?asset=true shows some, fetch them explicitly via getAssetUtxosFull.
+        // assets but get_balance?asset=true shows some, fetch them in parallel to avoid N
+        // sequential RPCs hammering servers right before the critical broadcast step.
         if (assetUtxosMap.isEmpty()) {
             try {
                 val assetBalances = getAssetBalances(address)
-                for (ab in assetBalances) {
-                    try {
-                        val utxos = getAssetUtxosFull(address, ab.name)
-                        if (utxos.isNotEmpty()) {
-                            assetUtxosMap.getOrPut(ab.name) { mutableListOf() }.addAll(utxos)
+                if (assetBalances.isNotEmpty()) {
+                    coroutineScope {
+                        assetBalances.map { ab ->
+                            async {
+                                try {
+                                    val utxos = getAssetUtxosFull(address, ab.name)
+                                    if (utxos.isNotEmpty()) ab.name to utxos else null
+                                } catch (e: Exception) {
+                                    android.util.Log.w("RavencoinPublicNode", "  secondary async: getAssetUtxosFull failed for ${ab.name}: ${e.message}")
+                                    null
+                                }
+                            }
+                        }.awaitAll().filterNotNull().forEach { (name, utxos) ->
+                            assetUtxosMap.getOrPut(name) { mutableListOf() }.addAll(utxos)
                             assetOutpoints.addAll(utxos.map { "${it.utxo.txid}:${it.utxo.outputIndex}" })
-                            android.util.Log.i("RavencoinPublicNode", "  secondary: ${utxos.size} UTXOs for ${ab.name} via getAssetUtxosFull")
+                            android.util.Log.i("RavencoinPublicNode", "  secondary async: ${utxos.size} UTXOs for $name")
                         }
-                    } catch (e: Exception) {
-                        android.util.Log.w("RavencoinPublicNode", "  secondary: getAssetUtxosFull failed for ${ab.name}: ${e.message}")
                     }
                 }
             } catch (_: Exception) {}
         }
 
-        return Triple(rvnUtxos, assetOutpoints, assetUtxosMap)
+        Triple(rvnUtxos, assetOutpoints, assetUtxosMap)
     }
 
     /**
