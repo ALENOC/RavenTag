@@ -31,6 +31,11 @@ import io.raventag.app.worker.RebroadcastWorker
 class WalletManager(private val context: Context) {
 
     @Volatile private var cachedAddress: String? = null
+    @Volatile private var addressBatchCacheTime: Long = 0L
+    @Volatile private var addressBatchCacheAccount: Int = -1
+    @Volatile private var addressBatchCacheStart: Int = 0
+    @Volatile private var addressBatchCacheEnd: Int = -1
+    @Volatile private var addressBatchCache: Map<Int, String> = emptyMap()
     @Volatile private var sweepRunning = false
     @Volatile private var consolidationRunning = false
 
@@ -512,6 +517,8 @@ class WalletManager(private val context: Context) {
     private fun setCurrentAddressIndex(index: Int) {
         prefs().edit().putInt(KEY_ADDRESS_INDEX, index).apply()
         cachedAddress = null
+        addressBatchCache = emptyMap()
+        addressBatchCacheEnd = -1
         utxoCacheAddr = null // invalidate UTXO cache: funds moved to new address
     }
 
@@ -1238,6 +1245,18 @@ class WalletManager(private val context: Context) {
     }
 
     fun getAddressBatch(accountIndex: Int, indices: IntRange): Map<Int, String> {
+        val now = System.currentTimeMillis()
+        val cached = addressBatchCache
+        if (
+            accountIndex == addressBatchCacheAccount &&
+            indices.first >= addressBatchCacheStart &&
+            indices.last <= addressBatchCacheEnd &&
+            cached.isNotEmpty() &&
+            now - addressBatchCacheTime < 60_000L
+        ) {
+            return indices.associateWith { cached[it].orEmpty() }.filterValues { it.isNotEmpty() }
+        }
+
         val seed = getSeed() ?: return emptyMap()
         val result = mutableMapOf<Int, String>()
         val currentIdx = getCurrentAddressIndex()
@@ -1256,6 +1275,13 @@ class WalletManager(private val context: Context) {
             }
         } finally {
             seed.fill(0)
+        }
+        if (result.isNotEmpty()) {
+            addressBatchCacheAccount = accountIndex
+            addressBatchCacheStart = indices.first
+            addressBatchCacheEnd = indices.last
+            addressBatchCacheTime = now
+            addressBatchCache = result.toMap()
         }
         return result
     }
