@@ -482,7 +482,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (h != null) {
                 blockHeight = h
                 // Persist so the next cold start renders the chain-tip pill instantly
-                try { io.raventag.app.wallet.cache.WalletCacheDao.writeBlockHeight(h) } catch (_: Throwable) {}
+                withContext(Dispatchers.IO) {
+                    try { io.raventag.app.wallet.cache.WalletCacheDao.writeBlockHeight(h) } catch (_: Throwable) {}
+                }
             }
         }
     }
@@ -852,11 +854,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         walletInfo = current?.copy(
             address = cache.address.ifEmpty { current.address },
             balanceRvn = current.balanceRvn ?: cache.balanceRvn,
-            isLoading = current.isLoading
+            isLoading = false
         ) ?: WalletInfo(
             address = cache.address,
             balanceRvn = cache.balanceRvn,
-            isLoading = true
+            isLoading = false
         )
 
         if ((blockHeight == null || blockHeight == 0) && cache.blockHeight != null) {
@@ -962,7 +964,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 // returns an empty `basic`. Keep the previous list visible.
                 if (merged.isNotEmpty() || ownedAssets.isNullOrEmpty()) {
                     ownedAssets = merged
-                    saveAssetsCache(merged)
+                    withContext(Dispatchers.IO) { saveAssetsCache(merged) }
                 }
                 assetsLoading = false
 
@@ -995,35 +997,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     withHashes.find { it.name == existing.name } ?: existing
                 }
 
-                // Fetch IPFS metadata in parallel only for assets that still need it.
-                // Using async instead of launch so we can await completion and update the cache.
-                val semaphore = Semaphore(8)
-                val enrichmentJobs = withHashes.map { asset ->
-                    viewModelScope.async(Dispatchers.IO) {
-                        try {
-                            semaphore.withPermit {
-                                val enriched = rpcClient.enrichWithIpfsData(asset)
-                                withContext(Dispatchers.Main) {
-                                    ownedAssets = ownedAssets?.map {
-                                        if (it.name == enriched.name) enriched else it
-                                    }
+                val enrichedAssets = withContext(Dispatchers.IO) {
+                    val semaphore = Semaphore(8)
+                    coroutineScope {
+                        withHashes.map { asset ->
+                            async {
+                                try {
+                                    semaphore.withPermit { rpcClient.enrichWithIpfsData(asset) }
+                                } catch (e: Exception) {
+                                    Log.w("MainViewModel", "Enrichment failed for ${asset.name}", e)
+                                    asset
                                 }
                             }
-                        } catch (e: Exception) {
-                            Log.w("MainViewModel", "Enrichment failed for ${asset.name}", e)
-                        }
+                        }.awaitAll()
                     }
                 }
-
-                // Save cache once all enrichments complete so images survive the next startup.
-                viewModelScope.launch {
-                    enrichmentJobs.awaitAll()
-                    val current = ownedAssets
-                    if (!current.isNullOrEmpty()) {
-                        withContext(Dispatchers.IO) { saveAssetsCache(current) }
-                    }
-                    Log.d("MainActivity", "loadOwnedAssets: enrichment done, cache updated with images")
+                val enrichedByName = enrichedAssets.associateBy { it.name }
+                ownedAssets = ownedAssets?.map { existing ->
+                    enrichedByName[existing.name] ?: existing
                 }
+                val current = ownedAssets
+                if (!current.isNullOrEmpty()) {
+                    withContext(Dispatchers.IO) { saveAssetsCache(current) }
+                }
+                Log.d("MainActivity", "loadOwnedAssets: enrichment done, cache updated with images")
             } catch (e: Exception) {
                 Log.e("MainActivity", "loadOwnedAssets failed", e)
                 assetsLoadError = true
@@ -1203,6 +1200,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** RPC client for Ravencoin node calls (asset metadata, UTXO queries). */
     private val rpcClient = RpcClient(context = application)
+    private var initialWalletRefreshStarted = false
 
     // ── Wallet lifecycle ──────────────────────────────────────────────────────
 
@@ -1216,19 +1214,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         adminKeyStorage = aks
         hasWallet = wm.hasWallet()
         if (hasWallet && walletInfo == null) {
-            walletInfo = WalletInfo(address = "", balanceRvn = null, isLoading = true)
+            walletInfo = WalletInfo(address = "", balanceRvn = null, isLoading = false)
             viewModelScope.launch {
-                val startupCacheDeferred = async(Dispatchers.IO) { loadStartupWalletCache(wm) }
-                loadWalletInfo()
-                val startupCache = startupCacheDeferred.await()
+                val startupCache = loadStartupWalletCache(wm)
                 if (walletManager === wm && hasWallet) {
                     applyStartupWalletCache(startupCache)
                 }
             }
         } else if (hasWallet) {
-            loadWalletInfo()
+            walletInfo = walletInfo?.copy(isLoading = false)
         }
         startHealthHeartbeat()
+    }
+
+    fun refreshWalletAfterVisible() {
+        if (!hasWallet || initialWalletRefreshStarted) return
+        initialWalletRefreshStarted = true
+        loadWalletInfo()
     }
 
     // 30s heartbeat: keep the ElectrumX pill fresh between wallet refreshes so
@@ -1387,7 +1389,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** Initialise [walletInfo] with the address and start loading balance + history. */
-    private fun loadWalletInfo() {
+    fun loadWalletInfo() {
         val wm = walletManager ?: return
         // Preserve existing data while refreshing. Any disk/Keystore-backed cold-start
         // cache seed runs on Dispatchers.IO in initWallet(), never on the main thread.
@@ -1423,11 +1425,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // Persist the just-fetched balance so the next cold start can render
             // it instantly from cache instead of showing "Loading…" again.
             if (balance != null) {
-                try {
-                    io.raventag.app.wallet.cache.WalletCacheDao.writeBalanceSat(
-                        (balance * 1e8).toLong()
-                    )
-                } catch (_: Throwable) {}
+                withContext(Dispatchers.IO) {
+                    try {
+                        io.raventag.app.wallet.cache.WalletCacheDao.writeBalanceSat(
+                            (balance * 1e8).toLong()
+                        )
+                    } catch (_: Throwable) {}
+                }
             }
 
             // STEP 2: Background maintenance (does not block the UI).
@@ -1470,13 +1474,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
 
-            // Update ElectrumX health pill and chain info after initial load.
-            // Skip full refreshBalance() — the initial load already fetched
-            // balance, assets, and tx history. A second full round trip is wasteful.
-            checkElectrumStatus()
-            fetchBlockHeight()
-            fetchRvnPrice()
-            fetchNetworkHashrate()
+            // Non-critical chain metrics can wait until after the first frames and
+            // Wallet prewarm. This keeps startup/tabs responsive on slower devices.
+            launch {
+                delay(8_000)
+                checkElectrumStatus()
+                fetchBlockHeight()
+                fetchRvnPrice()
+                fetchNetworkHashrate()
+            }
         }
     }
 
@@ -1561,11 +1567,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val balance = wm.getLocalBalance()
                 if (balance != null) {
                     walletInfo = walletInfo?.copy(balanceRvn = balance, isLoading = false)
-                    try {
-                        io.raventag.app.wallet.cache.WalletCacheDao.writeBalanceSat(
-                            (balance * 1e8).toLong()
-                        )
-                    } catch (_: Throwable) {}
+                    withContext(Dispatchers.IO) {
+                        try {
+                            io.raventag.app.wallet.cache.WalletCacheDao.writeBalanceSat(
+                                (balance * 1e8).toLong()
+                            )
+                        } catch (_: Throwable) {}
+                    }
                     return@launch
                 }
                 val am = assetManager ?: run {
@@ -1593,11 +1601,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             // Persist the freshly loaded balance so the next cold start can render
             // the last-known value instantly instead of flashing 0 RVN.
-            try {
-                io.raventag.app.wallet.cache.WalletCacheDao.writeBalanceSat(
-                    (balance * 1e8).toLong()
-                )
-            } catch (_: Throwable) {}
+            withContext(Dispatchers.IO) {
+                try {
+                    io.raventag.app.wallet.cache.WalletCacheDao.writeBalanceSat(
+                        (balance * 1e8).toLong()
+                    )
+                } catch (_: Throwable) {}
+            }
         }
     }
 
@@ -1673,7 +1683,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     launchAutoSweep(wm)
                 }
             }
-            if (merged.isNotEmpty()) saveAssetsCache(merged)
+            if (merged.isNotEmpty()) withContext(Dispatchers.IO) { saveAssetsCache(merged) }
 
             // IPFS enrichment for assets that still need it (refreshBalance path
             // previously skipped this — that's why brand previews never appeared).
@@ -1692,23 +1702,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         withHashes.find { it.name == existing.name } ?: existing
                     }
                 }
-                val sem = Semaphore(8)
-                val jobs = withHashes.map { asset ->
-                    viewModelScope.async(Dispatchers.IO) {
-                        try {
-                            sem.withPermit {
-                                val enriched = rpcClient.enrichWithIpfsData(asset)
-                                withContext(Dispatchers.Main) {
-                                    ownedAssets = ownedAssets?.map {
-                                        if (it.name == enriched.name) enriched else it
-                                    }
+                val enrichedAssets = withContext(Dispatchers.IO) {
+                    val sem = Semaphore(8)
+                    coroutineScope {
+                        withHashes.map { asset ->
+                            async {
+                                try {
+                                    sem.withPermit { rpcClient.enrichWithIpfsData(asset) }
+                                } catch (_: Exception) {
+                                    asset
                                 }
                             }
-                        } catch (_: Exception) {}
+                        }.awaitAll()
                     }
                 }
-                viewModelScope.launch {
-                    jobs.awaitAll()
+                val enrichedByName = enrichedAssets.associateBy { it.name }
+                withContext(Dispatchers.Main) {
+                    ownedAssets = ownedAssets?.map { existing ->
+                        enrichedByName[existing.name] ?: existing
+                    }
                     val current = ownedAssets
                     if (!current.isNullOrEmpty()) {
                         withContext(Dispatchers.IO) { saveAssetsCache(current) }
@@ -3746,6 +3758,12 @@ fun RavenTagApp(
             viewModel.restoreModeActive = false
         }
     }
+    LaunchedEffect(currentTab, viewModel.hasWallet) {
+        if (currentTab == AppTab.WALLET && viewModel.hasWallet) {
+            delay(900)
+            viewModel.refreshWalletAfterVisible()
+        }
+    }
 
     // Sync IPFS credentials and initial master key into the ViewModel whenever they change
     LaunchedEffect(savedPinataJwt, savedKuboNodeUrl) {
@@ -3770,6 +3788,9 @@ fun RavenTagApp(
     LaunchedEffect(viewModel.hasWallet) {
         if (viewModel.hasWallet) {
             viewModel.checkElectrumStatus()
+            // Initial wallet load already fetches these values. Wait before the
+            // periodic loop starts so startup rendering and tab prewarm get CPU first.
+            kotlinx.coroutines.delay(20_000)
             while (true) {
                 viewModel.fetchBlockHeight()
                 viewModel.fetchRvnPrice()
@@ -4055,9 +4076,7 @@ fun RavenTagApp(
             val settingsEverShown = remember { mutableStateOf(currentTab == AppTab.SETTINGS) }
 
             LaunchedEffect(viewModel.hasWallet, isBrandApp) {
-                delay(1_400)
-                if (viewModel.hasWallet) walletEverShown.value = true
-                delay(300)
+                delay(2_000)
                 if (isBrandApp) brandEverShown.value = true
                 delay(200)
                 settingsEverShown.value = true

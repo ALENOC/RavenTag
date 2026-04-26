@@ -304,9 +304,25 @@ class RpcClient(
             return asset.copy(ipfsHash = hash, imageUrl = cachedImageUrl, description = cachedDescription)
         }
 
-        // 3. Check persistent disk cache (migrates old ipfs:// URLs to file cache)
+        // 3. Check persistent disk cache
         loadFromPersistentCache(hash)?.let { (cachedImageUrl, cachedDescription) ->
             ipfsMetadataCache[hash] = Pair(cachedImageUrl, cachedDescription)
+            // Opportunistically file-cache non-file URLs in background so that
+            // future restarts hit step 1 (getCachedImageFile) for instant load.
+            if (cachedImageUrl != null && !cachedImageUrl.startsWith("file://")) {
+                val imageToCache = cachedImageUrl
+                Thread {
+                    try {
+                        val imgCandidates = if (imageToCache.startsWith("http")) listOf(imageToCache)
+                            else IpfsResolver.candidateUrls(imageToCache).ifEmpty {
+                                listOf("$ipfsGateway${imageToCache.removePrefix("ipfs://")}")
+                            }
+                        imgCandidates.firstNotNullOfOrNull { imgUrl ->
+                            cacheImageFile(hash, imgUrl)
+                        }
+                    } catch (_: Exception) { }
+                }.start()
+            }
             return asset.copy(ipfsHash = hash, imageUrl = cachedImageUrl, description = cachedDescription)
         }
 
@@ -342,9 +358,20 @@ class RpcClient(
                             else -> img  // Already a bare CID
                         }
                     }
+                    // Download and file-cache the actual image bytes so that on app
+                    // restart getCachedImageFile returns a file:// URL for instant load.
+                    val fileCachedUrl: String? = imageUrl?.let { raw ->
+                        val imgCandidates = if (raw.startsWith("http")) listOf(raw)
+                            else IpfsResolver.candidateUrls(raw).ifEmpty {
+                                listOf("$ipfsGateway${raw.removePrefix("ipfs://")}")
+                            }
+                        imgCandidates.firstNotNullOfOrNull { imgUrl ->
+                            cacheImageFile(hash, imgUrl)
+                        }
+                    }
                     val description = json["description"]?.takeIf { !it.isJsonNull }?.asString
                         ?: json["desc"]?.takeIf { !it.isJsonNull }?.asString
-                    Result(imageUrl, description)
+                    Result(fileCachedUrl ?: imageUrl, description)
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "enrichWithIpfsData ${asset.name} FAILED via $url", e)
