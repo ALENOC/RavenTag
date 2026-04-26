@@ -2633,10 +2633,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         Log.i("IssueWriteFlow", "processIssueAndWrite asset-issued asset=$fullName txid=$txid")
         issueStep = IssueStep.Success(IssueStep.StepName.ISSUING)
         issuedTxid = txid
-        // Update displayed address (rotated after issuance) and reload balance/assets
-        walletInfo = walletInfo?.copy(address = wm.getCurrentAddress() ?: walletInfo?.address ?: "", isLoading = true)
-        loadWalletBalance()
-        loadOwnedAssets()
+        // Update displayed address (rotated after issuance).
+        // Defer balance/asset reload: NFC programming follows immediately and
+        // must not be delayed by RPC-heavy loadOwnedAssets calls.
+        walletInfo = walletInfo?.copy(address = wm.getCurrentAddress() ?: walletInfo?.address ?: "")
         notifyRavenTagRegistry(
             assetName = fullName,
             txid = txid,
