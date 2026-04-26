@@ -1256,15 +1256,15 @@ class RavencoinPublicNode(private val context: Context) {
             val effectiveAssetName = if (isIssuance && lastIssuedAssetName != null)
                 lastIssuedAssetName else when {
                 isOutgoing && outgoingAssetName != null -> outgoingAssetName
+                isOutgoing -> null // RVN send (assets cycled to self, not sent out)
                 incomingAssetName != null -> incomingAssetName
-                isOutgoing -> outgoingAssetName
                 else -> null
             }
             val effectiveAssetAmount = if (isIssuance && lastIssuedAssetName != null)
                 lastIssuedAssetAmount else when {
                 isOutgoing && outgoingAssetName != null -> outgoingAssetAmount
+                isOutgoing -> 0L // RVN send
                 incomingAssetName != null -> incomingAssetAmount
-                isOutgoing -> outgoingAssetAmount
                 else -> 0L
             }
             TxHistoryEntry(

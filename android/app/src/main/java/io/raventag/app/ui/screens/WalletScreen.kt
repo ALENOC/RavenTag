@@ -83,8 +83,11 @@ data class WalletInfo(
 
 private fun assetPreviewCandidates(asset: OwnedAsset): List<String> {
     return when {
-        asset.imageUrl != null -> IpfsResolver.candidateUrls(asset.imageUrl)
-        asset.ipfsHash != null -> IpfsResolver.candidateUrls(asset.ipfsHash)
+        asset.imageUrl != null -> when {
+            asset.imageUrl.startsWith("file://") -> listOf(asset.imageUrl!!)
+            else -> IpfsResolver.candidateUrls(asset.imageUrl!!)
+        }
+        asset.ipfsHash != null -> IpfsResolver.candidateUrls(asset.ipfsHash!!)
         else -> emptyList()
     }
 }
@@ -125,6 +128,7 @@ fun WalletScreen(
     controlKeyError: String? = null,
     onRestoreModeChange: (Boolean) -> Unit = {},
     onNavigateToMnemonicBackup: () -> Unit = {},
+    active: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     val s = LocalStrings.current
@@ -180,15 +184,16 @@ fun WalletScreen(
     // Background refresh must be INVISIBLE: do NOT toggle isRefreshing — that flag
     // is reserved for the manual Refresh icon so the linear progress bar / asset and
     // tx-history header spinners only appear when the user explicitly asked for it.
-    LaunchedEffect(Unit) {
+    LaunchedEffect(active) {
+        if (!active) return@LaunchedEffect
         while (true) {
+            kotlinx.coroutines.delay(30_000L)
             val pm = context.getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
             if (pm?.isPowerSaveMode != true) {
                 onRefreshBalance()
                 cachedLastRefreshedAt = WalletCacheDao.getLastRefreshedAt()
                 cachedBannerVisible = false
             }
-            kotlinx.coroutines.delay(30_000L)
         }
     }
 
@@ -714,7 +719,7 @@ fun WalletScreen(
                 items(filteredAssets, key = { it.name }) { asset ->
                     val canTransferThis = onTransferAsset != null && (!isOperator || asset.type == AssetType.UNIQUE)
                     Box(modifier = Modifier.padding(bottom = 8.dp)) {
-                        AssetCard(s = s, asset = asset, onPreview = if (asset.imageUrl != null || asset.ipfsHash != null) ({ previewAsset = asset }) else null, onTransfer = if (canTransferThis) { { if (asset.type != AssetType.UNIQUE) { pendingTransferAsset = asset } else { onTransferAsset!!.invoke(asset) } } } else null)
+                        AssetCard(s = s, asset = asset, previewsActive = active, onPreview = if (asset.imageUrl != null || asset.ipfsHash != null) ({ previewAsset = asset }) else null, onTransfer = if (canTransferThis) { { if (asset.type != AssetType.UNIQUE) { pendingTransferAsset = asset } else { onTransferAsset!!.invoke(asset) } } } else null)
                     }
                 }
             }
@@ -846,8 +851,10 @@ fun WalletScreen(
 }
 
 @Composable
-private fun AssetCard(s: AppStrings, asset: OwnedAsset, onPreview: (() -> Unit)? = null, onTransfer: (() -> Unit)? = null) {
-    val previewUrls = assetPreviewCandidates(asset)
+private fun AssetCard(s: AppStrings, asset: OwnedAsset, previewsActive: Boolean = true, onPreview: (() -> Unit)? = null, onTransfer: (() -> Unit)? = null) {
+    val previewUrls = remember(previewsActive, asset.imageUrl, asset.ipfsHash) {
+        if (previewsActive) assetPreviewCandidates(asset) else emptyList()
+    }
     val typeColor = when (asset.type) { AssetType.ROOT -> RavenOrange; AssetType.SUB -> Color(0xFF60A5FA); AssetType.UNIQUE -> AuthenticGreen }
     Card(colors = CardDefaults.cardColors(containerColor = RavenCard), border = BorderStroke(1.dp, typeColor.copy(alpha = 0.2f)), shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth()) {
         Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp).height(36.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -896,11 +903,21 @@ internal fun IpfsPreviewImage(
     var resolveFailed by remember(key) { mutableStateOf(false) }
 
     if (resolvedUrl != null && !resolveFailed) {
+        val requestUrl = resolvedUrl!!
         SubcomposeAsyncImage(
             model = ImageRequest.Builder(context)
-                .data(resolvedUrl)
-                .diskCacheKey(resolvedUrl)
-                .memoryCacheKey(resolvedUrl)
+                .data(requestUrl)
+                // Let the cache key follow the actual image URL. Asset metadata CIDs
+                // can differ from image CIDs; using metadata CIDs here can poison the
+                // image cache with JSON responses before enrichment completes.
+                .diskCacheKey(requestUrl)
+                .memoryCacheKey(requestUrl)
+                .allowHardware(false)
+                .listener(
+                    onError = { _, result ->
+                        Log.w("IpfsPreviewImage", "load failed url=$requestUrl: ${result.throwable.message}", result.throwable)
+                    }
+                )
                 .error(android.R.color.transparent) // Prevent Coil from caching error state
                 .build(),
             imageLoader = imageLoader,
