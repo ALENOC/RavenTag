@@ -752,6 +752,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      */
     private data class CachedAsset(val name: String, val balance: Double, val typeOrdinal: Int, val ipfsHash: String?)
 
+    private data class StartupWalletCache(
+        val address: String,
+        val balanceRvn: Double?,
+        val blockHeight: Int?,
+        val txHistory: List<io.raventag.app.wallet.TxHistoryEntry>,
+        val assets: List<OwnedAsset>?
+    )
+
     private fun saveAssetsCache(assets: List<OwnedAsset>) {
         try {
             val addr = walletManager?.getCurrentAddress() ?: return
@@ -765,6 +773,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun loadAssetsCache(): List<OwnedAsset>? {
         return try {
             val addr = walletManager?.getCurrentAddress() ?: return null
+            loadAssetsCacheForAddress(addr)
+        } catch (_: Exception) { null }
+    }
+
+    private fun loadAssetsCacheForAddress(addr: String): List<OwnedAsset>? {
+        return try {
             val prefs = getApplication<Application>().getSharedPreferences("raventag_assets_cache", Application.MODE_PRIVATE)
             val json = prefs.getString(addr, null) ?: return null
             val listType = object : com.google.gson.reflect.TypeToken<List<CachedAsset>>() {}.type
@@ -780,6 +794,82 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
         } catch (_: Exception) { null }
+    }
+
+    private fun mapCachedTxRows(
+        rows: List<io.raventag.app.wallet.cache.TxHistoryDao.TxHistoryRow>
+    ): List<io.raventag.app.wallet.TxHistoryEntry> {
+        return rows.map { row ->
+            io.raventag.app.wallet.TxHistoryEntry(
+                txid = row.txid,
+                height = row.height,
+                confirmations = row.confirms,
+                amountSat = row.amountSat,
+                sentSat = row.sentSat,
+                cycledSat = row.cycledSat,
+                feeSat = row.feeSat,
+                isIncoming = row.isIncoming,
+                isSelfTransfer = row.isSelf,
+                timestamp = row.timestamp,
+                isIssuance = row.isIssuance,
+                issuanceBurnSat = row.issuanceBurnSat
+            )
+        }
+    }
+
+    private suspend fun loadStartupWalletCache(wm: WalletManager): StartupWalletCache = withContext(Dispatchers.IO) {
+        coroutineScope {
+            val cachedStateDeferred = async {
+                try { io.raventag.app.wallet.cache.WalletCacheDao.readState() } catch (_: Throwable) { null }
+            }
+            val cachedAddressDeferred = async {
+                try { wm.getCurrentAddress() } catch (_: Throwable) { null }.orEmpty()
+            }
+            val cachedTxDeferred = async {
+                try {
+                    mapCachedTxRows(io.raventag.app.wallet.cache.TxHistoryDao.getPage(offset = 0, limit = 50))
+                } catch (_: Throwable) {
+                    emptyList()
+                }
+            }
+
+            val cachedState = cachedStateDeferred.await()
+            val cachedAddress = cachedAddressDeferred.await()
+            val cachedAssets = if (cachedAddress.isNotEmpty()) loadAssetsCacheForAddress(cachedAddress) else null
+
+            StartupWalletCache(
+                address = cachedAddress,
+                balanceRvn = cachedState?.balanceSat?.let { it / 1e8 },
+                blockHeight = cachedState?.blockHeight?.takeIf { it > 0 },
+                txHistory = cachedTxDeferred.await(),
+                assets = cachedAssets
+            )
+        }
+    }
+
+    private fun applyStartupWalletCache(cache: StartupWalletCache) {
+        val current = walletInfo
+        walletInfo = current?.copy(
+            address = cache.address.ifEmpty { current.address },
+            balanceRvn = current.balanceRvn ?: cache.balanceRvn,
+            isLoading = current.isLoading
+        ) ?: WalletInfo(
+            address = cache.address,
+            balanceRvn = cache.balanceRvn,
+            isLoading = true
+        )
+
+        if ((blockHeight == null || blockHeight == 0) && cache.blockHeight != null) {
+            blockHeight = cache.blockHeight
+        }
+        if (txHistory.isEmpty() && cache.txHistory.isNotEmpty()) {
+            txHistory = cache.txHistory
+            txHistoryTotal = cache.txHistory.size
+            txHistoryLoadedCount = cache.txHistory.size
+        }
+        if (ownedAssets.isNullOrEmpty() && !cache.assets.isNullOrEmpty()) {
+            ownedAssets = cache.assets
+        }
     }
 
     fun loadOwnedAssets() {
@@ -1125,48 +1215,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         assetManager = am
         adminKeyStorage = aks
         hasWallet = wm.hasWallet()
-        // Synchronously seed walletInfo + cached assets from on-disk cache BEFORE the
-        // first UI render so the screen never flashes "0 RVN / no assets" while the
-        // async load runs. Network refresh kicks in via loadWalletInfo right after.
         if (hasWallet && walletInfo == null) {
-            try {
-                val cachedState = io.raventag.app.wallet.cache.WalletCacheDao.readState()
-                val cachedAddr = try { wm.getCurrentAddress() } catch (_: Throwable) { null }.orEmpty()
-                walletInfo = WalletInfo(
-                    address = cachedAddr,
-                    balanceRvn = cachedState?.balanceSat?.let { it / 1e8 },
-                    isLoading = true
-                )
-                // Seed block height from cache so the chain-tip pill renders instantly
-                if (cachedState != null && cachedState.blockHeight > 0) {
-                    blockHeight = cachedState.blockHeight
+            walletInfo = WalletInfo(address = "", balanceRvn = null, isLoading = true)
+            viewModelScope.launch {
+                val startupCacheDeferred = async(Dispatchers.IO) { loadStartupWalletCache(wm) }
+                loadWalletInfo()
+                val startupCache = startupCacheDeferred.await()
+                if (walletManager === wm && hasWallet) {
+                    applyStartupWalletCache(startupCache)
                 }
-                val cachedTx = io.raventag.app.wallet.cache.TxHistoryDao.getPage(offset = 0, limit = 50)
-                if (cachedTx.isNotEmpty()) {
-                    txHistory = cachedTx.map { row ->
-                        io.raventag.app.wallet.TxHistoryEntry(
-                            txid = row.txid,
-                            height = row.height,
-                            confirmations = row.confirms,
-                            amountSat = row.amountSat,
-                            sentSat = row.sentSat,
-                            cycledSat = row.cycledSat,
-                            feeSat = row.feeSat,
-                            isIncoming = row.isIncoming,
-                            isSelfTransfer = row.isSelf,
-                            timestamp = row.timestamp,
-                            isIssuance = row.isIssuance,
-                            issuanceBurnSat = row.issuanceBurnSat
-                        )
-                    }
-                    txHistoryTotal = txHistory.size
-                    txHistoryLoadedCount = txHistory.size
-                }
-                val cachedAssets = loadAssetsCache()
-                if (!cachedAssets.isNullOrEmpty()) {
-                    ownedAssets = cachedAssets
-                }
-            } catch (_: Throwable) {}
+            }
+        } else if (hasWallet) {
             loadWalletInfo()
         }
         startHealthHeartbeat()
@@ -1180,17 +1239,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         heartbeatStarted = true
         viewModelScope.launch(Dispatchers.IO) {
             val node = io.raventag.app.wallet.RavencoinPublicNode(getApplication())
+            delay(2_500L)
             while (true) {
                 try { node.heartbeat() } catch (_: Exception) {}
                 delay(30_000L)
             }
-        }
-        // Fire the first heartbeat immediately so the pill turns green as soon as
-        // a server answers, rather than waiting for the first 30 s tick.
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                io.raventag.app.wallet.RavencoinPublicNode(getApplication()).heartbeat()
-            } catch (_: Exception) {}
         }
     }
 
@@ -1336,48 +1389,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** Initialise [walletInfo] with the address and start loading balance + history. */
     private fun loadWalletInfo() {
         val wm = walletManager ?: return
-        // Preserve existing data while refreshing so the UI never flashes 0.
-        // On a cold start (walletInfo==null) seed from the persistent cache so the
-        // user sees their last-known balance/address immediately instead of zero.
+        // Preserve existing data while refreshing. Any disk/Keystore-backed cold-start
+        // cache seed runs on Dispatchers.IO in initWallet(), never on the main thread.
         if (walletInfo == null) {
-            val cachedState = try {
-                io.raventag.app.wallet.cache.WalletCacheDao.readState()
-            } catch (_: Throwable) { null }
-            val cachedAddr = try { wm.getCurrentAddress() } catch (_: Throwable) { null }.orEmpty()
             walletInfo = WalletInfo(
-                address = cachedAddr,
-                balanceRvn = cachedState?.balanceSat?.let { it / 1e8 },
+                address = "",
+                balanceRvn = null,
                 isLoading = true
             )
-            // Seed block height from cache so the chain-tip pill renders instantly
-            if (cachedState != null && cachedState.blockHeight > 0) {
-                blockHeight = cachedState.blockHeight
-            }
-            // Seed tx history from cache as well so the section is populated on resume.
-            try {
-                val cachedTx = io.raventag.app.wallet.cache.TxHistoryDao.getPage(offset = 0, limit = 50)
-                if (cachedTx.isNotEmpty()) {
-                    val mapped = cachedTx.map { row ->
-                        io.raventag.app.wallet.TxHistoryEntry(
-                            txid = row.txid,
-                            height = row.height,
-                            confirmations = row.confirms,
-                            amountSat = row.amountSat,
-                            sentSat = row.sentSat,
-                            cycledSat = row.cycledSat,
-                            feeSat = row.feeSat,
-                            isIncoming = row.isIncoming,
-                            isSelfTransfer = row.isSelf,
-                            timestamp = row.timestamp,
-                            isIssuance = row.isIssuance,
-                            issuanceBurnSat = row.issuanceBurnSat
-                        )
-                    }
-                    txHistory = mapped
-                    txHistoryTotal = mapped.size
-                    txHistoryLoadedCount = mapped.size
-                }
-            } catch (_: Throwable) {}
         } else {
             walletInfo = walletInfo?.copy(isLoading = true)
         }
@@ -1387,13 +1406,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // Do NOT wait for reconcile/sweep: users see data in seconds instead of 30+ s.
             // getLocalBalance() uses getAddressBatch() internally: one Keystore decrypt, then
             // parallel ElectrumX balance queries.
-            val balanceDeferred = async { wm.getLocalBalance() }
-            loadOwnedAssets()
-            loadTransactionHistory()
+            val balanceDeferred = async(Dispatchers.IO) { wm.getLocalBalance() }
+            val addressDeferred = async(Dispatchers.IO) { try { wm.getCurrentAddress() ?: "" } catch (_: Throwable) { "" } }
+            launch { loadOwnedAssets() }
+            launch { loadTransactionHistory() }
 
             val balance = balanceDeferred.await()
-            // cachedAddress is populated by getAddressBatch() inside getLocalBalance().
-            val address = withContext(Dispatchers.IO) { wm.getCurrentAddress() ?: "" }
+            val address = addressDeferred.await()
             walletInfo = walletInfo?.copy(
                 // Keep existing address/balance if new load fails (network error)
                 address = address.ifEmpty { walletInfo?.address ?: "" },
@@ -3083,6 +3102,12 @@ class MainActivity : FragmentActivity() {
     /** AdminKeyStorage for encrypted admin key persistence (AES256-GCM, Keystore-backed). */
     private lateinit var adminKeyStorage: AdminKeyStorage
 
+    private var initialAdminKey: String = ""
+    private var initialMasterKey: String = ""
+    private var initialOperatorKey: String = ""
+    private var initialPinataJwt: String = ""
+    private var initialKuboNodeUrl: String = ""
+
     /**
      * Compose state that gates rendering until [securePrefs] is initialised.
      * Kept as a mutableStateOf so the Compose tree re-renders when it flips to true.
@@ -3166,25 +3191,12 @@ class MainActivity : FragmentActivity() {
         // SplashScreen API: shows app icon on black background immediately, no white flash
         val splash = installSplashScreen()
         super.onCreate(savedInstanceState)
+        splash.setKeepOnScreenCondition { !securePrefsReady }
 
         nfcAdapter = NfcAdapter.getDefaultAdapter(this)
 
-        // Initialize AdminKeyStorage (does not require securePrefs, uses its own Keystore)
-        adminKeyStorage = AdminKeyStorage(applicationContext)
-
         // Process any NFC intent that launched or re-launched this activity
         handleIntent(intent)
-
-        // Initialize wallet reliability database BEFORE initWallet so the cache
-        // reads inside initWallet (balance, tx history, block height) actually
-        // hit SQLite instead of throwing "DB not initialized" and silently
-        // falling into the catch-all that wipes the cold-start cache view.
-        io.raventag.app.wallet.cache.WalletReliabilityDb.init(this)
-        io.raventag.app.wallet.health.NodeHealthMonitor.init(this)
-
-        val walletManager = WalletManager(applicationContext)
-        val assetManager = AssetManager(context = applicationContext, adminKeyStorage = adminKeyStorage)
-        viewModel.initWallet(walletManager, assetManager, adminKeyStorage)
 
         // Create notification channel (safe to call on every start, system ignores duplicates)
         NotificationHelper.createChannel(this)
@@ -3195,43 +3207,81 @@ class MainActivity : FragmentActivity() {
         // D-06, D-07: create incoming_tx notification channel for received RVN/assets
         io.raventag.app.worker.IncomingTxNotificationHelper.createChannel(applicationContext)
 
-        // Pitfall 6: prune stale reservations older than 48h on startup (D-20)
-        io.raventag.app.wallet.cache.ReservedUtxoDao.pruneOlderThan(
-            System.currentTimeMillis() - 48L * 3600_000L
-        )
-
-        // Schedule periodic wallet polling every 15 minutes.
-        // UPDATE policy: replaces any previously scheduled instance so app updates always
-        // run the latest worker code without requiring a reinstall.
-        WorkManager.getInstance(this).enqueueUniquePeriodicWork(
-            "wallet_poll",
-            ExistingPeriodicWorkPolicy.UPDATE,
-            PeriodicWorkRequestBuilder<WalletPollingWorker>(15, TimeUnit.MINUTES).build()
-        )
-
         val prefs = getSharedPreferences("raventag_app", MODE_PRIVATE)
 
-        // C-2: Admin key in EncryptedSharedPreferences (AES256-GCM, Android Keystore-backed).
-        // Initialized on IO thread to avoid blocking the main thread during startup.
-        // The SplashScreen is held visible until this completes (setKeepOnScreenCondition).
-        splash.setKeepOnScreenCondition { !securePrefsReady }
+        // Keystore and SQLite initialization are expensive on some devices. Run them
+        // in parallel while the splash screen is visible; the first Compose frame then
+        // starts with managers ready but without blocking the main thread.
         lifecycleScope.launch(Dispatchers.IO) {
-            securePrefs = try {
-                val masterKey = MasterKey.Builder(this@MainActivity)
-                    .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-                    .build()
-                EncryptedSharedPreferences.create(
-                    this@MainActivity,
-                    "raventag_secure",
-                    masterKey,
-                    EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-                    EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-                )
-            } catch (_: Throwable) {
-                // Fallback to plain prefs if Keystore unavailable (e.g. work profile restrictions)
-                getSharedPreferences("raventag_secure", MODE_PRIVATE)
+            val securePrefsDeferred = async {
+                try {
+                    val masterKey = MasterKey.Builder(this@MainActivity)
+                        .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                        .build()
+                    EncryptedSharedPreferences.create(
+                        this@MainActivity,
+                        "raventag_secure",
+                        masterKey,
+                        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+                    )
+                } catch (_: Throwable) {
+                    // Fallback to plain prefs if Keystore unavailable (e.g. work profile restrictions)
+                    getSharedPreferences("raventag_secure", MODE_PRIVATE)
+                }
             }
-            withContext(Dispatchers.Main) { securePrefsReady = true }
+            val adminKeyStorageDeferred = async {
+                val storage = AdminKeyStorage(applicationContext)
+                storage to (try { storage.getAdminKey() } catch (_: Throwable) { null }).orEmpty()
+            }
+            val walletManagerDeferred = async { WalletManager(applicationContext) }
+            val dbDeferred = async {
+                // Initialize wallet reliability database BEFORE initWallet so cache reads
+                // for balance, tx history and block height have a ready SQLite handle.
+                io.raventag.app.wallet.cache.WalletReliabilityDb.init(this@MainActivity)
+                io.raventag.app.wallet.health.NodeHealthMonitor.init(this@MainActivity)
+                io.raventag.app.wallet.cache.ReservedUtxoDao.pruneOlderThan(
+                    System.currentTimeMillis() - 48L * 3600_000L
+                )
+                // Schedule periodic wallet polling every 15 minutes.
+                // UPDATE policy replaces older work after app updates.
+                WorkManager.getInstance(this@MainActivity).enqueueUniquePeriodicWork(
+                    "wallet_poll",
+                    ExistingPeriodicWorkPolicy.UPDATE,
+                    PeriodicWorkRequestBuilder<WalletPollingWorker>(15, TimeUnit.MINUTES).build()
+                )
+            }
+
+            val initializedSecurePrefs = securePrefsDeferred.await()
+            val initializedAdmin = adminKeyStorageDeferred.await()
+            val initializedAdminKeyStorage = initializedAdmin.first
+            val initializedAdminKey = initializedAdmin.second
+            val initializedMasterKey = initializedSecurePrefs.getString("initial_master_key", "") ?: ""
+            val initializedOperatorKey = initializedSecurePrefs.getString("operator_key", "") ?: ""
+            val initializedPinataJwt = initializedSecurePrefs.getString("pinata_jwt", "") ?: ""
+            val initializedKuboNodeUrl = initializedSecurePrefs.getString("kubo_node_url", "") ?: ""
+            val initializedWalletManager = walletManagerDeferred.await()
+            dbDeferred.await()
+            val initializedAssetManager = AssetManager(
+                context = applicationContext,
+                adminKeyStorage = initializedAdminKeyStorage
+            )
+
+            withContext(Dispatchers.Main) {
+                securePrefs = initializedSecurePrefs
+                adminKeyStorage = initializedAdminKeyStorage
+                initialAdminKey = initializedAdminKey
+                initialMasterKey = initializedMasterKey
+                initialOperatorKey = initializedOperatorKey
+                initialPinataJwt = initializedPinataJwt
+                initialKuboNodeUrl = initializedKuboNodeUrl
+                viewModel.initWallet(
+                    initializedWalletManager,
+                    initializedAssetManager,
+                    initializedAdminKeyStorage
+                )
+                securePrefsReady = true
+            }
         }
 
         // Initialize verify URL from saved prefs so revocation checks use the right backend
@@ -3244,14 +3294,14 @@ class MainActivity : FragmentActivity() {
 
             // Persisted user preferences (read from SharedPreferences, updated on save)
             var langCode by remember { mutableStateOf(prefs.getString("language", "en") ?: "en") }
-            var savedAdminKey by remember { mutableStateOf(adminKeyStorage.getAdminKey() ?: "") }
-            var savedInitialMasterKey by remember { mutableStateOf(securePrefs.getString("initial_master_key", "") ?: "") }
-            var savedOperatorKey by remember { mutableStateOf(securePrefs.getString("operator_key", "") ?: "") }
+            var savedAdminKey by remember { mutableStateOf(initialAdminKey) }
+            var savedInitialMasterKey by remember { mutableStateOf(initialMasterKey) }
+            var savedOperatorKey by remember { mutableStateOf(initialOperatorKey) }
             var walletRole by remember { mutableStateOf(prefs.getString("wallet_role", "") ?: "") }
             // Sync wallet role into ViewModel so BrandDashboard can read it reactively
             LaunchedEffect(walletRole) { viewModel.walletRole = walletRole }
-            var savedPinataJwt by remember { mutableStateOf(securePrefs.getString("pinata_jwt", "") ?: "") }
-            var savedKuboNodeUrl by remember { mutableStateOf(securePrefs.getString("kubo_node_url", "") ?: "") }
+            var savedPinataJwt by remember { mutableStateOf(initialPinataJwt) }
+            var savedKuboNodeUrl by remember { mutableStateOf(initialKuboNodeUrl) }
             // Localised strings resolved from the saved language code
             val strings: AppStrings = remember(langCode) { appStringsFor(langCode) }
 
@@ -4005,11 +4055,11 @@ fun RavenTagApp(
             val settingsEverShown = remember { mutableStateOf(currentTab == AppTab.SETTINGS) }
 
             LaunchedEffect(viewModel.hasWallet, isBrandApp) {
-                delay(450)
+                delay(1_400)
                 if (viewModel.hasWallet) walletEverShown.value = true
-                delay(200)
+                delay(300)
                 if (isBrandApp) brandEverShown.value = true
-                delay(150)
+                delay(200)
                 settingsEverShown.value = true
             }
 
