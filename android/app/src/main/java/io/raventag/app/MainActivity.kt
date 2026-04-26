@@ -1383,19 +1383,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     } catch (_: Exception) {}
                 }
 
-                try {
-                    autoSweepInProgress = true
-                    val txids = wm.sweepOldAddresses()
-                    if (txids.isNotEmpty()) {
-                        Log.i("MainViewModel", "Startup sweep: ${txids.size} txs")
-                        withContext(Dispatchers.Main) {
-                            needsConsolidation = false
-                            loadWalletBalance()
+                // Only sweep when detection actually found old funds.
+                // needsConsolidation is set by loadOwnedAssets() which runs
+                // concurrently; wait briefly for it to complete its scan.
+                kotlinx.coroutines.delay(3_000L)
+                if (needsConsolidation) {
+                    try {
+                        autoSweepInProgress = true
+                        val txids = wm.sweepOldAddresses()
+                        if (txids.isNotEmpty()) {
+                            Log.i("MainViewModel", "Startup sweep: ${txids.size} txs")
+                            withContext(Dispatchers.Main) {
+                                needsConsolidation = false
+                                loadWalletBalance()
+                            }
                         }
+                    } catch (_: Exception) {
+                    } finally {
+                        autoSweepInProgress = false
                     }
-                } catch (_: Exception) {
-                } finally {
-                    autoSweepInProgress = false
                 }
 
                 // Refresh address after sweep: sweep advances the index to a fresh address.
