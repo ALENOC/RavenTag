@@ -310,22 +310,43 @@ class RavencoinPublicNode(private val context: Context) {
             "blockchain.scripthash.get_balance" to listOf(addressToScripthash(addr), true) as List<Any>
         }
         val responses = callWithFailoverBatch(requests)
+
+        // If every response is null the node rejected the `true` asset param with a
+        // JSON-RPC error (callBatch silently stores null for per-request errors).
+        // Fall back to plain get_balance so at least RVN-bearing addresses are found.
+        val allNull = responses.all { it == null || !it.isJsonObject }
+        val effectiveResponses: List<JsonElement?>
+        val hasAssetData: Boolean
+        if (allNull) {
+            android.util.Log.w(TAG, "get_balance?asset=true returned all nulls for ${addresses.size} addr; falling back to RVN-only")
+            val fallbackRequests = addresses.map { addr ->
+                "blockchain.scripthash.get_balance" to listOf(addressToScripthash(addr)) as List<Any>
+            }
+            effectiveResponses = callWithFailoverBatch(fallbackRequests)
+            hasAssetData = false
+        } else {
+            effectiveResponses = responses
+            hasAssetData = true
+        }
+
         val result = mutableSetOf<String>()
         addresses.forEachIndexed { i, addr ->
-            val resp = responses.getOrNull(i) ?: return@forEachIndexed
+            val resp = effectiveResponses.getOrNull(i) ?: return@forEachIndexed
             if (resp == null || !resp.isJsonObject) return@forEachIndexed
             val obj = resp.asJsonObject
             val rvnSat = (try { obj.get("confirmed")?.asLong ?: 0L } catch (_: Exception) { 0L }) +
                          (try { obj.get("unconfirmed")?.asLong ?: 0L } catch (_: Exception) { 0L })
             if (rvnSat >= minRvnSat) { result.add(addr); return@forEachIndexed }
-            for ((key, value) in obj.entrySet()) {
-                if (key == "confirmed" || key == "unconfirmed") continue
-                try {
-                    val assetObj = value.asJsonObject
-                    val sat = (assetObj.get("confirmed")?.asLong ?: 0L) +
-                              (assetObj.get("unconfirmed")?.asLong ?: 0L)
-                    if (sat > 0) { result.add(addr); break }
-                } catch (_: Exception) {}
+            if (hasAssetData) {
+                for ((key, value) in obj.entrySet()) {
+                    if (key == "confirmed" || key == "unconfirmed") continue
+                    try {
+                        val assetObj = value.asJsonObject
+                        val sat = (assetObj.get("confirmed")?.asLong ?: 0L) +
+                                  (assetObj.get("unconfirmed")?.asLong ?: 0L)
+                        if (sat > 0) { result.add(addr); break }
+                    } catch (_: Exception) {}
+                }
             }
         }
         return result
@@ -365,16 +386,20 @@ class RavencoinPublicNode(private val context: Context) {
     }
 
     /**
-     * Returns only RVN-carrying UTXOs for [address].
+     * Returns true if [address] has any UTXOs (RVN or assets).
      *
-     * Asset UTXOs are intentionally filtered out to prevent accidental asset
-     * destruction when building a RVN-only transaction. Different ElectrumX
-     * server implementations represent RVN UTXOs in slightly different ways:
-     * - No "asset" field at all: plain RVN UTXO.
-     * - "asset": null: plain RVN UTXO.
-     * - "asset": "RVN" (primitive string): RVN UTXO flagged explicitly.
-     * - "asset": { "name": "RVN", ... } (object): RVN UTXO with object notation.
-     * All four variants are treated as spendable RVN.
+     * Uses [listUnspentRaw] directly without secondary raw-tx fetches, so it is
+     * suitable as a lightweight fallback when batched get_balance?asset=true
+     * returns all errors and falls back to RVN-only detection.
+     */
+    fun hasAnyUtxos(address: String): Boolean {
+        return try {
+            listUnspentRaw(address).isNotEmpty()
+        } catch (_: Exception) { false }
+    }
+
+    /**
+     * Returns plain RVN UTXOs for [address], filtering out asset-carrying outputs.
      *
      * The script field of each returned Utxo is the P2PKH scriptPubKey reconstructed
      * from the address, required for SIGHASH computation during signing.
@@ -430,6 +455,37 @@ class RavencoinPublicNode(private val context: Context) {
      */
     fun broadcast(rawHex: String): String =
         callWithFailover("blockchain.transaction.broadcast", listOf(rawHex)).asString
+
+    /**
+     * Broadcast with direct-server fallback when [broadcast] fails because all
+     * nodes are quarantined after a long scan phase.
+     *
+     * First tries [broadcast] (respects [NodeHealthMonitor] quarantine). If that
+     * fails, tries every server directly via [call], bypassing quarantine, so
+     * the consolidation/sweep final step can complete.
+     */
+    fun broadcastWithAllServers(rawHex: String): String {
+        try {
+            return broadcast(rawHex)
+        } catch (_: Exception) {
+            android.util.Log.w(TAG, "broadcast: normal failover exhausted, trying all servers directly")
+        }
+        var lastError: Exception? = null
+        for (server in SERVERS) {
+            try {
+                val result = call(server, "blockchain.transaction.broadcast", listOf(rawHex)).asString
+                io.raventag.app.wallet.health.NodeHealthMonitor.reportSuccess("${server.host}:${server.port}")
+                return result
+            } catch (e: Exception) {
+                lastError = e
+                android.util.Log.w(TAG, "broadcast: direct server ${server.host}: ${e.message}")
+                io.raventag.app.wallet.health.NodeHealthMonitor.reportFailure(
+                    "${server.host}:${server.port}", e.javaClass.simpleName
+                )
+            }
+        }
+        throw lastError ?: java.io.IOException("broadcast failed on all servers")
+    }
 
     /**
      * Low-level RPC call with failover; returns null on any exception.
@@ -708,13 +764,18 @@ class RavencoinPublicNode(private val context: Context) {
      * [getAssetUtxosFull] that previously required N+2 separate TLS connections.
      *
      * @param address Ravencoin P2PKH address.
+     * @param fetchMissingAssetUtxos When true, cross-check asset balances, fetch
+     *        UTXOs for every asset name, and merge only outpoints not already found
+     *        by the batch path. This is intentionally opt-in because it can require
+     *        one extra server query per asset.
      * @return Triple:
      *   - rvnUtxos:       plain RVN UTXOs safe to spend as fee inputs
      *   - assetOutpoints: set of "txid:vout" that carry assets (to exclude from fee inputs)
      *   - assetUtxosMap:  map from asset name to list of AssetUtxo (with on-chain scripts)
      */
     fun getUtxosAndAllAssetUtxosBatch(
-        address: String
+        address: String,
+        fetchMissingAssetUtxos: Boolean = false
     ): Triple<List<Utxo>, Set<String>, Map<String, List<AssetUtxo>>> {
         val rvnScript = p2pkhScriptHex(address)
         val rawList = listUnspentRaw(address)   // TLS 1
@@ -854,25 +915,31 @@ class RavencoinPublicNode(private val context: Context) {
 
         // Secondary fallback: when the primary listunspent path returned zero
         // assets (server omitted asset tags), use getAssetBalances to discover
-        // which assets exist, then fetch the owner token UTXO directly.
-        // The owner token (name ending with "!") is the only asset strictly
-        // required for sub-asset/unique-token issuance; other assets are swept
-        // opportunistically if found.
-        if (assetUtxosMap.isEmpty()) {
+        // which assets exist, then fetch owner token UTXOs directly. Issuance
+        // asks for fetchMissingAssetUtxos=true, which expands this to every
+        // asset name so the issuance tx can atomically sweep the whole address.
+        var unresolvedAssetNames: List<String> = emptyList()
+        if (assetUtxosMap.isEmpty() || fetchMissingAssetUtxos) {
             try {
                 val assetBalances = getAssetBalances(address)
                 if (assetBalances.isNotEmpty()) {
-                    android.util.Log.i("RavencoinPublicNode", "  secondary: listunspent returned 0 assets but get_balance has ${assetBalances.size}; fetching owner tokens via getAssetUtxosFull")
+                    val existingAssetOutpoints = assetUtxosMap.values
+                        .flatten()
+                        .map { "${it.utxo.txid}:${it.utxo.outputIndex}" }
+                        .toMutableSet()
+                    val mode = if (fetchMissingAssetUtxos) "all asset UTXOs" else "owner tokens"
+                    android.util.Log.i("RavencoinPublicNode", "  secondary: get_balance has ${assetBalances.size}; fetching $mode via getAssetUtxosFull")
                     for (ab in assetBalances) {
-                        if (!ab.name.endsWith("!")) continue
-                        // Only fetch owner tokens individually; non-owner assets
-                        // are re-parsed from cached raw txs below.
+                        if (!fetchMissingAssetUtxos && !ab.name.endsWith("!")) continue
                         try {
                             val utxos = getAssetUtxosFull(address, ab.name)
-                            if (utxos.isNotEmpty()) {
-                                assetUtxosMap.getOrPut(ab.name) { mutableListOf() }.addAll(utxos)
-                                assetOutpoints.addAll(utxos.map { "${it.utxo.txid}:${it.utxo.outputIndex}" })
-                                android.util.Log.i("RavencoinPublicNode", "  secondary: owner token ${ab.name} -> ${utxos.size} UTXOs via getAssetUtxosFull")
+                            val freshUtxos = utxos.filter { assetUtxo ->
+                                existingAssetOutpoints.add("${assetUtxo.utxo.txid}:${assetUtxo.utxo.outputIndex}")
+                            }
+                            if (freshUtxos.isNotEmpty()) {
+                                assetUtxosMap.getOrPut(ab.name) { mutableListOf() }.addAll(freshUtxos)
+                                assetOutpoints.addAll(freshUtxos.map { "${it.utxo.txid}:${it.utxo.outputIndex}" })
+                                android.util.Log.i("RavencoinPublicNode", "  secondary: ${ab.name} -> ${freshUtxos.size} additional UTXO(s) via getAssetUtxosFull")
                             }
                         } catch (e: Exception) {
                             android.util.Log.w("RavencoinPublicNode", "  secondary: getAssetUtxosFull failed for ${ab.name}: ${e.message}")
@@ -889,14 +956,22 @@ class RavencoinPublicNode(private val context: Context) {
                         val parsed = parseAssetFromScript(scriptHex) ?: continue
                         val (assetName, rawAmount) = parsed
                         if (assetName !in balanceNames) continue
-                        assetOutpoints.add("${u.txHash}:${u.txPos}")
+                        val outpoint = "${u.txHash}:${u.txPos}"
+                        if (!existingAssetOutpoints.add(outpoint)) continue
+                        assetOutpoints.add(outpoint)
                         val satoshis = try { ((vout.get("value")?.asDouble ?: 0.0) * 100_000_000.0).toLong() } catch (_: Exception) { 0L }
                         val utxo = Utxo(u.txHash, u.txPos, satoshis, scriptHex, u.height)
                         assetUtxosMap.getOrPut(assetName) { mutableListOf() }.add(AssetUtxo(utxo, assetName, rawAmount))
                         android.util.Log.i("RavencoinPublicNode", "  secondary: re-parsed $assetName from unknown UTXO ${u.txHash}:${u.txPos}")
                     }
+                    if (fetchMissingAssetUtxos) {
+                        unresolvedAssetNames = balanceNames.filter { assetUtxosMap[it].isNullOrEmpty() }
+                    }
                 }
             } catch (_: Exception) {}
+        }
+        if (fetchMissingAssetUtxos && unresolvedAssetNames.isNotEmpty()) {
+            throw java.io.IOException("incomplete asset UTXO scan: missing=$unresolvedAssetNames")
         }
 
         return Triple(rvnUtxos, assetOutpoints, assetUtxosMap)

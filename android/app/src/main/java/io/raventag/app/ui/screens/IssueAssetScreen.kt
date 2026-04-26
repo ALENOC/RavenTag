@@ -51,6 +51,7 @@ import io.raventag.app.config.AppConfig
 import io.raventag.app.ravencoin.AssetType
 import io.raventag.app.ravencoin.OwnedAsset
 import io.raventag.app.ui.theme.*
+import io.raventag.app.wallet.RavencoinTxBuilder
 
 /**
  * Defines which operation the [IssueAssetScreen] should present.
@@ -307,8 +308,15 @@ fun IssueAssetScreen(
         // Form fields: each branch shows only the inputs relevant to its mode.
         when (mode) {
             IssueMode.ROOT_ASSET -> {
+                val maxNameLen = RavencoinTxBuilder.MAX_ASSET_NAME_LENGTH
+                val rootNameTooLong = assetName.length > maxNameLen
+                val rootNameHint = if (rootNameTooLong) {
+                    "Too long: ${assetName.length}/$maxNameLen. Ravencoin max is $maxNameLen chars."
+                } else {
+                    s.assetNameHint
+                }
                 // Asset name is auto-uppercased (Ravencoin protocol requires uppercase asset names).
-                RavenTextField(s.fieldAssetName, assetName, { assetName = it.uppercase() }, "MYASSET", s.assetNameHint)
+                RavenTextField(s.fieldAssetName, assetName, { assetName = it.uppercase() }, "MYASSET", rootNameHint)
                 Spacer(Modifier.height(12.dp))
                 RavenTextField(s.fieldQty, qty, { qty = it }, "1", keyboardType = KeyboardType.Number)
                 Spacer(Modifier.height(12.dp))
@@ -333,7 +341,7 @@ fun IssueAssetScreen(
                 val currentReissuable = reissuable
                 // Minimum validation: asset name at least 3 chars and a plausible RVN address length.
                 if (currentStep is IssueStep.Idle) {
-                    SubmitButton(s.btnIssueRoot, isLoading, assetName.length >= 3 && toAddress.length >= 26, RavenOrange) {
+                    SubmitButton(s.btnIssueRoot, isLoading, assetName.length in 3..maxNameLen && toAddress.length >= 26, RavenOrange) {
                         onIssueRoot(assetName, qty.toLongOrNull() ?: 1, toAddress, effectiveIpfs, currentReissuable)
                     }
                 } else {
@@ -342,6 +350,9 @@ fun IssueAssetScreen(
             }
 
             IssueMode.SUB_ASSET -> {
+                val maxNameLen = RavencoinTxBuilder.MAX_ASSET_NAME_LENGTH
+                val subFullName = "${parentAsset.ifBlank { "PARENT" }}/${childName.ifBlank { "CHILD" }}"
+                val subNameTooLong = parentAsset.isNotBlank() && childName.isNotBlank() && subFullName.length > maxNameLen
                 RavenTextField(s.fieldParent, parentAsset, { parentAsset = it.uppercase() }, "MYASSET")
                 // Inline autocomplete dropdown for owned root assets.
                 AssetAutocompleteSuggestions(
@@ -352,7 +363,11 @@ fun IssueAssetScreen(
                 Spacer(Modifier.height(12.dp))
                 // Live preview hint shows the final asset path as the user types (e.g. "PARENT/CHILD").
                 RavenTextField(s.fieldChild, childName, { childName = it.uppercase() }, "ITEM01",
-                    hint = "→ ${parentAsset.ifBlank { "PARENT" }}/${childName.ifBlank { "CHILD" }}")
+                    hint = if (subNameTooLong) {
+                        "Too long: ${subFullName.length}/$maxNameLen. Shorten parent or child."
+                    } else {
+                        "→ $subFullName"
+                    })
                 Spacer(Modifier.height(12.dp))
                 RavenTextField(s.fieldQty, qty, { qty = it }, "1", keyboardType = KeyboardType.Number)
                 Spacer(Modifier.height(12.dp))
@@ -376,7 +391,7 @@ fun IssueAssetScreen(
                 // accidentally reading stale values during an async operation.
                 val currentReissuable = reissuable
                 val subEffectiveIpfs = imageState.value.ipfsCid
-                val subEnabled = parentAsset.length >= 3 && childName.length >= 1 && toAddress.length >= 26
+                val subEnabled = parentAsset.length >= 3 && childName.length >= 1 && !subNameTooLong && toAddress.length >= 26
 
                 if (currentStep is IssueStep.Idle) {
                     SubmitButton(s.btnIssueSub, isLoading, subEnabled, RavenOrange) {
@@ -388,6 +403,9 @@ fun IssueAssetScreen(
             }
 
             IssueMode.UNIQUE_TOKEN -> {
+                val maxNameLen = RavencoinTxBuilder.MAX_ASSET_NAME_LENGTH
+                val fullUniqueName = if (subAsset.isNotBlank() && serial.isNotBlank()) "$subAsset#$serial" else ""
+                val uniqueNameTooLong = fullUniqueName.length > maxNameLen
                 // Info card: explains the unique token spec (qty=1, non-reissuable, 5 RVN fee).
                 Card(
                     colors = CardDefaults.cardColors(containerColor = Color(0xFF0A1A0A)),
@@ -419,7 +437,11 @@ fun IssueAssetScreen(
                     { serial = it.uppercase().filter { c -> c.isLetterOrDigit() } },
                     "SN0001",
                     // Live hint assembles the full unique token name (e.g. "FASHIONX/BAG01#SN0001").
-                    hint = if (subAsset.isNotBlank() && serial.isNotBlank()) "→ $subAsset#$serial" else s.fieldSerialHint
+                    hint = when {
+                        uniqueNameTooLong -> "Too long: ${fullUniqueName.length}/$maxNameLen. Shorten sub-asset or serial."
+                        fullUniqueName.isNotBlank() -> "→ $fullUniqueName"
+                        else -> s.fieldSerialHint
+                    }
                 )
                 Spacer(Modifier.height(12.dp))
                 RavenTextField(s.fieldSendTo, toAddress, { toAddress = it }, "RXxxxxxxxxxxxxxxxxxxxx", s.fieldSendToHint)
@@ -438,7 +460,7 @@ fun IssueAssetScreen(
                 )
                 Spacer(Modifier.height(24.dp))
 
-                val uniqueEnabled = subAsset.length >= 3 && serial.length >= 1 && toAddress.length >= 26
+                val uniqueEnabled = subAsset.length >= 3 && serial.length >= 1 && !uniqueNameTooLong && toAddress.length >= 26
                 val uniqueEffectiveIpfs = imageState.value.ipfsCid
                 // Convert blank description to null so the backend knows no description was given.
                 val uniqueDescription = description.ifBlank { null }

@@ -100,6 +100,7 @@ fun WalletScreen(
     assetsLoadError: Boolean = false,
     needsConsolidation: Boolean = false,
     consolidationInProgress: Boolean = false,
+    autoSweepInProgress: Boolean = false,
     onConsolidateFunds: (() -> Unit)? = null,
     electrumStatus: MainViewModel.ElectrumStatus = MainViewModel.ElectrumStatus.UNKNOWN,
     blockHeight: Int? = null,
@@ -591,8 +592,30 @@ fun WalletScreen(
                     }
                 }
             }
-            // Consolidation banner: shown when funds are detected on old addresses
-            if (needsConsolidation && onConsolidateFunds != null && !assetsLoading && !consolidationInProgress) {
+            // Auto-sweep in progress: spinner, no button (sweep handles it automatically)
+            if (autoSweepInProgress) {
+                item(key = "autosweep_progress") {
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFF1A2D00)),
+                        border = BorderStroke(1.dp, AuthenticGreen.copy(alpha = 0.5f)),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp)
+                    ) {
+                        Row(modifier = Modifier.padding(12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(color = AuthenticGreen, modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                            Text(
+                                s.walletAutoSweepBanner,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = AuthenticGreen.copy(alpha = 0.9f),
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+                }
+            }
+            // Manual consolidation: shown only when auto-sweep failed (needsConsolidation
+            // stays true because sweep caught an exception and couldn't clear it).
+            if (needsConsolidation && !autoSweepInProgress && onConsolidateFunds != null && !assetsLoading && !consolidationInProgress) {
                 item(key = "consolidation_banner") {
                     Card(
                         colors = CardDefaults.cardColors(containerColor = Color(0xFF1A2D00)),
@@ -604,7 +627,7 @@ fun WalletScreen(
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Icon(Icons.Default.SyncProblem, contentDescription = null, tint = AuthenticGreen, modifier = Modifier.size(16.dp))
                                 Text(
-                                    "Funds detected on old addresses",
+                                    s.walletManualConsolidateTitle,
                                     style = MaterialTheme.typography.bodySmall,
                                     color = AuthenticGreen.copy(alpha = 0.9f),
                                     fontWeight = FontWeight.SemiBold
@@ -612,7 +635,7 @@ fun WalletScreen(
                             }
                             Spacer(modifier = Modifier.height(6.dp))
                             Text(
-                                "Consolidate all RVN and assets to a fresh, secure address",
+                                s.walletManualConsolidateSubtitle,
                                 style = MaterialTheme.typography.bodySmall,
                                 color = RavenMuted
                             )

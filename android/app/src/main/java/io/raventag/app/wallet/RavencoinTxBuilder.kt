@@ -24,7 +24,6 @@
  */
 package io.raventag.app.wallet
 
-import android.util.Log
 import org.bouncycastle.crypto.params.ECPrivateKeyParameters
 import org.bouncycastle.crypto.params.ECPublicKeyParameters
 import org.bouncycastle.crypto.signers.ECDSASigner
@@ -86,6 +85,12 @@ object RavencoinTxBuilder {
 
     /** RVN cost to issue a unique token: 5 RVN in satoshis. */
     const val BURN_UNIQUE_SAT = 500_000_000L
+
+    /** One display asset unit in Ravencoin raw amount encoding. */
+    const val ASSET_UNIT_RAW = 100_000_000L
+
+    /** Ravencoin consensus limit for the complete asset name, including / and # parts. */
+    const val MAX_ASSET_NAME_LENGTH = 30
 
     // ── Data types ────────────────────────────────────────────────────────────
 
@@ -876,7 +881,7 @@ object RavencoinTxBuilder {
 
         // 1 owner unit in Ravencoin raw asset units (owner tokens always have divisibility 8,
         // so 1 owner token = 100_000_000 raw units).
-        val preservedOwnerAmount = 100_000_000L
+        val preservedOwnerAmount = ASSET_UNIT_RAW
 
         // Issuance and owner outputs carry 0 satoshis (asset value is in the script payload).
         val ownerDust = 0L
@@ -916,10 +921,6 @@ object RavencoinTxBuilder {
                 changeAddress,
                 preservedOwnerAssetName,
                 preservedOwnerAmount
-            )
-            Log.i(
-                "RavencoinTxBuilder",
-                "owner-return asset=$preservedOwnerAssetName amountRaw=$preservedOwnerAmount script=${preservedOwnerScript.toHex()}"
             )
             outputs.add(ScriptedOutput(0L, preservedOwnerScript))
         }
@@ -1000,7 +1001,7 @@ object RavencoinTxBuilder {
             else -> null
         }
 
-        val preservedOwnerAmount = 100_000_000L
+        val preservedOwnerAmount = ASSET_UNIT_RAW
         val ownerDust = 0L
         val dustOut = 0L
 
@@ -1076,10 +1077,6 @@ object RavencoinTxBuilder {
                 preservedOwnerAssetName,
                 preservedOwnerAmount
             )
-            Log.i(
-                "RavencoinTxBuilder",
-                "owner-return asset=$preservedOwnerAssetName amountRaw=$preservedOwnerAmount format=rvnt script=${preservedOwnerScript.toHex()}"
-            )
             outputs.add(ScriptedOutput(0L, preservedOwnerScript))
         }
 
@@ -1101,8 +1098,6 @@ object RavencoinTxBuilder {
         allInputs.addAll(rvnAndOwnerInputs)
         otherAssetUtxos.values.forEach { allInputs.addAll(it.map { au -> au.utxo }) }
 
-        Log.i("RavencoinTxBuilder", "buildAndSign: allInputs=${allInputs.map { "${it.txid}:${it.outputIndex}" }}")
-
         val signatures = allInputs.mapIndexed { idx, utxo ->
             val sigHash = sigHashWithScriptedOutputs(allInputs, outputs, idx, utxo.script)
             signEcdsa(sigHash, privKeyBytes)
@@ -1110,9 +1105,6 @@ object RavencoinTxBuilder {
 
         val raw = serializeTxWithScripts(allInputs, outputs, signatures, pubKeyBytes)
         val rawHex = raw.toHex()
-        // Verify the vout bytes in the serialized output
-        val vout1Byte = raw[37] // input0 vout byte0 (offset: 1+4+32+0=37)
-        Log.i("RavencoinTxBuilder", "buildAndSign: vout0-byte0=${vout1Byte.toInt() and 0xff} rawHex-start=${rawHex.take(200)}")
         return SignedTx(rawHex, txid(raw))
     }
 
@@ -1244,7 +1236,8 @@ object RavencoinTxBuilder {
         payload.write(byteArrayOf(0x72, 0x76, 0x6e, 0x71)) // "rvnq"
         payload.write(nameBytes.size)                        // compact_size name length
         payload.write(nameBytes)
-        payload.writeLE64(qtyRaw)                            // 8-byte LE quantity
+        val effectiveQty = if (assetName.contains("#")) ASSET_UNIT_RAW else qtyRaw
+        payload.writeLE64(effectiveQty)                      // 8-byte LE raw quantity
         payload.write(units)                                 // divisibility byte
         payload.write(if (reissuable) 1 else 0)              // reissuable flag
 
