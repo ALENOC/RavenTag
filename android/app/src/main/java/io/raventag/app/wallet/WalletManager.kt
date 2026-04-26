@@ -747,8 +747,19 @@ class WalletManager(private val context: Context) {
         val addrBatch = getAddressBatch(0, 0 until currentIndex)
         val addrList = (0 until currentIndex).mapNotNull { i -> addrBatch[i]?.let { i to it } }
 
+        // Use single batch RPC call to find funded addresses, avoiding N individual
+        // calls that quarantine all ElectrumX nodes via transient-failure cooldown.
+        val fundedAddrs: Set<String> = try {
+            node.getAddressesWithFunds(addrList.map { it.second })
+        } catch (e: Exception) {
+            android.util.Log.w("WalletManager", "Sweep: batch scan failed: ${e.message}")
+            emptySet()
+        }
+        android.util.Log.i("WalletManager", "Sweep: batch found ${fundedAddrs.size} funded address(es) out of ${addrList.size}")
+
         val targets = mutableListOf<SweepTarget>()
         for ((i, addr) in addrList) {
+            if (addr !in fundedAddrs) continue
             try {
                 val r = node.getUtxosAndAllAssetUtxosBatch(addr)
                 val hasAssets = r.third.isNotEmpty()
@@ -758,7 +769,7 @@ class WalletManager(private val context: Context) {
                     targets.add(SweepTarget(i, addr, hasAssets, rvnBalance > 0))
                 }
             } catch (e: Exception) {
-                android.util.Log.w("WalletManager", "Sweep: scan failed for index $i: ${e.message}")
+                android.util.Log.w("WalletManager", "Sweep: UTXO fetch failed for index $i: ${e.message}")
             }
         }
         if (targets.isEmpty()) {
