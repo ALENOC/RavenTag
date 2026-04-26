@@ -66,31 +66,62 @@ object IpfsResolver {
     fun candidateUrls(ipfsRef: String): List<String> {
         val normalized = ipfsRef.trim()
         if (normalized.isEmpty()) return emptyList()
+        return buildCandidateUrls(normalized)
+    }
 
-        // If it's already a direct HTTP URL with no IPFS path, use it as-is
-        if (normalized.startsWith("http") && !normalized.contains("/ipfs/") && !normalized.contains(".ipfs.")) {
+    private fun buildCandidateUrls(normalized: String): List<String> {
+
+        // If it's already a direct URL (HTTP or local file) with no IPFS path, use as-is
+        if (normalized.startsWith("file://")) return listOf(normalized)
+        if (isHttpUrl(normalized) && !normalized.contains("/ipfs/", ignoreCase = true) && !normalized.contains(".ipfs.", ignoreCase = true)) {
             return listOf(normalized)
         }
 
-        // Extract the raw CID from various known formats.
-        val cid = when {
+        // Extract the IPFS reference from various known formats. Keep any path after
+        // the CID because directory-style IPFS assets are commonly referenced as
+        // ipfs://<CID>/image.png or https://gateway/ipfs/<CID>/image.png.
+        val ipfsPath = when {
             normalized.startsWith("ipfs://") -> normalized.removePrefix("ipfs://")
-            normalized.startsWith("/ipfs/") -> normalized.removePrefix("/ipfs/")
-            normalized.contains("/ipfs/") -> normalized.substringAfter("/ipfs/").substringBefore("?")
-            normalized.startsWith("http") && normalized.contains(".ipfs.") -> {
-                // Handle subdomain-style gateways (e.g. bafy...ipfs.dweb.link)
-                normalized.substringAfter("://").substringBefore(".ipfs.")
-            }
-            // Assume a bare string is a CID (e.g. Qm... or bafy...).
+            normalized.startsWith("/ipfs/", ignoreCase = true) -> normalized.drop("/ipfs/".length)
+            normalized.contains("/ipfs/", ignoreCase = true) -> normalized.afterIpfsPathMarker()
+            isHttpUrl(normalized) && normalized.contains(".ipfs.", ignoreCase = true) ->
+                subdomainGatewayToIpfsPath(normalized)
+            // Assume a bare string is a CID, optionally with a path after it.
             else -> normalized
-        }
-        
-        // Final sanity check: strip trailing slash or query params if any
-        val cleanCid = cid.substringBefore("/").substringBefore("?")
-        
-        // Build one URL per gateway by appending the CID directly to the gateway base URL.
+        }.trimStart('/')
+
+        if (ipfsPath.isEmpty()) return emptyList()
+
+        // Build one URL per gateway by appending the IPFS reference directly to the gateway base URL.
         // Gateways in BuildConfig already include the trailing "/ipfs/" path segment.
-        return gateways.map { gateway -> gateway + cleanCid }
+        return gateways.map { gateway -> gateway.trimEnd('/') + "/" + ipfsPath }
+    }
+
+    private fun isHttpUrl(value: String): Boolean =
+        value.startsWith("http://", ignoreCase = true) || value.startsWith("https://", ignoreCase = true)
+
+    private fun String.afterIpfsPathMarker(): String {
+        val marker = "/ipfs/"
+        val index = indexOf(marker, ignoreCase = true)
+        return if (index >= 0) substring(index + marker.length) else this
+    }
+
+    private fun subdomainGatewayToIpfsPath(url: String): String {
+        return try {
+            val uri = java.net.URI(url)
+            val host = uri.host.orEmpty()
+            val cid = host.substringBefore(".ipfs.")
+            val path = uri.rawPath?.takeIf { it != "/" }.orEmpty()
+            val query = uri.rawQuery?.let { "?$it" }.orEmpty()
+            val fragment = uri.rawFragment?.let { "#$it" }.orEmpty()
+            cid + path + query + fragment
+        } catch (_: Exception) {
+            val withoutScheme = url.substringAfter("://")
+            val cid = withoutScheme.substringBefore(".ipfs.")
+            val afterMarker = withoutScheme.substringAfter(".ipfs.", "")
+            val pathStart = afterMarker.indexOf('/')
+            if (pathStart >= 0) cid + afterMarker.substring(pathStart) else cid
+        }
     }
 
     /**

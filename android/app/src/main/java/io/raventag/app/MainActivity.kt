@@ -55,6 +55,7 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.async
@@ -138,6 +139,35 @@ sealed class IssueStep {
         ISSUING,
         CONFIRMING,
         NFC_PROGRAMMING
+    }
+}
+
+@Composable
+private fun TabLayer(
+    visible: Boolean,
+    content: @Composable () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .zIndex(if (visible) 0f else -1f)
+            .alpha(if (visible) 1f else 0f)
+    ) {
+        content()
+        if (!visible) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(Unit) {
+                        awaitPointerEventScope {
+                            while (true) {
+                                awaitPointerEvent(PointerEventPass.Initial)
+                                    .changes.forEach { it.consume() }
+                            }
+                        }
+                    }
+            )
+        }
     }
 }
 
@@ -716,10 +746,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      *   Phase 2: enrich each asset with IPFS metadata in parallel (max 4 concurrent
      *            requests via a semaphore) and update the list progressively.
      */
+    /**
+     * Lightweight cache entry: strips heavy fields (imageUrl, description)
+     * to keep JSON under SharedPreferences 10240-byte limit with 24+ assets.
+     */
+    private data class CachedAsset(val name: String, val balance: Double, val typeOrdinal: Int, val ipfsHash: String?)
+
     private fun saveAssetsCache(assets: List<OwnedAsset>) {
         try {
             val addr = walletManager?.getCurrentAddress() ?: return
-            val json = com.google.gson.Gson().toJson(assets)
+            val cached = assets.map { CachedAsset(it.name, it.balance, it.type.ordinal, it.ipfsHash) }
+            val json = com.google.gson.Gson().toJson(cached)
             getApplication<Application>().getSharedPreferences("raventag_assets_cache", Application.MODE_PRIVATE)
                 .edit().putString(addr, json).apply()
         } catch (_: Exception) {}
@@ -730,8 +767,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val addr = walletManager?.getCurrentAddress() ?: return null
             val prefs = getApplication<Application>().getSharedPreferences("raventag_assets_cache", Application.MODE_PRIVATE)
             val json = prefs.getString(addr, null) ?: return null
-            val type = object : com.google.gson.reflect.TypeToken<List<OwnedAsset>>() {}.type
-            com.google.gson.Gson().fromJson<List<OwnedAsset>>(json, type)
+            val listType = object : com.google.gson.reflect.TypeToken<List<CachedAsset>>() {}.type
+            val cached = com.google.gson.Gson().fromJson<List<CachedAsset>>(json, listType)
+            cached.map { ca ->
+                OwnedAsset(
+                    name = ca.name,
+                    balance = ca.balance,
+                    type = io.raventag.app.ravencoin.AssetType.entries[ca.typeOrdinal],
+                    ipfsHash = ca.ipfsHash,
+                    imageUrl = null,
+                    description = null
+                )
+            }
         } catch (_: Exception) { null }
     }
 
@@ -843,6 +890,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     val node = io.raventag.app.wallet.RavencoinPublicNode(getApplication())
                     val names = needsEnrichment.map { it.name }
                     val metaBatch = try { node.getAssetMetaBatch(names) } catch (_: Exception) { emptyMap() }
+                    val hashesFound = metaBatch.count { it.value?.ipfsHash != null }
+                    android.util.Log.i("MainActivity", "loadOwnedAssets: getAssetMetaBatch ${metaBatch.size}/${names.size} responses, $hashesFound hashes")
+                    if (hashesFound == 0 && names.isNotEmpty()) {
+                        android.util.Log.w("MainActivity", "loadOwnedAssets: no IPFS hashes found for ${names.size} assets (server may not support blockchain.asset.get_meta)")
+                    }
                     needsEnrichment.map { asset ->
                         val hash = metaBatch[asset.name]?.ipfsHash
                         if (hash != null) asset.copy(ipfsHash = hash) else asset
@@ -3672,7 +3724,9 @@ fun RavenTagApp(
                 viewModel.fetchBlockHeight()
                 viewModel.fetchRvnPrice()
                 viewModel.fetchNetworkHashrate()
-                viewModel.refreshBalance()
+                if (currentTab == AppTab.WALLET) {
+                    viewModel.refreshBalance()
+                }
                 kotlinx.coroutines.delay(60_000)
             }
         }
@@ -3943,136 +3997,125 @@ fun RavenTagApp(
     ) { innerPadding ->
         Box(modifier = Modifier.padding(innerPadding).fillMaxSize()) {
 
-            // WalletScreen: keep alive in the composition tree after the first visit.
-            // `when` branches are destroyed on every tab switch, and for a large screen like
-            // WalletScreen (many asset cards, scroll state, dialogs) that initial composition
-            // costs more than one frame and produces visible lag.
-            // Using alpha(0f) + pointer-blocking overlay keeps it alive without rendering.
+            // Keep heavy destination tabs alive once warmed. Wallet is prewarmed shortly
+            // after startup when a wallet exists, so the first Scan -> Wallet tap does not
+            // pay the large initial composition cost.
             val walletEverShown = remember { mutableStateOf(currentTab == AppTab.WALLET) }
+            val brandEverShown = remember { mutableStateOf(isBrandApp && currentTab == AppTab.BRAND) }
+            val settingsEverShown = remember { mutableStateOf(currentTab == AppTab.SETTINGS) }
+
+            LaunchedEffect(viewModel.hasWallet, isBrandApp) {
+                delay(450)
+                if (viewModel.hasWallet) walletEverShown.value = true
+                delay(200)
+                if (isBrandApp) brandEverShown.value = true
+                delay(150)
+                settingsEverShown.value = true
+            }
+
             if (currentTab == AppTab.WALLET) walletEverShown.value = true
+            if (currentTab == AppTab.BRAND && isBrandApp) brandEverShown.value = true
+            if (currentTab == AppTab.SETTINGS) settingsEverShown.value = true
+
             val walletVisible = currentTab == AppTab.WALLET
+            val brandVisible = currentTab == AppTab.BRAND
+            val settingsVisible = currentTab == AppTab.SETTINGS
 
             if (walletEverShown.value) {
-                Box(modifier = Modifier.fillMaxSize().alpha(if (walletVisible) 1f else 0f)) {
+                TabLayer(visible = walletVisible) {
                     WalletScreen(
                         modifier = Modifier.fillMaxSize(),
-                    walletInfo = viewModel.walletInfo,
-                    hasWallet = viewModel.hasWallet,
-                    isGenerating = viewModel.walletGenerating,
-                    ownedAssets = viewModel.ownedAssets,
-                    assetsLoading = viewModel.assetsLoading,
-                    assetsLoadError = viewModel.assetsLoadError,
-                    needsConsolidation = viewModel.needsConsolidation,
-                    consolidationInProgress = viewModel.consolidationInProgress,
-                    autoSweepInProgress = viewModel.autoSweepInProgress,
-                    onConsolidateFunds = { viewModel.consolidateFunds() },
-                    electrumStatus = viewModel.electrumStatus,
-                    blockHeight = viewModel.blockHeight,
-                    rvnPrice = viewModel.rvnPrice,
-                    networkHashrate = viewModel.networkHashrate,
-                    walletRole = walletRole,
-                    controlKeyValidating = viewModel.controlKeyValidating,
-                    controlKeyError = viewModel.controlKeyError,
-                    restoreError = viewModel.restoreError,
-                    onGenerateWallet = { controlKey ->
-                        if (!io.raventag.app.config.AppConfig.IS_BRAND_APP) {
-                            viewModel.generateWallet()
-                        } else {
-                            scope.launch {
-                                viewModel.controlKeyValidating = true
-                                viewModel.controlKeyError = null
-                                val role = viewModel.validateControlKey(viewModel.currentVerifyUrl, controlKey)
-                                viewModel.controlKeyValidating = false
-                                if (role == null) {
-                                    viewModel.controlKeyError = s.walletControlKeyInvalid
-                                } else {
-                                    onWalletRoleSave(role, controlKey)
-                                    viewModel.generateWallet()
+                        active = walletVisible,
+                        walletInfo = viewModel.walletInfo,
+                        hasWallet = viewModel.hasWallet,
+                        isGenerating = viewModel.walletGenerating,
+                        ownedAssets = viewModel.ownedAssets,
+                        assetsLoading = viewModel.assetsLoading,
+                        assetsLoadError = viewModel.assetsLoadError,
+                        needsConsolidation = viewModel.needsConsolidation,
+                        consolidationInProgress = viewModel.consolidationInProgress,
+                        autoSweepInProgress = viewModel.autoSweepInProgress,
+                        onConsolidateFunds = { viewModel.consolidateFunds() },
+                        electrumStatus = viewModel.electrumStatus,
+                        blockHeight = viewModel.blockHeight,
+                        rvnPrice = viewModel.rvnPrice,
+                        networkHashrate = viewModel.networkHashrate,
+                        walletRole = walletRole,
+                        controlKeyValidating = viewModel.controlKeyValidating,
+                        controlKeyError = viewModel.controlKeyError,
+                        restoreError = viewModel.restoreError,
+                        onGenerateWallet = { controlKey ->
+                            if (!io.raventag.app.config.AppConfig.IS_BRAND_APP) {
+                                viewModel.generateWallet()
+                            } else {
+                                scope.launch {
+                                    viewModel.controlKeyValidating = true
+                                    viewModel.controlKeyError = null
+                                    val role = viewModel.validateControlKey(viewModel.currentVerifyUrl, controlKey)
+                                    viewModel.controlKeyValidating = false
+                                    if (role == null) {
+                                        viewModel.controlKeyError = s.walletControlKeyInvalid
+                                    } else {
+                                        onWalletRoleSave(role, controlKey)
+                                        viewModel.generateWallet()
+                                    }
                                 }
                             }
-                        }
-                    },
-                    onRestoreWallet = { mnemonic, controlKey ->
-                        if (!io.raventag.app.config.AppConfig.IS_BRAND_APP) {
-                            viewModel.restoreWallet(mnemonic)
-                        } else {
-                            scope.launch {
-                                viewModel.controlKeyValidating = true
-                                viewModel.controlKeyError = null
-                                val role = viewModel.validateControlKey(viewModel.currentVerifyUrl, controlKey)
-                                viewModel.controlKeyValidating = false
-                                if (role == null) {
-                                    viewModel.controlKeyError = s.walletControlKeyInvalid
-                                } else {
-                                    onWalletRoleSave(role, controlKey)
-                                    viewModel.restoreWallet(mnemonic)
+                        },
+                        onRestoreWallet = { mnemonic, controlKey ->
+                            if (!io.raventag.app.config.AppConfig.IS_BRAND_APP) {
+                                viewModel.restoreWallet(mnemonic)
+                            } else {
+                                scope.launch {
+                                    viewModel.controlKeyValidating = true
+                                    viewModel.controlKeyError = null
+                                    val role = viewModel.validateControlKey(viewModel.currentVerifyUrl, controlKey)
+                                    viewModel.controlKeyValidating = false
+                                    if (role == null) {
+                                        viewModel.controlKeyError = s.walletControlKeyInvalid
+                                    } else {
+                                        onWalletRoleSave(role, controlKey)
+                                        viewModel.restoreWallet(mnemonic)
+                                    }
                                 }
                             }
+                        },
+                        onRefreshBalance = {
+                            viewModel.checkElectrumStatus()
+                            viewModel.fetchBlockHeight()
+                            viewModel.fetchRvnPrice()
+                            viewModel.fetchNetworkHashrate()
+                            viewModel.refreshBalance()
+                        },
+                        onDeleteWallet = {
+                            viewModel.deleteWallet()
+                            onWalletDelete()
+                        },
+                        onReceive = { viewModel.showReceive = true },
+                        onSend = { viewModel.showSend = true },
+                        onTransferAsset = { asset ->
+                            viewModel.prefilledTransferAssetName = asset.name
+                            viewModel.issueMode = when (asset.type) {
+                                io.raventag.app.ravencoin.AssetType.ROOT -> IssueMode.TRANSFER_ROOT
+                                io.raventag.app.ravencoin.AssetType.SUB -> IssueMode.TRANSFER_SUB
+                                io.raventag.app.ravencoin.AssetType.UNIQUE -> IssueMode.TRANSFER
+                            }
+                        },
+                        walletBalance = viewModel.walletInfo?.balanceRvn ?: 0.0,
+                        txHistory = viewModel.txHistory,
+                        txHistoryLoading = viewModel.txHistoryLoading,
+                        txHistoryTotal = viewModel.txHistoryTotal,
+                        txHistoryLoadedCount = viewModel.txHistoryLoadedCount,
+                        onLoadMoreTransactions = { viewModel.loadMoreTransactions() },
+                        onRestoreModeChange = { restoreActive ->
+                            viewModel.restoreModeActive = restoreActive
                         }
-                    },
-                    onRefreshBalance = {
-                        viewModel.checkElectrumStatus()
-                        viewModel.fetchBlockHeight()
-                        viewModel.fetchRvnPrice()
-                        viewModel.fetchNetworkHashrate()
-                        viewModel.refreshBalance()
-                    },
-                    onDeleteWallet = {
-                        viewModel.deleteWallet()
-                        onWalletDelete()
-                    },
-                    onReceive = { viewModel.showReceive = true },
-                    onSend = { viewModel.showSend = true },
-                    onTransferAsset = { asset ->
-                        viewModel.prefilledTransferAssetName = asset.name
-                        // Choose transfer mode based on asset type
-                        viewModel.issueMode = when (asset.type) {
-                            io.raventag.app.ravencoin.AssetType.ROOT -> IssueMode.TRANSFER_ROOT
-                            io.raventag.app.ravencoin.AssetType.SUB -> IssueMode.TRANSFER_SUB
-                            io.raventag.app.ravencoin.AssetType.UNIQUE -> IssueMode.TRANSFER
-                        }
-                    },
-                    walletBalance = viewModel.walletInfo?.balanceRvn ?: 0.0,
-                    txHistory = viewModel.txHistory,
-                    txHistoryLoading = viewModel.txHistoryLoading,
-                    txHistoryTotal = viewModel.txHistoryTotal,
-                    txHistoryLoadedCount = viewModel.txHistoryLoadedCount,
-                    onLoadMoreTransactions = { viewModel.loadMoreTransactions() },
-                    onRestoreModeChange = { restoreActive ->
-                        viewModel.restoreModeActive = restoreActive
-                    }
                     )
-                    // When hidden: consume all pointer events to prevent the invisible
-                    // scrollable wallet content from intercepting touches on the active tab.
-                    if (!walletVisible) {
-                        Box(modifier = Modifier.fillMaxSize().pointerInput(Unit) {
-                            awaitPointerEventScope {
-                                while (true) {
-                                    awaitPointerEvent(PointerEventPass.Initial)
-                                        .changes.forEach { it.consume() }
-                                }
-                            }
-                        })
-                    }
                 }
             }
 
-            // Other tabs render on top (drawn after wallet = higher z-order in Box)
-            when (currentTab) {
-                AppTab.WALLET -> { /* alive above */ }
-
-                // ── Scan tab ──────────────────────────────────────────────────
-                AppTab.SCAN -> ScanScreen(
-                    modifier = Modifier.fillMaxSize(),
-                    scanState = viewModel.scanState,
-                    errorMessage = viewModel.errorMessage,
-                    nfcSupported = nfcSupported,
-                    nfcEnabled = nfcEnabled,
-                    onStartScan = { viewModel.scanState = ScanState.SCANNING }
-                )
-
-                // ── Brand tab ─────────────────────────────────────────────────
-                AppTab.BRAND -> {
+            if (brandEverShown.value && isBrandApp) {
+                TabLayer(visible = brandVisible) {
                     LaunchedEffect(Unit) {
                         if (viewModel.serverStatus == MainViewModel.ServerStatus.UNKNOWN)
                             viewModel.checkServerStatus(viewModel.currentVerifyUrl)
@@ -4098,9 +4141,10 @@ fun RavenTagApp(
                         onGoToWallet = { switchTab(AppTab.WALLET) }
                     )
                 }
+            }
 
-                // ── Settings tab ──────────────────────────────────────────────
-                AppTab.SETTINGS -> {
+            if (settingsEverShown.value) {
+                TabLayer(visible = settingsVisible) {
                     LaunchedEffect(Unit) {
                         if (viewModel.serverStatus == MainViewModel.ServerStatus.UNKNOWN) {
                             viewModel.checkServerStatus(viewModel.currentVerifyUrl)
@@ -4158,6 +4202,17 @@ fun RavenTagApp(
                         onNotificationsEnabledChange = onNotificationsEnabledChange
                     )
                 }
+            }
+
+            if (currentTab == AppTab.SCAN) {
+                ScanScreen(
+                    modifier = Modifier.fillMaxSize(),
+                    scanState = viewModel.scanState,
+                    errorMessage = viewModel.errorMessage,
+                    nfcSupported = nfcSupported,
+                    nfcEnabled = nfcEnabled,
+                    onStartScan = { viewModel.scanState = ScanState.SCANNING }
+                )
             }
 
             // ── Transient error banner overlay ────────────────────────────────
