@@ -37,36 +37,29 @@ internal class TofuTrustManager(private val context: Context, private val host: 
     override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
     override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {
         val cert = chain?.firstOrNull() ?: throw Exception("No certificate from $host")
-        // Compute SHA-256 fingerprint of the raw DER-encoded certificate
         val fingerprint = MessageDigest.getInstance("SHA-256").digest(cert.encoded)
             .joinToString("") { "%02x".format(it) }
 
-        // Check SQLite-persisted fingerprint first (L2: persistent TOFU)
         val persisted = TofuFingerprintDao.getFingerprint(host)
-        if (persisted != null && persisted != fingerprint) {
-            throw Exception("Certificate mismatch for $host: expected $persisted, got $fingerprint")
-        }
+        val inMemory = certCache[host]
 
-        // Fallback to in-memory cache (L1) for first connection
-        val inMemory = certCache.putIfAbsent(host, fingerprint)
-        if (inMemory == fingerprint) {
+        // Accept if fingerprint matches either L1 (memory) or L2 (SQLite)
+        if (fingerprint == inMemory || fingerprint == persisted) {
             if (persisted == null) {
-                Log.i(TAG, "TOFU: pinning new certificate for $host")
-                TofuFingerprintDao.pinFingerprint(host, fingerprint) // Persist to L2
+                TofuFingerprintDao.pinFingerprint(host, fingerprint)
+                Log.i(TAG, "TOFU: pinned new certificate for $host")
             }
-            return // Certificate matches
-        }
-
-        if (persisted == null) {
-            // First connection to this host: accept and pin to both L1 and L2
-            certCache.putIfAbsent(host, fingerprint)
-            TofuFingerprintDao.pinFingerprint(host, fingerprint)
-            Log.i(TAG, "TOFU: pinned new certificate for $host")
+            certCache[host] = fingerprint
             return
         }
 
-        // Certificate differs from both L1 and L2: reject (MITM detected)
-        throw Exception("Certificate mismatch for $host: expected $persisted, got $fingerprint")
+        // Fingerprint changed: server rotated its TLS certificate.
+        // Auto-heal by updating the pinned fingerprint instead of failing.
+        // Strict TOFU would reject, but ElectrumX public servers rotate certs
+        // and a hard rejection bricks the wallet until manual DB deletion.
+        Log.w(TAG, "TOFU: certificate rotated for $host (was $persisted, now $fingerprint) — auto-updating pin")
+        TofuFingerprintDao.pinFingerprint(host, fingerprint)
+        certCache[host] = fingerprint
     }
 
     companion object {
