@@ -3,10 +3,6 @@ package io.raventag.app.wallet
 import android.content.Context
 import android.util.Log
 import com.google.gson.Gson
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.withContext
 import com.google.gson.JsonElement
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
@@ -692,7 +688,7 @@ class RavencoinPublicNode(private val context: Context) {
                             ?.get(txPos)?.asJsonObject
                             ?.getAsJsonObject("scriptPubKey")
                             ?.get("hex")?.asString ?: continue
-                        if ("88acc0" in scriptHex) result.add("$txHash:$txPos")
+                        if ("88acc0" in scriptHex.lowercase()) result.add("$txHash:$txPos")
                     } catch (e: Exception) {
                         android.util.Log.w("RavenTag", "getAllAssetOutpoints: $txHash:$txPos rawTx fetch failed: $e")
                     }
@@ -720,9 +716,9 @@ class RavencoinPublicNode(private val context: Context) {
      *   - assetOutpoints: set of "txid:vout" that carry assets (to exclude from fee inputs)
      *   - assetUtxosMap:  map from asset name to list of AssetUtxo (with on-chain scripts)
      */
-    suspend fun getUtxosAndAllAssetUtxosBatch(
+    fun getUtxosAndAllAssetUtxosBatch(
         address: String
-    ): Triple<List<Utxo>, Set<String>, Map<String, List<AssetUtxo>>> = withContext(kotlinx.coroutines.Dispatchers.IO) {
+    ): Triple<List<Utxo>, Set<String>, Map<String, List<AssetUtxo>>> {
         val rvnScript = p2pkhScriptHex(address)
         val rawList = listUnspentRaw(address)   // TLS 1
 
@@ -829,7 +825,7 @@ class RavencoinPublicNode(private val context: Context) {
                     val scriptHex = try {
                         vout?.getAsJsonObject("scriptPubKey")?.get("hex")?.asString
                     } catch (_: Exception) { null }
-                    if (scriptHex != null && "88acc0" in scriptHex) {
+                    if (scriptHex != null && "88acc0" in scriptHex.lowercase()) {
                         assetOutpoints.add(outpoint)
                         // Parse asset name and amount directly from the script so the UTXO
                         // is properly included in assetUtxosMap (not just silently dropped).
@@ -863,36 +859,54 @@ class RavencoinPublicNode(private val context: Context) {
             }
         }
 
-        // Secondary asset check: some ElectrumX servers (e.g. Ravencoin mainnet nodes) do not
-        // include asset UTXOs in blockchain.scripthash.listunspent. If listunspent returned no
-        // assets but get_balance?asset=true shows some, fetch them in parallel to avoid N
-        // sequential RPCs hammering servers right before the critical broadcast step.
+        // Secondary fallback: when the primary listunspent path returned zero
+        // assets (server omitted asset tags), use getAssetBalances to discover
+        // which assets exist, then fetch the owner token UTXO directly.
+        // The owner token (name ending with "!") is the only asset strictly
+        // required for sub-asset/unique-token issuance; other assets are swept
+        // opportunistically if found.
         if (assetUtxosMap.isEmpty()) {
             try {
                 val assetBalances = getAssetBalances(address)
                 if (assetBalances.isNotEmpty()) {
-                    coroutineScope {
-                        assetBalances.map { ab ->
-                            async {
-                                try {
-                                    val utxos = getAssetUtxosFull(address, ab.name)
-                                    if (utxos.isNotEmpty()) ab.name to utxos else null
-                                } catch (e: Exception) {
-                                    android.util.Log.w("RavencoinPublicNode", "  secondary async: getAssetUtxosFull failed for ${ab.name}: ${e.message}")
-                                    null
-                                }
+                    android.util.Log.i("RavencoinPublicNode", "  secondary: listunspent returned 0 assets but get_balance has ${assetBalances.size}; fetching owner tokens via getAssetUtxosFull")
+                    for (ab in assetBalances) {
+                        if (!ab.name.endsWith("!")) continue
+                        // Only fetch owner tokens individually; non-owner assets
+                        // are re-parsed from cached raw txs below.
+                        try {
+                            val utxos = getAssetUtxosFull(address, ab.name)
+                            if (utxos.isNotEmpty()) {
+                                assetUtxosMap.getOrPut(ab.name) { mutableListOf() }.addAll(utxos)
+                                assetOutpoints.addAll(utxos.map { "${it.utxo.txid}:${it.utxo.outputIndex}" })
+                                android.util.Log.i("RavencoinPublicNode", "  secondary: owner token ${ab.name} -> ${utxos.size} UTXOs via getAssetUtxosFull")
                             }
-                        }.awaitAll().filterNotNull().forEach { (name, utxos) ->
-                            assetUtxosMap.getOrPut(name) { mutableListOf() }.addAll(utxos)
-                            assetOutpoints.addAll(utxos.map { "${it.utxo.txid}:${it.utxo.outputIndex}" })
-                            android.util.Log.i("RavencoinPublicNode", "  secondary async: ${utxos.size} UTXOs for $name")
+                        } catch (e: Exception) {
+                            android.util.Log.w("RavencoinPublicNode", "  secondary: getAssetUtxosFull failed for ${ab.name}: ${e.message}")
                         }
+                    }
+                    // For non-owner assets: try re-parsing from cached raw txs
+                    val balanceNames = assetBalances.map { it.name }.toSet()
+                    for (u in pending) {
+                        if (!u.isUnknown) continue
+                        val tx = txCache[u.txHash] ?: continue
+                        val vout = try { tx.getAsJsonArray("vout")?.get(u.txPos)?.asJsonObject } catch (_: Exception) { null } ?: continue
+                        val scriptHex = try { vout.getAsJsonObject("scriptPubKey")?.get("hex")?.asString } catch (_: Exception) { null } ?: continue
+                        if ("88acc0" !in scriptHex) continue
+                        val parsed = parseAssetFromScript(scriptHex) ?: continue
+                        val (assetName, rawAmount) = parsed
+                        if (assetName !in balanceNames) continue
+                        assetOutpoints.add("${u.txHash}:${u.txPos}")
+                        val satoshis = try { ((vout.get("value")?.asDouble ?: 0.0) * 100_000_000.0).toLong() } catch (_: Exception) { 0L }
+                        val utxo = Utxo(u.txHash, u.txPos, satoshis, scriptHex, u.height)
+                        assetUtxosMap.getOrPut(assetName) { mutableListOf() }.add(AssetUtxo(utxo, assetName, rawAmount))
+                        android.util.Log.i("RavencoinPublicNode", "  secondary: re-parsed $assetName from unknown UTXO ${u.txHash}:${u.txPos}")
                     }
                 }
             } catch (_: Exception) {}
         }
 
-        Triple(rvnUtxos, assetOutpoints, assetUtxosMap)
+        return Triple(rvnUtxos, assetOutpoints, assetUtxosMap)
     }
 
     /**
@@ -1468,7 +1482,8 @@ class RavencoinPublicNode(private val context: Context) {
      */
     private fun parseAssetFromScript(scriptHex: String): Pair<String, Long>? {
         return try {
-            val idx = scriptHex.indexOf("88acc0")
+            val hex = scriptHex.lowercase()
+            val idx = hex.indexOf("88acc0")
             if (idx < 0 || idx % 2 != 0) return null
             // Byte position just after the 3-byte marker
             var pos = idx / 2 + 3
