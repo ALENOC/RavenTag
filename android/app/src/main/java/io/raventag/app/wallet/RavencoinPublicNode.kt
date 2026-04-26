@@ -584,7 +584,8 @@ class RavencoinPublicNode(private val context: Context) {
                 val rvn = tx?.getAsJsonArray("vout")?.get(txPos)?.asJsonObject?.get("value")?.asDouble ?: 0.0
                 (rvn * 100_000_000.0).toLong()
             } catch (_: Exception) { 0L }
-            // Navigate vout[txPos].scriptPubKey.hex in the decoded transaction
+            // Must have the real on-chain scriptPubKey. Never reconstruct it —
+            // a byte-for-byte mismatch causes bad-txns-bad-asset-transaction.
             val onChainScript = try {
                 tx?.getAsJsonArray("vout")
                     ?.get(txPos)
@@ -593,16 +594,12 @@ class RavencoinPublicNode(private val context: Context) {
                     ?.get("hex")
                     ?.asString
             } catch (_: Exception) { null }
-            val script = onChainScript ?: if (assetName.endsWith("!")) {
-                buildOwnerAssetScriptHex(address, assetName)
-            } else {
-                buildAssetScriptHex(address, assetName, rawAmount)
-            }
+            if (onChainScript == null) return@mapNotNull null
             val utxo = Utxo(
                 txid = txHash,
                 outputIndex = txPos,
                 satoshis = satoshis,
-                script = script,
+                script = onChainScript,
                 height = obj.get("height").asInt
             )
             AssetUtxo(utxo, assetName, rawAmount)
@@ -806,14 +803,10 @@ class RavencoinPublicNode(private val context: Context) {
                     val onChainScript = try {
                         vout?.getAsJsonObject("scriptPubKey")?.get("hex")?.asString
                     } catch (_: Exception) { null }
+                    if (onChainScript == null) continue // skip: need real on-chain script
                     val name = u.assetName ?: continue
                     val rawAmount = u.assetAmount ?: continue
-                    val assetScript = onChainScript ?: if (name.endsWith("!")) {
-                        buildOwnerAssetScriptHex(address, name)
-                    } else {
-                        buildAssetScriptHex(address, name, rawAmount)
-                    }
-                    val utxo = Utxo(u.txHash, u.txPos, satoshis, assetScript, u.height)
+                    val utxo = Utxo(u.txHash, u.txPos, satoshis, onChainScript, u.height)
                     assetUtxosMap.getOrPut(name) { mutableListOf() }.add(AssetUtxo(utxo, name, rawAmount))
                 }
                 u.isUnknown -> {
@@ -1540,103 +1533,10 @@ class RavencoinPublicNode(private val context: Context) {
         } catch (_: Exception) { null }
     }
 
-    /**
-     * Reconstructs the full asset transfer scriptPubKey for an address, asset name, and amount.
-     *
-     * This is used as a fallback when the raw transaction cannot be fetched from the server.
-     * The reconstructed script matches the on-chain format used by the Ravencoin protocol.
-     *
-     * Script structure:
-     *   OP_DUP OP_HASH160 <hash160(20 bytes)> OP_EQUALVERIFY OP_CHECKSIG
-     *   OP_RVN_ASSET <push(payload)> OP_DROP
-     *
-     * Asset payload (rvnt format):
-     *   "rvnt" (4 bytes) || compact_size(name_len) (1 byte) || name_bytes || LE64(raw_amount) (8 bytes)
-     *
-     * Opcodes used:
-     *   0x76 = OP_DUP, 0xa9 = OP_HASH160, 0x14 = push 20 bytes,
-     *   0x88 = OP_EQUALVERIFY, 0xac = OP_CHECKSIG,
-     *   0xc0 = OP_RVN_ASSET (Ravencoin custom opcode), 0x75 = OP_DROP
-     *
-     * @param address   Ravencoin P2PKH address (provides the hash160).
-     * @param assetName Asset name in ASCII.
-     * @param rawAmount Asset amount in raw units (not divided by 10^divisions).
-     * @return Hex-encoded scriptPubKey.
-     */
-    private fun buildAssetScriptHex(address: String, assetName: String, rawAmount: Long): String {
-        val decoded = base58Decode(address)
-        require(decoded.size == 25) { "Invalid Ravencoin address" }
-        // Bytes 1..20 of the decoded address are the hash160 (RIPEMD160(SHA256(pubkey)))
-        val hash160 = decoded.copyOfRange(1, 21)
-        val nameBytes = assetName.toByteArray(Charsets.US_ASCII)
-        // Asset data: "rvnt" + 1-byte name length + name + 8-byte LE amount
-        val payload = ByteArray(4 + 1 + nameBytes.size + 8)
-        payload[0] = 0x72.toByte(); payload[1] = 0x76.toByte(); payload[2] = 0x6e.toByte(); payload[3] = 0x74.toByte()
-        payload[4] = nameBytes.size.toByte()
-        System.arraycopy(nameBytes, 0, payload, 5, nameBytes.size)
-        // Write raw_amount as 8 bytes little-endian starting at offset 5 + name length
-        val off = 5 + nameBytes.size
-        payload[off + 0] = rawAmount.toByte(); payload[off + 1] = (rawAmount shr 8).toByte()
-        payload[off + 2] = (rawAmount shr 16).toByte(); payload[off + 3] = (rawAmount shr 24).toByte()
-        payload[off + 4] = (rawAmount shr 32).toByte(); payload[off + 5] = (rawAmount shr 40).toByte()
-        payload[off + 6] = (rawAmount shr 48).toByte(); payload[off + 7] = (rawAmount shr 56).toByte()
-        // Assemble the full script using a byte stream
-        val script = java.io.ByteArrayOutputStream()
-        // OP_DUP OP_HASH160 <push 20>
-        script.write(byteArrayOf(0x76.toByte(), 0xa9.toByte(), 0x14.toByte()))
-        script.write(hash160)
-        // OP_EQUALVERIFY OP_CHECKSIG OP_RVN_ASSET
-        script.write(byteArrayOf(0x88.toByte(), 0xac.toByte(), 0xc0.toByte()))
-        // Push payload: use OP_PUSHDATA1 (0x4c) for payloads 76..255 bytes
-        when {
-            payload.size <= 75 -> { script.write(payload.size); script.write(payload) }
-            payload.size <= 255 -> { script.write(0x4c); script.write(payload.size); script.write(payload) }
-            else -> throw IllegalArgumentException("Asset script payload too large: ${payload.size}")
-        }
-        // OP_DROP
-        script.write(0x75)
-        return script.toByteArray().joinToString("") { "%02x".format(it) }
-    }
-
-    /**
-     * Reconstructs the full owner-token scriptPubKey for an address and owner asset name.
-     *
-     * Owner tokens are special outputs created alongside the main asset (or sub-asset).
-     * They use the "rvno" payload marker instead of "rvnt" and do not include an amount
-     * field, since owner tokens always have exactly 1 token (represented as 100000000
-     * raw units internally).
-     *
-     * Script structure is identical to [buildAssetScriptHex] except the payload uses
-     * the "rvno" four-byte header (0x72 0x76 0x6e 0x6f) and has no amount bytes.
-     *
-     * @param address   Ravencoin P2PKH address.
-     * @param assetName Owner asset name, must end with "!" (e.g., "BRAND!").
-     * @return Hex-encoded scriptPubKey.
-     */
-    private fun buildOwnerAssetScriptHex(address: String, assetName: String): String {
-        val decoded = base58Decode(address)
-        require(decoded.size == 25) { "Invalid Ravencoin address" }
-        val hash160 = decoded.copyOfRange(1, 21)
-        val nameBytes = assetName.toByteArray(Charsets.US_ASCII)
-
-        // Owner payload: "rvno" + 1-byte name length + name (no amount field)
-        val payload = ByteArray(4 + 1 + nameBytes.size)
-        payload[0] = 0x72.toByte(); payload[1] = 0x76.toByte(); payload[2] = 0x6e.toByte(); payload[3] = 0x6f.toByte()
-        payload[4] = nameBytes.size.toByte()
-        System.arraycopy(nameBytes, 0, payload, 5, nameBytes.size)
-
-        val script = java.io.ByteArrayOutputStream()
-        script.write(byteArrayOf(0x76.toByte(), 0xa9.toByte(), 0x14.toByte()))
-        script.write(hash160)
-        script.write(byteArrayOf(0x88.toByte(), 0xac.toByte(), 0xc0.toByte()))
-        when {
-            payload.size <= 75 -> { script.write(payload.size); script.write(payload) }
-            payload.size <= 255 -> { script.write(0x4c); script.write(payload.size); script.write(payload) }
-            else -> throw IllegalArgumentException("Owner asset script payload too large: ${payload.size}")
-        }
-        script.write(0x75)
-        return script.toByteArray().joinToString("") { "%02x".format(it) }
-    }
+    // buildAssetScriptHex and buildOwnerAssetScriptHex removed.
+    // Never reconstruct asset UTXO scripts — a single-byte mismatch with the
+    // on-chain scriptPubKey causes bad-txns-bad-asset-transaction rejections.
+    // Always fetch the real script from the raw transaction via getAssetUtxosFull.
 
     /**
      * Converts a Ravencoin P2PKH address to the ElectrumX scripthash format.
