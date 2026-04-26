@@ -1145,7 +1145,7 @@ private fun TxCard(s: AppStrings, tx: TxHistoryEntry) {
                         val burnRvn = sat2Rvn(tx.issuanceBurnSat)
                         Spacer(Modifier.height(2.dp))
                         Text(
-                            text = "${s.txHistoryBurnedPrefix} $burnRvn RVN",
+                            text = "${s.txHistoryBurnedPrefix} -$burnRvn RVN",
                             style = MaterialTheme.typography.labelSmall,
                             color = NotAuthenticRed
                         )
@@ -1179,7 +1179,7 @@ private fun TxCard(s: AppStrings, tx: TxHistoryEntry) {
                         }
                         Spacer(Modifier.height(2.dp))
                         Text(
-                            text = "${s.txHistoryFeePrefix} ${sat2Rvn(feeSat)} RVN",
+                            text = "${s.txHistoryFeePrefix} -${sat2Rvn(feeSat)} RVN",
                             style = MaterialTheme.typography.labelSmall,
                             color = NotAuthenticRed
                         )
@@ -1280,7 +1280,7 @@ private fun TxCard(s: AppStrings, tx: TxHistoryEntry) {
                         }
                         Spacer(Modifier.height(2.dp))
                         Text(
-                            text = "${s.txHistoryFeePrefix} $feeStr RVN",
+                            text = "${s.txHistoryFeePrefix} -$feeStr RVN",
                             style = MaterialTheme.typography.labelSmall,
                             color = NotAuthenticRed
                         )
@@ -1349,7 +1349,7 @@ private fun TxCard(s: AppStrings, tx: TxHistoryEntry) {
                         }
                         Spacer(Modifier.height(2.dp))
                         Text(
-                            text = "${s.txHistoryFeePrefix} $feeStr RVN",
+                            text = "${s.txHistoryFeePrefix} -$feeStr RVN",
                             style = MaterialTheme.typography.labelSmall,
                             color = NotAuthenticRed
                         )

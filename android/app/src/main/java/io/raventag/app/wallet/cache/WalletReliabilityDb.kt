@@ -19,7 +19,7 @@ import android.database.sqlite.SQLiteOpenHelper
  */
 internal object WalletReliabilityDb {
     private const val DB_NAME = "wallet_reliability.db"
-    private const val DB_VERSION = 1
+    private const val DB_VERSION = 2
 
     private class Helper(context: Context) : SQLiteOpenHelper(context, DB_NAME, null, DB_VERSION) {
         init {
@@ -60,9 +60,6 @@ internal object WalletReliabilityDb {
                 )
             """.trimIndent())
             db.execSQL("CREATE INDEX IF NOT EXISTS idx_tx_history_height ON tx_history(height DESC)")
-            // Migration: add issuance columns to existing tx_history tables
-            try { db.execSQL("ALTER TABLE tx_history ADD COLUMN is_issuance INTEGER NOT NULL DEFAULT 0") } catch (_: Exception) {}
-            try { db.execSQL("ALTER TABLE tx_history ADD COLUMN issuance_burn_sat INTEGER NOT NULL DEFAULT 0") } catch (_: Exception) {}
             db.execSQL("""
                 CREATE TABLE IF NOT EXISTS reserved_utxos (
                     txid_in         TEXT NOT NULL,
@@ -93,7 +90,10 @@ internal object WalletReliabilityDb {
         }
 
         override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-            // v1 only: no migration path yet
+            if (oldVersion <= 1) {
+                try { db.execSQL("ALTER TABLE tx_history ADD COLUMN is_issuance INTEGER NOT NULL DEFAULT 0") } catch (_: Exception) {}
+                try { db.execSQL("ALTER TABLE tx_history ADD COLUMN issuance_burn_sat INTEGER NOT NULL DEFAULT 0") } catch (_: Exception) {}
+            }
         }
     }
 
