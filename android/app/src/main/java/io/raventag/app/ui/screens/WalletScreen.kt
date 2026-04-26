@@ -775,7 +775,9 @@ fun WalletScreen(
                                             isSelfTransfer = row.isSelf,
                                             timestamp = row.timestamp,
                                             cycledSat = row.cycledSat,
-                                            feeSat = row.feeSat
+                                            feeSat = row.feeSat,
+                                            isIssuance = row.isIssuance,
+                                            issuanceBurnSat = row.issuanceBurnSat
                                         )
                                     }
                                     if (localMapped.isNotEmpty()) {
@@ -1112,6 +1114,76 @@ private fun TxCard(s: AppStrings, tx: TxHistoryEntry) {
             )
             Column(horizontalAlignment = Alignment.End) {
                 when {
+                    tx.isIssuance -> {
+                        // Issuance: show "Issued +1 NEW_TOKEN" in green, "Burned X RVN" + "Fee" in red.
+                        if (tx.assetName != null) {
+                            val raw = tx.assetAmount
+                            val display = if (raw % 100_000_000L == 0L) (raw / 100_000_000L).toString()
+                                          else String.format(java.util.Locale.US, "%.8f", raw / 1e8).trimEnd('0').trimEnd('.')
+                            val name = tx.assetName
+                            val slashIdx = name.indexOf('/')
+                            val hashIdx = name.indexOf('#')
+                            val root = when {
+                                slashIdx > 0 -> name.substring(0, slashIdx)
+                                hashIdx > 0 -> name.substring(0, hashIdx)
+                                else -> name
+                            }
+                            val sub = if (slashIdx > 0) {
+                                if (hashIdx > slashIdx) name.substring(slashIdx, hashIdx)
+                                else name.substring(slashIdx)
+                            } else null
+                            val unique = if (hashIdx > 0) name.substring(hashIdx) else null
+                            Text(
+                                text = "${s.txHistoryIssuedPrefix} +$display $root",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = AuthenticGreen
+                            )
+                            if (sub != null) Text(sub, style = MaterialTheme.typography.labelSmall, color = AuthenticGreen.copy(alpha = 0.85f))
+                            if (unique != null) Text(unique, style = MaterialTheme.typography.labelSmall, color = AuthenticGreen.copy(alpha = 0.7f))
+                        }
+                        val burnRvn = sat2Rvn(tx.issuanceBurnSat)
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            text = "${s.txHistoryBurnedPrefix} $burnRvn RVN",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = NotAuthenticRed
+                        )
+                        val cycledStr = sat2Rvn(cycledSat)
+                        if (cycledSat > 0L) {
+                            Spacer(Modifier.height(2.dp))
+                            Text(
+                                text = "${s.txHistoryCycledPrefix} $cycledStr RVN",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = AuthenticGreen
+                            )
+                        }
+                        // Show cycled assets (excluding the newly-issued one shown above)
+                        val otherCycled = tx.incomingAssetNames.filter { it != tx.assetName }
+                        if (otherCycled.size > 1) {
+                            Spacer(Modifier.height(2.dp))
+                            Text(
+                                String.format(s.walletCycledMultiAsset, otherCycled.size),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = AuthenticGreen.copy(alpha = 0.85f),
+                                modifier = Modifier.clickable { showAssetListDialog = true },
+                                textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline
+                            )
+                        } else if (otherCycled.size == 1) {
+                            Spacer(Modifier.height(2.dp))
+                            Text(
+                                otherCycled.single(),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = AuthenticGreen.copy(alpha = 0.85f)
+                            )
+                        }
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            text = "${s.txHistoryFeePrefix} ${sat2Rvn(feeSat)} RVN",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = NotAuthenticRed
+                        )
+                    }
                     isIncoming -> {
                         if (tx.assetName != null) {
                             // Asset receive: split the hierarchical name across lines so
@@ -1210,7 +1282,7 @@ private fun TxCard(s: AppStrings, tx: TxHistoryEntry) {
                         Text(
                             text = "${s.txHistoryFeePrefix} $feeStr RVN",
                             style = MaterialTheme.typography.labelSmall,
-                            color = RavenMuted
+                            color = NotAuthenticRed
                         )
                     }
                     else -> {
@@ -1279,7 +1351,7 @@ private fun TxCard(s: AppStrings, tx: TxHistoryEntry) {
                         Text(
                             text = "${s.txHistoryFeePrefix} $feeStr RVN",
                             style = MaterialTheme.typography.labelSmall,
-                            color = RavenMuted
+                            color = NotAuthenticRed
                         )
                     }
                 }

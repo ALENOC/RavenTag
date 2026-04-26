@@ -25,7 +25,9 @@ object TxHistoryDao {
         val isIncoming: Boolean,
         val isSelf: Boolean,
         val timestamp: Long,
-        val cachedAt: Long
+        val cachedAt: Long,
+        val isIssuance: Boolean = false,
+        val issuanceBurnSat: Long = 0L
     )
 
     fun init(context: Context) = WalletReliabilityDb.init(context)
@@ -53,6 +55,8 @@ object TxHistoryDao {
                     put("is_self", if (r.isSelf) 1 else 0)
                     put("timestamp", r.timestamp)
                     put("cached_at", r.cachedAt)
+                    put("is_issuance", if (r.isIssuance) 1 else 0)
+                    put("issuance_burn_sat", r.issuanceBurnSat)
                 }
                 db.insertWithOnConflict(TABLE, null, cv, SQLiteDatabase.CONFLICT_REPLACE)
             }
@@ -71,7 +75,8 @@ object TxHistoryDao {
             TABLE,
             arrayOf(
                 "txid", "height", "confirms", "amount_sat", "sent_sat", "cycled_sat",
-                "fee_sat", "is_incoming", "is_self", "timestamp", "cached_at"
+                "fee_sat", "is_incoming", "is_self", "timestamp", "cached_at",
+                "is_issuance", "issuance_burn_sat"
             ),
             null, null, null, null, orderBy, "$limit OFFSET $offset"
         ).use { c ->
@@ -87,7 +92,9 @@ object TxHistoryDao {
                     isIncoming = c.getInt(7) == 1,
                     isSelf = c.getInt(8) == 1,
                     timestamp = c.getLong(9),
-                    cachedAt = c.getLong(10)
+                    cachedAt = c.getLong(10),
+                    isIssuance = c.getInt(11) == 1,
+                    issuanceBurnSat = c.getLong(12)
                 )
             }
         }
@@ -100,7 +107,8 @@ object TxHistoryDao {
             TABLE,
             arrayOf(
                 "txid", "height", "confirms", "amount_sat", "sent_sat", "cycled_sat",
-                "fee_sat", "is_incoming", "is_self", "timestamp", "cached_at"
+                "fee_sat", "is_incoming", "is_self", "timestamp", "cached_at",
+                "is_issuance", "issuance_burn_sat"
             ),
             "txid = ?", arrayOf(txid), null, null, null
         ).use { c ->
@@ -116,7 +124,9 @@ object TxHistoryDao {
                 isIncoming = c.getInt(7) == 1,
                 isSelf = c.getInt(8) == 1,
                 timestamp = c.getLong(9),
-                cachedAt = c.getLong(10)
+                cachedAt = c.getLong(10),
+                isIssuance = c.getInt(11) == 1,
+                issuanceBurnSat = c.getLong(12)
             )
         }
     }
