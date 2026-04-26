@@ -44,20 +44,25 @@ internal object WalletReliabilityDb {
             """.trimIndent())
             db.execSQL("""
                 CREATE TABLE IF NOT EXISTS tx_history (
-                    txid        TEXT PRIMARY KEY,
-                    height      INTEGER NOT NULL,
-                    confirms    INTEGER NOT NULL,
-                    amount_sat  INTEGER NOT NULL,
-                    sent_sat    INTEGER NOT NULL,
-                    cycled_sat  INTEGER NOT NULL,
-                    fee_sat     INTEGER NOT NULL,
-                    is_incoming INTEGER NOT NULL,
-                    is_self     INTEGER NOT NULL,
-                    timestamp   INTEGER NOT NULL,
-                    cached_at   INTEGER NOT NULL
+                    txid              TEXT PRIMARY KEY,
+                    height            INTEGER NOT NULL,
+                    confirms          INTEGER NOT NULL,
+                    amount_sat        INTEGER NOT NULL,
+                    sent_sat          INTEGER NOT NULL,
+                    cycled_sat        INTEGER NOT NULL,
+                    fee_sat           INTEGER NOT NULL,
+                    is_incoming       INTEGER NOT NULL,
+                    is_self           INTEGER NOT NULL,
+                    timestamp         INTEGER NOT NULL,
+                    cached_at         INTEGER NOT NULL,
+                    is_issuance       INTEGER NOT NULL DEFAULT 0,
+                    issuance_burn_sat INTEGER NOT NULL DEFAULT 0
                 )
             """.trimIndent())
             db.execSQL("CREATE INDEX IF NOT EXISTS idx_tx_history_height ON tx_history(height DESC)")
+            // Migration: add issuance columns to existing tx_history tables
+            try { db.execSQL("ALTER TABLE tx_history ADD COLUMN is_issuance INTEGER NOT NULL DEFAULT 0") } catch (_: Exception) {}
+            try { db.execSQL("ALTER TABLE tx_history ADD COLUMN issuance_burn_sat INTEGER NOT NULL DEFAULT 0") } catch (_: Exception) {}
             db.execSQL("""
                 CREATE TABLE IF NOT EXISTS reserved_utxos (
                     txid_in         TEXT NOT NULL,

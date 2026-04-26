@@ -116,7 +116,10 @@ data class TxHistoryEntry(
     val assetAmount: Long = 0L,  // raw asset amount (sats * 10^divisions)
     // Full list of asset names cycled/received in this tx (toUs vouts).
     // Used by the UI to compact the row to "Ciclati N asset" with a tap-to-list dialog.
-    val incomingAssetNames: List<String> = emptyList()
+    val incomingAssetNames: List<String> = emptyList(),
+    // Issuance detection: true when tx burns to a canonical issuance address.
+    val isIssuance: Boolean = false,
+    val issuanceBurnSat: Long = 0L  // RVN burned for issuance (5/100/500 RVN)
 )
 
 /**
@@ -1055,6 +1058,18 @@ class RavencoinPublicNode(private val context: Context) {
             var outgoingAssetName: String? = null
             var outgoingAssetAmount: Long = 0L
             val incomingAssetNamesSet = LinkedHashSet<String>()
+            // Issuance detection: track burn to canonical issuance addresses.
+            val issuanceBurnAddresses = setOf(
+                RavencoinTxBuilder.BURN_ADDRESS_ROOT,
+                RavencoinTxBuilder.BURN_ADDRESS_SUB,
+                RavencoinTxBuilder.BURN_ADDRESS_UNIQUE
+            )
+            var isIssuance = false
+            var issuanceBurnSat = 0L
+            // Track the LAST non-owner-token incoming asset (issuance output is always
+            // last in vout order, and owner tokens end with "!").
+            var lastIssuedAssetName: String? = null
+            var lastIssuedAssetAmount: Long = 0L
             tx.getAsJsonArray("vout")?.forEach { vout ->
                 try {
                     val obj = vout.asJsonObject
@@ -1065,8 +1080,14 @@ class RavencoinPublicNode(private val context: Context) {
                     val hex = spk?.get("hex")?.asString?.lowercase() ?: ""
                     val byAddr = addresses?.any { it.asString in owned } == true
                     val byHex = !byAddr && hex.isNotEmpty() && ownedHashes.any { hex.contains(it) }
+                    // Check for issuance burn addresses
+                    val vaultAddrMatch = addresses?.any { it.asString in issuanceBurnAddresses } == true
+                    if (vaultAddrMatch) {
+                        isIssuance = true
+                        issuanceBurnSat += valueSat
+                    }
                     val ours = byAddr || byHex
-                    if (ours) toUs += valueSat else toOthers += valueSat
+                    if (ours) toUs += valueSat else if (!vaultAddrMatch) toOthers += valueSat
 
                     // Detect asset payload (OP_RVN_ASSET) and tag it as incoming or
                     // outgoing depending on whether the output is to one of our addresses.
@@ -1076,6 +1097,11 @@ class RavencoinPublicNode(private val context: Context) {
                                 incomingAssetNamesSet.add(name)
                                 if (incomingAssetName == null) {
                                     incomingAssetName = name; incomingAssetAmount = amount
+                                }
+                                // Track last non-owner-token asset (issuance output)
+                                if (!name.endsWith("!")) {
+                                    lastIssuedAssetName = name
+                                    lastIssuedAssetAmount = amount
                                 }
                             } else {
                                 if (outgoingAssetName == null) {
@@ -1131,6 +1157,22 @@ class RavencoinPublicNode(private val context: Context) {
             // ElectrumX server variants). Treat as incoming when nothing else
             // tagged it as outgoing or self.
             val isHiddenIncoming = !isOutgoing && !isSelfTransfer && fromUs == 0L && toUs == 0L
+            // Issuance: use the last non-owner-token asset (consensus: issuance output is
+            // always last in vout). This is the NEW token, not a cycled/returned one.
+            val effectiveAssetName = if (isIssuance && lastIssuedAssetName != null)
+                lastIssuedAssetName else when {
+                isOutgoing && outgoingAssetName != null -> outgoingAssetName
+                incomingAssetName != null -> incomingAssetName
+                isOutgoing -> outgoingAssetName
+                else -> null
+            }
+            val effectiveAssetAmount = if (isIssuance && lastIssuedAssetName != null)
+                lastIssuedAssetAmount else when {
+                isOutgoing && outgoingAssetName != null -> outgoingAssetAmount
+                incomingAssetName != null -> incomingAssetAmount
+                isOutgoing -> outgoingAssetAmount
+                else -> 0L
+            }
             TxHistoryEntry(
                 txid = txHash,
                 height = height,
@@ -1140,23 +1182,13 @@ class RavencoinPublicNode(private val context: Context) {
                 cycledSat = if (isOutgoing || isSelfTransfer) toUs else 0L,
                 feeSat = feeSat,
                 isIncoming = (netSat > 0 && !isOutgoing) || isHiddenIncoming,
-                isSelfTransfer = isSelfTransfer,
+                isSelfTransfer = if (isIssuance) false else isSelfTransfer,
                 timestamp = timestamp,
-                // For outgoing tx, prefer the asset sent to others; for incoming, the
-                // asset received. Self-transfer reports the cycled asset name.
-                assetName = when {
-                    isOutgoing && outgoingAssetName != null -> outgoingAssetName
-                    incomingAssetName != null -> incomingAssetName
-                    isOutgoing -> outgoingAssetName
-                    else -> null
-                },
-                assetAmount = when {
-                    isOutgoing && outgoingAssetName != null -> outgoingAssetAmount
-                    incomingAssetName != null -> incomingAssetAmount
-                    isOutgoing -> outgoingAssetAmount
-                    else -> 0L
-                },
-                incomingAssetNames = incomingAssetNamesSet.toList()
+                assetName = effectiveAssetName,
+                assetAmount = effectiveAssetAmount,
+                incomingAssetNames = incomingAssetNamesSet.toList(),
+                isIssuance = isIssuance,
+                issuanceBurnSat = issuanceBurnSat
             )
         }
     }

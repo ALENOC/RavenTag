@@ -1080,7 +1080,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             feeSat = row.feeSat,
                             isIncoming = row.isIncoming,
                             isSelfTransfer = row.isSelf,
-                            timestamp = row.timestamp
+                            timestamp = row.timestamp,
+                            isIssuance = row.isIssuance,
+                            issuanceBurnSat = row.issuanceBurnSat
                         )
                     }
                     txHistoryTotal = txHistory.size
@@ -1292,7 +1294,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             feeSat = row.feeSat,
                             isIncoming = row.isIncoming,
                             isSelfTransfer = row.isSelf,
-                            timestamp = row.timestamp
+                            timestamp = row.timestamp,
+                            isIssuance = row.isIssuance,
+                            issuanceBurnSat = row.issuanceBurnSat
                         )
                     }
                     txHistory = mapped
