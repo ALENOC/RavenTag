@@ -1332,7 +1332,7 @@ class WalletManager(private val context: Context) {
         val node = RavencoinPublicNode(context)
 
         val (utxoResult, satPerByte) = coroutineScope {
-            val utxosDeferred = async { node.getUtxosAndAllAssetUtxosBatch(address) }
+            val utxosDeferred = async { node.getUtxosAndAllAssetUtxosBatch(address, fetchMissingAssetUtxos = true) }
             val feeDeferred   = async { node.getMinRelayFeeRateSatPerByte() }
             Pair(utxosDeferred.await(), feeDeferred.await())
         }
@@ -1366,7 +1366,7 @@ class WalletManager(private val context: Context) {
             address = getAddress(0, currentIndex) ?: error("Cannot derive fallback address")
             android.util.Log.i("WalletManager", "sendRvn: fallback to index $currentIndex ($address)")
 
-            val fallback = node.getUtxosAndAllAssetUtxosBatch(address)
+            val fallback = node.getUtxosAndAllAssetUtxosBatch(address, fetchMissingAssetUtxos = true)
             rvnUtxos      = fallback.first
             assetUtxosMap  = fallback.third
         }
@@ -1407,7 +1407,7 @@ class WalletManager(private val context: Context) {
                 try {
                     for ((index, addr) in oldAddrList) {
                         if (addr !in fundedAddrs) continue
-                        val r = node.getUtxosAndAllAssetUtxosBatch(addr)
+                        val r = node.getUtxosAndAllAssetUtxosBatch(addr, fetchMissingAssetUtxos = true)
                         if (r.first.isNotEmpty() || r.third.isNotEmpty()) {
                             oldFunds.add(OldFunds(index, r.first, r.third))
                         }
