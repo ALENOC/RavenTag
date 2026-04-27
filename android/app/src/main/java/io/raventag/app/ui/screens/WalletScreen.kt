@@ -270,9 +270,9 @@ fun WalletScreen(
         subscriptionManager.eventsFlow().collect { ev ->
             when (ev) {
                 is ScripthashEvent.StatusChanged -> {
-                    val beforeSat = WalletCacheDao.readState()?.balanceSat ?: 0L
+                    val beforeSat = withContext(Dispatchers.IO) { WalletCacheDao.readState()?.balanceSat ?: 0L }
                     onRefreshBalance()
-                    val afterSat = WalletCacheDao.readState()?.balanceSat ?: 0L
+                    val afterSat = withContext(Dispatchers.IO) { WalletCacheDao.readState()?.balanceSat ?: 0L }
                     val deltaSat = afterSat - beforeSat
                     if (deltaSat > 0L) {
                         val rvn = String.format(java.util.Locale.ROOT, "%.8f", deltaSat / 1e8)
@@ -1103,15 +1103,25 @@ private fun AssetPreviewDialog(asset: OwnedAsset, onDismiss: () -> Unit) {
     val metadataUrls = remember(asset.ipfsHash) {
         asset.ipfsHash?.let { IpfsResolver.candidateUrls(it) }.orEmpty()
     }
-    var openUrl by remember(asset.name, asset.imageUrl, asset.ipfsHash) {
+
+    // imageUrl: resolved full-size image (from imageUrl field or extracted from JSON metadata)
+    var imageUrl by remember(asset.name, asset.imageUrl, asset.ipfsHash) {
         mutableStateOf(externalPreviewCandidates(asset).firstOrNull())
     }
     LaunchedEffect(asset.name, asset.imageUrl, asset.ipfsHash) {
         if (asset.imageUrl?.startsWith("file://") == true && metadataUrls.isNotEmpty()) {
-            openUrl = resolveRtpImageCandidates(context, metadataUrls)?.firstOrNull()
+            imageUrl = resolveRtpImageCandidates(context, metadataUrls)?.firstOrNull()
                 ?: metadataUrls.firstOrNull()
         }
     }
+
+    // jsonUrl: direct IPFS hash URL (JSON metadata). Null if asset has no ipfsHash.
+    val jsonUrl = remember(asset.ipfsHash) {
+        asset.ipfsHash?.let { IpfsResolver.candidateUrls(it).firstOrNull() }
+    }
+
+    // "Open" button target: JSON if available, fallback to image
+    val openTarget = jsonUrl ?: imageUrl
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1137,7 +1147,7 @@ private fun AssetPreviewDialog(asset: OwnedAsset, onDismiss: () -> Unit) {
                             .fillMaxWidth()
                             .height(220.dp)
                             .clip(RoundedCornerShape(12.dp))
-                            .clickable { openExternalPreview(context, openUrl) },
+                            .clickable { openExternalPreview(context, imageUrl) },
                         contentScale = ContentScale.Crop,
                         fallback = {
                             Box(
@@ -1178,8 +1188,8 @@ private fun AssetPreviewDialog(asset: OwnedAsset, onDismiss: () -> Unit) {
         },
         confirmButton = {
             Button(
-                onClick = { openExternalPreview(context, openUrl) },
-                enabled = openUrl != null,
+                onClick = { openExternalPreview(context, openTarget) },
+                enabled = openTarget != null,
                 colors = ButtonDefaults.buttonColors(containerColor = RavenOrange)
             ) {
                 Icon(Icons.Default.OpenInBrowser, contentDescription = null, modifier = Modifier.size(16.dp))
