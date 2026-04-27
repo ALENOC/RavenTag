@@ -11,7 +11,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -26,7 +25,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
@@ -60,7 +58,7 @@ import io.raventag.app.ui.theme.*
 import io.raventag.app.wallet.TxHistoryEntry
 import io.raventag.app.wallet.cache.TxHistoryDao
 import okhttp3.Request
-import coil.compose.AsyncImage
+import coil.compose.SubcomposeAsyncImage
 import coil.request.ImageRequest
 import io.raventag.app.network.NetworkModule
 import io.raventag.app.wallet.cache.WalletCacheDao
@@ -71,6 +69,9 @@ import io.raventag.app.wallet.subscription.SubscriptionManager
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.togetherWith
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.collect
@@ -91,6 +92,47 @@ private fun assetPreviewCandidates(asset: OwnedAsset): List<String> {
         }
         asset.ipfsHash != null -> IpfsResolver.candidateUrls(asset.ipfsHash!!)
         else -> emptyList()
+    }
+}
+
+private suspend fun resolveRtpImageCandidates(context: Context, metadataUrls: List<String>): List<String>? {
+    if (metadataUrls.isEmpty()) return null
+    return withContext(Dispatchers.IO) {
+        val client = NetworkModule.getHttpClient(context)
+        coroutineScope {
+            metadataUrls.map { url ->
+                async {
+                    try {
+                        val req = Request.Builder()
+                            .url(url)
+                            .header("Accept", "application/json")
+                            .get()
+                            .build()
+                        client.newCall(req).execute().use { resp ->
+                            if (!resp.isSuccessful) return@async null
+                            val contentType = resp.header("Content-Type").orEmpty().lowercase()
+                            if (contentType.startsWith("image/")) return@async listOf(url)
+
+                            val body = resp.body?.string() ?: return@async null
+                            val json = com.google.gson.JsonParser.parseString(body).asJsonObject
+                            val rawImage = listOf("image", "image_url", "icon", "logo")
+                                .firstNotNullOfOrNull { key ->
+                                    json[key]?.takeIf { !it.isJsonNull }?.asString
+                                }
+                                ?: return@async null
+
+                            when {
+                                rawImage.startsWith("http") -> listOf(rawImage)
+                                rawImage.startsWith("file://") -> listOf(rawImage)
+                                else -> IpfsResolver.candidateUrls(rawImage)
+                            }
+                        }
+                    } catch (_: Exception) {
+                        null
+                    }
+                }
+            }.awaitAll().firstOrNull { !it.isNullOrEmpty() }
+        }
     }
 }
 
@@ -335,21 +377,6 @@ fun WalletScreen(
             typeMatch && ownerTokenMatch
         }
     }
-    val cardPreviewSizePx = with(LocalDensity.current) { 36.dp.roundToPx() }
-    var previewRampLimit by remember { mutableStateOf(0) }
-    LaunchedEffect(active, filteredAssets.size) {
-        previewRampLimit = 0
-        if (!active || filteredAssets.isEmpty()) return@LaunchedEffect
-
-        // Let the tab switch draw first. Then load thumbnails in small batches so
-        // Coil decode/cache updates do not land in the same frame as Wallet entry.
-        kotlinx.coroutines.delay(850L)
-        while (previewRampLimit < filteredAssets.size) {
-            previewRampLimit = minOf(filteredAssets.size, previewRampLimit + 2)
-            kotlinx.coroutines.delay(180L)
-        }
-    }
-
     // Full-screen loading ONLY on first-ever load. Periodic refresh uses the
     // inline LinearProgressIndicator (isRefreshing) below so the UI doesn't
     // flash to a black spinner on every tick.
@@ -746,14 +773,13 @@ fun WalletScreen(
                 }
             } else {
                 // Operators can only transfer UNIQUE tokens; ROOT/SUB transfers are admin-only.
-                itemsIndexed(filteredAssets, key = { _, asset -> asset.name }) { index, asset ->
+                items(filteredAssets, key = { it.name }) { asset ->
                     val canTransferThis = onTransferAsset != null && (!isOperator || asset.type == AssetType.UNIQUE)
                     Box(modifier = Modifier.padding(bottom = 8.dp)) {
                         AssetCard(
                             s = s,
                             asset = asset,
-                            previewsActive = active && index < previewRampLimit,
-                            previewRequestSizePx = cardPreviewSizePx,
+                            previewsActive = active,
                             onPreview = if (asset.imageUrl != null || asset.ipfsHash != null) ({ previewAsset = asset }) else null,
                             onTransfer = if (canTransferThis) { { if (asset.type != AssetType.UNIQUE) { pendingTransferAsset = asset } else { onTransferAsset!!.invoke(asset) } } } else null
                         )
@@ -892,7 +918,6 @@ private fun AssetCard(
     s: AppStrings,
     asset: OwnedAsset,
     previewsActive: Boolean = true,
-    previewRequestSizePx: Int? = null,
     onPreview: (() -> Unit)? = null,
     onTransfer: (() -> Unit)? = null
 ) {
@@ -904,7 +929,7 @@ private fun AssetCard(
         Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp).height(36.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Box(modifier = Modifier.size(36.dp).clip(RoundedCornerShape(8.dp)).background(typeColor.copy(alpha = 0.1f)), contentAlignment = Alignment.Center) {
                 if (previewUrls.isNotEmpty()) {
-                    IpfsPreviewImage(urls = previewUrls, contentDescription = asset.name, modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(8.dp)).then(if (onPreview != null) Modifier.clickable { onPreview() } else Modifier), requestSizePx = previewRequestSizePx, fallback = { Icon(Icons.Default.Token, contentDescription = null, tint = typeColor, modifier = Modifier.size(18.dp)) }, loading = { Icon(Icons.Default.Image, contentDescription = null, tint = typeColor, modifier = Modifier.size(16.dp)) })
+                    IpfsPreviewImage(urls = previewUrls, metadataFirst = asset.imageUrl == null && asset.ipfsHash != null, contentDescription = asset.name, modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(8.dp)).then(if (onPreview != null) Modifier.clickable { onPreview() } else Modifier), fallback = { Icon(Icons.Default.Token, contentDescription = null, tint = typeColor, modifier = Modifier.size(18.dp)) }, loading = { Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = typeColor, modifier = Modifier.size(14.dp), strokeWidth = 2.dp) } })
                 } else {
                     Icon(imageVector = when (asset.type) { AssetType.ROOT -> Icons.Default.AccountBalance; AssetType.SUB -> Icons.Default.AccountTree; AssetType.UNIQUE -> Icons.Default.Token }, contentDescription = null, tint = typeColor, modifier = Modifier.size(18.dp))
                 }
@@ -929,91 +954,47 @@ private fun AssetCard(
 @Composable
 internal fun IpfsPreviewImage(
     urls: List<String>,
+    metadataFirst: Boolean = false,
     contentDescription: String,
     modifier: Modifier = Modifier,
     contentScale: ContentScale = ContentScale.Crop,
-    requestSizePx: Int? = null,
     loading: @Composable () -> Unit,
     fallback: @Composable () -> Unit
 ) {
     val context = LocalContext.current
     val imageLoader = remember(context) { NetworkModule.getImageLoader(context) }
+    val sourceKey = remember(urls) { urls.joinToString("|") }
+    var effectiveUrls by remember(sourceKey, metadataFirst) {
+        mutableStateOf(if (metadataFirst) null else urls)
+    }
+    LaunchedEffect(sourceKey, metadataFirst) {
+        effectiveUrls = if (metadataFirst) {
+            val resolved = resolveRtpImageCandidates(context, urls)
+            Log.i("IpfsPreviewImage", "metadataFirst=${resolved != null} candidates=${urls.size} resolved=${resolved?.firstOrNull().orEmpty()}")
+            resolved ?: urls
+        } else {
+            urls
+        }
+    }
+    val renderUrls = effectiveUrls
+    if (renderUrls == null) {
+        loading()
+        return
+    }
+
     // Key state on a STABLE identifier (the first URL string) instead of the
     // list reference, otherwise every recomposition that produces a new List
     // object resets retry state and refires the network race condition that
     // makes the preview look "intermittent" — sometimes works, sometimes not.
-    val key = urls.firstOrNull() ?: ""
+    val key = renderUrls.firstOrNull() ?: ""
     var urlIndex by remember(key) { mutableStateOf(0) }
-    var resolvedUrl by remember(key) { mutableStateOf<String?>(urls.firstOrNull()) }
+    var resolvedUrl by remember(key) { mutableStateOf<String?>(renderUrls.firstOrNull()) }
     var resolveFailed by remember(key) { mutableStateOf(false) }
-    var imageLoading by remember(key) { mutableStateOf(false) }
-    var handlingFailure by remember(key) { mutableStateOf(false) }
-    var failureSignal by remember(key) { mutableStateOf(0) }
-    // Track the last URL that loaded successfully so we can skip the loading
-    // overlay on recomposition / tab switch for an already-displayed image.
-    var lastLoadedUrl by remember(key) { mutableStateOf<String?>(null) }
 
     if (resolvedUrl != null && !resolveFailed) {
         val requestUrl = resolvedUrl!!
-        LaunchedEffect(failureSignal) {
-            if (failureSignal == 0) return@LaunchedEffect
-
-            // Step 1: try the next gateway URL in the list.
-            val nextIndex = urlIndex + 1
-            if (nextIndex < urls.size) {
-                urlIndex = nextIndex
-                resolvedUrl = urls[nextIndex]
-                handlingFailure = false
-                return@LaunchedEffect
-            }
-
-            // Step 2: all direct URLs failed, try JSON metadata parsing on each gateway.
-            // The JSON may contain an image field that is either a full HTTP URL, an
-            // ipfs:// URL, or a bare CID. Resolve it off-main and let Coil render it.
-            val result = withContext(Dispatchers.IO) {
-                val client = NetworkModule.getHttpClient(context)
-                urls.firstNotNullOfOrNull { url ->
-                    try {
-                        val req = Request.Builder().url(url).header("Accept", "application/json").get().build()
-                        client.newCall(req).execute().use { resp ->
-                            if (!resp.isSuccessful) return@use null
-                            val body = resp.body?.string() ?: ""
-                            val json = com.google.gson.JsonParser.parseString(body).asJsonObject
-                            val img = listOf("image", "image_url", "icon", "logo")
-                                .firstNotNullOfOrNull { k -> json[k]?.takeIf { !it.isJsonNull }?.asString }
-                            img?.let { rawImg ->
-                                when {
-                                    rawImg.startsWith("http") -> rawImg
-                                    else -> {
-                                        val candidates = IpfsResolver.candidateUrls(rawImg)
-                                        candidates.firstNotNullOfOrNull { candidateUrl ->
-                                            try {
-                                                val imgReq = Request.Builder().url(candidateUrl).get().build()
-                                                client.newCall(imgReq).execute().use { imgResp ->
-                                                    if (imgResp.isSuccessful) candidateUrl else null
-                                                }
-                                            } catch (_: Exception) { null }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    } catch (_: Exception) { null }
-                }
-            }
-            if (result != null && result != resolvedUrl) {
-                urlIndex = 0
-                resolvedUrl = result
-                handlingFailure = false
-            } else {
-                resolveFailed = true
-                handlingFailure = false
-            }
-        }
-
-        // Stable ImageRequest: prevents Coil from restarting the request on recomposition.
-        val imageRequest = remember(requestUrl, requestSizePx) {
-            ImageRequest.Builder(context)
+        SubcomposeAsyncImage(
+            model = ImageRequest.Builder(context)
                 .data(requestUrl)
                 // Let the cache key follow the actual image URL. Asset metadata CIDs
                 // can differ from image CIDs; using metadata CIDs here can poison the
@@ -1026,37 +1007,66 @@ internal fun IpfsPreviewImage(
                         Log.w("IpfsPreviewImage", "load failed url=$requestUrl: ${result.throwable.message}", result.throwable)
                     }
                 )
-                .error(android.R.color.transparent)
-                .apply {
-                    if (requestSizePx != null) size(requestSizePx, requestSizePx)
-                }
-                .build()
-        }
-        Box(modifier = modifier, contentAlignment = Alignment.Center) {
-            AsyncImage(
-                model = imageRequest,
-                imageLoader = imageLoader,
-                contentDescription = contentDescription,
-                modifier = Modifier.fillMaxSize(),
-                contentScale = contentScale,
-                onLoading = { imageLoading = true },
-                onSuccess = {
-                    imageLoading = false
-                    handlingFailure = false
-                    lastLoadedUrl = requestUrl
-                },
-                onError = {
-                    imageLoading = false
-                    if (!handlingFailure) {
-                        handlingFailure = true
-                        failureSignal += 1
+                .error(android.R.color.transparent) // Prevent Coil from caching error state
+                .build(),
+            imageLoader = imageLoader,
+            contentDescription = contentDescription,
+            modifier = modifier,
+            contentScale = contentScale,
+            loading = { loading() },
+            error = {
+                LaunchedEffect(resolvedUrl) {
+                    // Step 1: try the next gateway URL in the list
+                    val nextIndex = urlIndex + 1
+                    if (nextIndex < renderUrls.size) {
+                        urlIndex = nextIndex
+                        resolvedUrl = renderUrls[nextIndex]
+                        return@LaunchedEffect
+                    }
+
+                    // Step 2: all direct URLs failed, parse the RTP-1 JSON metadata.
+                    // Ravencoin asset IPFS points to JSON; the real image is in "image".
+                    val result = withContext(Dispatchers.IO) {
+                        val client = NetworkModule.getHttpClient(context)
+                        renderUrls.firstNotNullOfOrNull { url ->
+                            try {
+                                val req = Request.Builder().url(url).header("Accept", "application/json").get().build()
+                                client.newCall(req).execute().use { resp ->
+                                    if (!resp.isSuccessful) return@use null
+                                    val body = resp.body?.string() ?: ""
+                                    val json = com.google.gson.JsonParser.parseString(body).asJsonObject
+                                    val img = listOf("image", "image_url", "icon", "logo")
+                                        .firstNotNullOfOrNull { k -> json[k]?.takeIf { !it.isJsonNull }?.asString }
+                                    img?.let { rawImg ->
+                                        when {
+                                            rawImg.startsWith("http") -> rawImg
+                                            else -> {
+                                                val candidates = IpfsResolver.candidateUrls(rawImg)
+                                                candidates.firstNotNullOfOrNull { candidateUrl ->
+                                                    try {
+                                                        val imgReq = Request.Builder().url(candidateUrl).get().build()
+                                                        client.newCall(imgReq).execute().use { imgResp ->
+                                                            if (imgResp.isSuccessful) candidateUrl else null
+                                                        }
+                                                    } catch (_: Exception) { null }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            } catch (_: Exception) { null }
+                        }
+                    }
+                    if (result != null && result != resolvedUrl) {
+                        urlIndex = 0
+                        resolvedUrl = result
+                    } else {
+                        resolveFailed = true
                     }
                 }
-            )
-            // Skip loading overlay for an already-loaded URL (tab switch / recomposition)
-            // to avoid a flash. Still show it on first load and during gateway fallback.
-            if (handlingFailure || (imageLoading && lastLoadedUrl != requestUrl)) loading()
-        }
+                loading()
+            }
+        )
     } else { fallback() }
 }
 
@@ -1069,11 +1079,124 @@ private fun AssetActionChip(label: String, icon: androidx.compose.ui.graphics.ve
     }
 }
 
+private fun externalPreviewCandidates(asset: OwnedAsset): List<String> {
+    asset.imageUrl
+        ?.takeUnless { it.startsWith("file://") }
+        ?.let { return IpfsResolver.candidateUrls(it).ifEmpty { listOf(it) } }
+
+    return asset.ipfsHash?.let { IpfsResolver.candidateUrls(it) }.orEmpty()
+}
+
+private fun openExternalPreview(context: Context, url: String?) {
+    val safeUrl = url?.takeUnless { it.startsWith("file://") } ?: return
+    try {
+        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(safeUrl)))
+    } catch (e: Exception) {
+        Log.w("IpfsPreviewImage", "open failed url=$safeUrl: ${e.message}", e)
+    }
+}
+
 @Composable
 private fun AssetPreviewDialog(asset: OwnedAsset, onDismiss: () -> Unit) {
     val context = LocalContext.current
     val previewUrls = assetPreviewCandidates(asset)
-    AlertDialog(onDismissRequest = onDismiss, containerColor = RavenCard, title = { Text(asset.name, color = Color.White, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis) }, text = { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) { if (previewUrls.isNotEmpty()) { IpfsPreviewImage(urls = previewUrls, contentDescription = asset.name, modifier = Modifier.fillMaxWidth().height(220.dp).clip(RoundedCornerShape(12.dp)).clickable { previewUrls.firstOrNull()?.let { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(it))) } }, contentScale = ContentScale.Crop, fallback = { Box(modifier = Modifier.fillMaxWidth().height(220.dp).background(Color(0xFF111111)), contentAlignment = Alignment.Center) { Text("Preview unavailable", color = RavenMuted, style = MaterialTheme.typography.bodySmall) } }, loading = { Box(modifier = Modifier.fillMaxWidth().height(220.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = RavenOrange) } }) } ; asset.description?.let { Text(it, color = RavenMuted, style = MaterialTheme.typography.bodySmall) } ; asset.ipfsHash?.let { Text("IPFS: $it", color = RavenMuted, style = MaterialTheme.typography.labelSmall, maxLines = 2, overflow = TextOverflow.Ellipsis) } } }, confirmButton = { Button(onClick = { previewUrls.firstOrNull()?.let { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(it))) } }, enabled = previewUrls.isNotEmpty(), colors = ButtonDefaults.buttonColors(containerColor = RavenOrange)) { Icon(Icons.Default.OpenInBrowser, contentDescription = null, modifier = Modifier.size(16.dp)) ; Spacer(modifier = Modifier.width(6.dp)) ; Text("Open") } }, dismissButton = { OutlinedButton(onClick = onDismiss, border = BorderStroke(1.dp, RavenBorder), colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)) { Text("Close") } })
+    val metadataUrls = remember(asset.ipfsHash) {
+        asset.ipfsHash?.let { IpfsResolver.candidateUrls(it) }.orEmpty()
+    }
+    var openUrl by remember(asset.name, asset.imageUrl, asset.ipfsHash) {
+        mutableStateOf(externalPreviewCandidates(asset).firstOrNull())
+    }
+    LaunchedEffect(asset.name, asset.imageUrl, asset.ipfsHash) {
+        if (asset.imageUrl?.startsWith("file://") == true && metadataUrls.isNotEmpty()) {
+            openUrl = resolveRtpImageCandidates(context, metadataUrls)?.firstOrNull()
+                ?: metadataUrls.firstOrNull()
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = RavenCard,
+        title = {
+            Text(
+                asset.name,
+                color = Color.White,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                if (previewUrls.isNotEmpty()) {
+                    IpfsPreviewImage(
+                        urls = previewUrls,
+                        metadataFirst = asset.imageUrl == null && asset.ipfsHash != null,
+                        contentDescription = asset.name,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(220.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable { openExternalPreview(context, openUrl) },
+                        contentScale = ContentScale.Crop,
+                        fallback = {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(220.dp)
+                                    .background(Color(0xFF111111)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text("Preview unavailable", color = RavenMuted, style = MaterialTheme.typography.bodySmall)
+                            }
+                        },
+                        loading = {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(220.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                CircularProgressIndicator(color = RavenOrange)
+                            }
+                        }
+                    )
+                }
+                asset.description?.let {
+                    Text(it, color = RavenMuted, style = MaterialTheme.typography.bodySmall)
+                }
+                asset.ipfsHash?.let {
+                    Text(
+                        "IPFS: $it",
+                        color = RavenMuted,
+                        style = MaterialTheme.typography.labelSmall,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { openExternalPreview(context, openUrl) },
+                enabled = openUrl != null,
+                colors = ButtonDefaults.buttonColors(containerColor = RavenOrange)
+            ) {
+                Icon(Icons.Default.OpenInBrowser, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Open")
+            }
+        },
+        dismissButton = {
+            OutlinedButton(
+                onClick = onDismiss,
+                border = BorderStroke(1.dp, RavenBorder),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)
+            ) {
+                Text("Close")
+            }
+        }
+    )
 }
 
 @Composable

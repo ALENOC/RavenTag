@@ -190,6 +190,15 @@ class RavencoinPublicNode(private val context: Context) {
             }
 
         /**
+         * The Cipig mirrors answer the core Electrum calls but currently return
+         * "unknown method" for blockchain.asset.get_meta. Asset preview metadata
+         * must bypass them or every cached asset row loses its IPFS CID.
+         */
+        private val ASSET_META_SERVERS: List<ElectrumServer> =
+            SERVERS.filterNot { it.host.contains("cipig", ignoreCase = true) }
+                .ifEmpty { SERVERS }
+
+        /**
          * Monotonically increasing request ID counter, shared across all instances.
          * ElectrumX requires a unique integer "id" in each JSON-RPC request so that
          * responses can be matched to their requests (though we use synchronous I/O
@@ -990,7 +999,7 @@ class RavencoinPublicNode(private val context: Context) {
      */
     fun getAssetMeta(assetName: String): ElectrumAssetMeta? {
         return try {
-            val result = callWithFailover("blockchain.asset.get_meta", listOf(assetName))
+            val result = callWithAssetMetaFailover("blockchain.asset.get_meta", listOf(assetName))
             val obj = result.asJsonObject
             val hasIpfs = obj.get("has_ipfs").asFlexibleBoolean()
             // Accept both "ipfs" and "ipfs_hash" field names for compatibility
@@ -1022,7 +1031,7 @@ class RavencoinPublicNode(private val context: Context) {
         val reqs = assetNames.map { name ->
             "blockchain.asset.get_meta" to listOf(name) as List<Any>
         }
-        val resps = try { callWithFailoverBatch(reqs) } catch (_: Exception) { return emptyMap() }
+        val resps = try { callWithAssetMetaFailoverBatch(reqs) } catch (_: Exception) { return emptyMap() }
         val result = mutableMapOf<String, ElectrumAssetMeta?>()
         assetNames.forEachIndexed { i, name ->
             result[name] = try {
@@ -1788,6 +1797,34 @@ class RavencoinPublicNode(private val context: Context) {
     }
 
     /**
+     * Asset metadata uses Ravencoin-specific Electrum extensions. Some otherwise
+     * healthy public nodes do not implement them, so use the known metadata-capable
+     * subset directly instead of the generic health rotation.
+     */
+    private fun callWithAssetMetaFailover(method: String, params: List<Any>): com.google.gson.JsonElement {
+        io.raventag.app.wallet.health.NodeHealthMonitor.init(context)
+        val errors = mutableListOf<String>()
+        var lastError: Throwable? = null
+        for (server in ASSET_META_SERVERS) {
+            val key = "${server.host}:${server.port}"
+            try {
+                val result = call(server, method, params)
+                io.raventag.app.wallet.health.NodeHealthMonitor.reportSuccess(key)
+                return result
+            } catch (e: Exception) {
+                lastError = e
+                Log.w(TAG, "Asset metadata server ${server.host} failed for $method: ${e.message}")
+                errors.add("${server.host}: ${e.message}")
+                if (isTofuMismatch(e)) {
+                    io.raventag.app.wallet.health.NodeHealthMonitor.reportTofuMismatch(key)
+                }
+            }
+        }
+        throw lastError
+            ?: Exception("All asset metadata servers failed for $method: ${errors.joinToString("; ")}")
+    }
+
+    /**
      * Detects the TofuTrustManager cert-mismatch exception.
      *
      * TofuTrustManager throws a plain Exception with message
@@ -1909,6 +1946,28 @@ class RavencoinPublicNode(private val context: Context) {
             }
         }
         Log.w(TAG, "All servers failed for batch of ${requests.size} requests")
+        return List(requests.size) { null }
+    }
+
+    private fun callWithAssetMetaFailoverBatch(requests: List<Pair<String, List<Any>>>): List<JsonElement?> {
+        if (requests.isEmpty()) return emptyList()
+        io.raventag.app.wallet.health.NodeHealthMonitor.init(context)
+        for (server in ASSET_META_SERVERS) {
+            val key = "${server.host}:${server.port}"
+            try {
+                val result = callBatch(server, requests)
+                if (result.any { it != null }) {
+                    io.raventag.app.wallet.health.NodeHealthMonitor.reportSuccess(key)
+                    return result
+                }
+                Log.w(TAG, "Asset metadata server ${server.host} returned no usable rows for batch(${requests.size})")
+            } catch (e: Exception) {
+                Log.w(TAG, "Asset metadata server ${server.host} failed for batch(${requests.size}): ${e.message}")
+                if (isTofuMismatch(e)) {
+                    io.raventag.app.wallet.health.NodeHealthMonitor.reportTofuMismatch(key)
+                }
+            }
+        }
         return List(requests.size) { null }
     }
 
