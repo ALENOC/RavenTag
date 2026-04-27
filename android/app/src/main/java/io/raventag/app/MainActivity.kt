@@ -62,6 +62,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import io.raventag.app.nfc.NfcCounterCache
@@ -3831,10 +3832,10 @@ fun RavenTagApp(
     val nfcAdapter = remember { NfcAdapter.getDefaultAdapter(context) }
     val nfcSupported = nfcAdapter != null
     val nfcEnabled = nfcAdapter?.isEnabled == true
-    val scope = androidx.compose.runtime.rememberCoroutineScope()
 
     val s = LocalStrings.current
     var currentTab by remember { mutableStateOf(AppTab.SCAN) }
+    val scope = rememberCoroutineScope()
 
     fun switchTab(tab: AppTab) {
         currentTab = tab
@@ -3850,11 +3851,7 @@ fun RavenTagApp(
             viewModel.restoreModeActive = false
         }
     }
-    val walletAssetsForWarmup = viewModel.ownedAssets
-    val walletAssetsCount = walletAssetsForWarmup?.size ?: 0
-    val walletAssetsIpfsCount = walletAssetsForWarmup?.count { it.ipfsHash != null } ?: 0
-    val walletAssetsImageCount = walletAssetsForWarmup?.count { it.imageUrl != null } ?: 0
-    LaunchedEffect(currentTab, viewModel.hasWallet, walletAssetsCount, walletAssetsIpfsCount, walletAssetsImageCount) {
+    LaunchedEffect(currentTab, viewModel.hasWallet) {
         if (currentTab == AppTab.WALLET && viewModel.hasWallet) {
             delay(150)
             viewModel.warmVisibleIpfsMetadata()
@@ -4176,7 +4173,9 @@ fun RavenTagApp(
             val settingsEverShown = remember { mutableStateOf(currentTab == AppTab.SETTINGS) }
 
             LaunchedEffect(viewModel.hasWallet, isBrandApp) {
-                delay(2_000)
+                delay(800)
+                walletEverShown.value = true
+                delay(1_200)
                 if (isBrandApp) brandEverShown.value = true
                 delay(200)
                 settingsEverShown.value = true
@@ -4373,7 +4372,7 @@ fun RavenTagApp(
                 }
             }
 
-            if (currentTab == AppTab.SCAN) {
+            TabLayer(visible = currentTab == AppTab.SCAN) {
                 ScanScreen(
                     modifier = Modifier.fillMaxSize(),
                     scanState = viewModel.scanState,
