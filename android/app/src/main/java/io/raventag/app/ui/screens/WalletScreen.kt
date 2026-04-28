@@ -138,49 +138,101 @@ private suspend fun resolveRtpImageCandidates(context: Context, metadataUrls: Li
 
 @Composable
 fun WalletScreen(
-    walletInfo: WalletInfo?,
-    hasWallet: Boolean,
-    isGenerating: Boolean = false,
-    restoreError: String? = null,
-    ownedAssets: List<OwnedAsset>?,
-    assetsLoading: Boolean,
-    assetsLoadError: Boolean = false,
-    needsConsolidation: Boolean = false,
-    consolidationInProgress: Boolean = false,
-    autoSweepInProgress: Boolean = false,
-    onConsolidateFunds: (() -> Unit)? = null,
-    electrumStatus: MainViewModel.ElectrumStatus = MainViewModel.ElectrumStatus.UNKNOWN,
-    blockHeight: Int? = null,
-    rvnPrice: Double? = null,
-    networkHashrate: Double? = null,
-    onGenerateWallet: (controlKey: String) -> Unit,
-    onRestoreWallet: (mnemonic: String, controlKey: String) -> Unit,
-    onRefreshBalance: () -> Unit,
-    onDeleteWallet: () -> Unit,
-    onReceive: () -> Unit,
-    onSend: () -> Unit,
-    onTransferAsset: ((asset: OwnedAsset) -> Unit)? = null,
-    walletBalance: Double? = null,
-    txHistory: List<TxHistoryEntry> = emptyList(),
-    txHistoryLoading: Boolean = false,
-    txHistoryTotal: Int = 0,
-    txHistoryLoadedCount: Int = 0,
-    onLoadMoreTransactions: () -> Unit = {},
-    isBrandApp: Boolean = io.raventag.app.config.AppConfig.IS_BRAND_APP,
-    walletRole: String = "",
-    controlKeyValidating: Boolean = false,
-    controlKeyError: String? = null,
-    onRestoreModeChange: (Boolean) -> Unit = {},
-    onNavigateToMnemonicBackup: () -> Unit = {},
+    viewModel: MainViewModel,
     active: Boolean = true,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    walletRole: String = "",
+    onWalletRoleSave: (role: String, key: String) -> Unit = { _, _ -> },
+    onWalletDelete: () -> Unit = {},
+    onNavigateToMnemonicBackup: () -> Unit = {},
+    onRestoreModeChange: (Boolean) -> Unit = {},
 ) {
+    // Core state read here: only what's needed for top-level control flow and dialogs.
+    // Asset/tx state is read inline in their sections to avoid invalidating the entire
+    // WalletScreen when only the asset list or tx history changes.
+    val walletInfo by remember { derivedStateOf { viewModel.walletInfo } }
+    val hasWallet = viewModel.hasWallet
+    val isGenerating = viewModel.walletGenerating
+    val restoreError = viewModel.restoreError
+    val controlKeyValidating = viewModel.controlKeyValidating
+    val controlKeyError = viewModel.controlKeyError
+
+    val isBrandApp = io.raventag.app.config.AppConfig.IS_BRAND_APP
     val s = LocalStrings.current
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
+    // Stable callbacks derived from viewModel + external deps.
+    val onRefreshBalance: () -> Unit = remember(viewModel) {
+        {
+            viewModel.checkElectrumStatus()
+            viewModel.fetchBlockHeight()
+            viewModel.fetchRvnPrice()
+            viewModel.fetchNetworkHashrate()
+            viewModel.refreshBalance()
+        }
+    }
+    val onConsolidateFunds: (() -> Unit)? = remember(viewModel) { { viewModel.consolidateFunds() } }
+    val onGenerateWallet: (String) -> Unit = remember(viewModel, scope, s, isBrandApp, onWalletRoleSave) {
+        { controlKey: String ->
+            if (!isBrandApp) {
+                viewModel.generateWallet()
+            } else {
+                scope.launch {
+                    viewModel.controlKeyValidating = true
+                    viewModel.controlKeyError = null
+                    val role = viewModel.validateControlKey(viewModel.currentVerifyUrl, controlKey)
+                    viewModel.controlKeyValidating = false
+                    if (role == null) {
+                        viewModel.controlKeyError = s.walletControlKeyInvalid
+                    } else {
+                        onWalletRoleSave(role, controlKey)
+                        viewModel.generateWallet()
+                    }
+                }
+            }
+        }
+    }
+    val onRestoreWallet: (String, String) -> Unit = remember(viewModel, scope, s, isBrandApp, onWalletRoleSave) {
+        { mnemonic: String, controlKey: String ->
+            if (!isBrandApp) {
+                viewModel.restoreWallet(mnemonic)
+            } else {
+                scope.launch {
+                    viewModel.controlKeyValidating = true
+                    viewModel.controlKeyError = null
+                    val role = viewModel.validateControlKey(viewModel.currentVerifyUrl, controlKey)
+                    viewModel.controlKeyValidating = false
+                    if (role == null) {
+                        viewModel.controlKeyError = s.walletControlKeyInvalid
+                    } else {
+                        onWalletRoleSave(role, controlKey)
+                        viewModel.restoreWallet(mnemonic)
+                    }
+                }
+            }
+        }
+    }
+    val onDeleteWallet: () -> Unit = remember(viewModel, onWalletDelete) {
+        { viewModel.deleteWallet(); onWalletDelete() }
+    }
+    val onReceive: () -> Unit = remember(viewModel) { { viewModel.showReceive = true } }
+    val onSend: () -> Unit = remember(viewModel) { { viewModel.showSend = true } }
+    val onTransferAsset: ((OwnedAsset) -> Unit)? = remember(viewModel) {
+        { asset: OwnedAsset ->
+            viewModel.prefilledTransferAssetName = asset.name
+            viewModel.issueMode = when (asset.type) {
+                AssetType.ROOT -> IssueMode.TRANSFER_ROOT
+                AssetType.SUB -> IssueMode.TRANSFER_SUB
+                AssetType.UNIQUE -> IssueMode.TRANSFER
+            }
+        }
+    }
+    val onLoadMoreTransactions: () -> Unit = remember(viewModel) { { viewModel.loadMoreTransactions() } }
     var pendingTransferAsset by remember { mutableStateOf<OwnedAsset?>(null) }
     var showMnemonic by remember { mutableStateOf(false) }
     // D-23 extra paged rows appended locally via TxHistoryDao.getPage / getHistoryPaged
-    // in addition to txHistory provided by MainViewModel.
+    // in addition to viewModel.txHistory provided by MainViewModel.
     var extraTxHistory by remember { mutableStateOf<List<TxHistoryEntry>>(emptyList()) }
     // Reset local pagination when the active wallet address changes.
     LaunchedEffect(walletInfo?.address) { extraTxHistory = emptyList() }
@@ -195,12 +247,11 @@ fun WalletScreen(
     var showOwnerTokens by remember { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
     val isOperator = walletRole == "operator"
+    val snackbarHostState = remember { SnackbarHostState() }
 
     // D-12: NodeHealthMonitor.stateFlow drives the pill and Send/Receive enabled state.
     val health by NodeHealthMonitor.stateFlow.collectAsState(initial = ConnectionHealth.GREEN)
     var showConnectionSheet by remember { mutableStateOf(false) }
-    val snackbarHostState = remember { SnackbarHostState() }
-    val scope = rememberCoroutineScope()
 
     // D-04: cached banner state; flipped false once a successful refresh has been observed.
     var cachedBannerVisible by remember { mutableStateOf(true) }
@@ -211,8 +262,7 @@ fun WalletScreen(
     // does not wipe the already-rendered balance/assets/tx sections.
     var cachedWalletInfo by remember { mutableStateOf<WalletInfo?>(walletInfo) }
     LaunchedEffect(walletInfo) { if (walletInfo != null) cachedWalletInfo = walletInfo }
-    @Suppress("NAME_SHADOWING")
-    val walletInfo = walletInfo ?: cachedWalletInfo
+    val resolvedWalletInfo = walletInfo ?: cachedWalletInfo
     var mempoolIncomingSat by remember { mutableStateOf(0L) }
 
     LaunchedEffect(Unit) {
@@ -325,10 +375,10 @@ fun WalletScreen(
     if (showRestoreConfirmDialog) {
         val prefs = context.getSharedPreferences("raventag_wallet", Context.MODE_PRIVATE)
         val hasBackedUp = prefs.getBoolean("backup_completed", false)
-        val assetsCount = ownedAssets?.size ?: 0
+        val assetsCount = viewModel.ownedAssets?.size ?: 0
         RestoreWalletConfirmDialog(
             hasBackedUp = hasBackedUp,
-            rvnAmount = walletBalance ?: 0.0,
+            rvnAmount = viewModel.walletInfo?.balanceRvn ?: 0.0,
             assetsCount = assetsCount,
             onDismiss = {
                 showRestoreConfirmDialog = false
@@ -370,9 +420,9 @@ fun WalletScreen(
         )
     }
 
-    val filteredAssets = remember(ownedAssets) {
+    val filteredAssets = remember(viewModel.ownedAssets) {
         derivedStateOf {
-            ownedAssets.orEmpty().filter { asset ->
+            viewModel.ownedAssets.orEmpty().filter { asset ->
                 val typeMatch = assetFilter == null || asset.type == assetFilter
                 val ownerTokenMatch = showOwnerTokens || !asset.name.endsWith("!")
                 typeMatch && ownerTokenMatch
@@ -383,11 +433,12 @@ fun WalletScreen(
     // inline LinearProgressIndicator (isRefreshing) below so the UI doesn't
     // flash to a black spinner on every tick.
     var everLoaded by remember { mutableStateOf(false) }
-    LaunchedEffect(walletInfo?.isLoading, walletInfo?.balanceRvn, ownedAssets) {
-        if (walletInfo != null && walletInfo.isLoading == false) everLoaded = true
-        if ((walletInfo?.balanceRvn ?: 0.0) > 0.0) everLoaded = true
+    LaunchedEffect(viewModel.walletInfo?.isLoading, viewModel.walletInfo?.balanceRvn, viewModel.ownedAssets) {
+        val wi = viewModel.walletInfo
+        if (wi != null && wi.isLoading == false) everLoaded = true
+        if ((wi?.balanceRvn ?: 0.0) > 0.0) everLoaded = true
     }
-    if (hasWallet && !everLoaded && walletInfo?.isLoading == true && (walletInfo.balanceRvn == null || walletInfo.balanceRvn == 0.0)) {
+    if (hasWallet && !everLoaded && viewModel.walletInfo?.isLoading == true && (viewModel.walletInfo?.balanceRvn == null || viewModel.walletInfo?.balanceRvn == 0.0)) {
         Box(
             modifier = modifier.fillMaxSize().background(RavenBg),
             contentAlignment = Alignment.Center
@@ -496,13 +547,13 @@ fun WalletScreen(
                         if (isPowerSave) { BatterySaverChip() }
 
                         // Block height counter: show last known value even during refresh.
-                        Box(modifier = Modifier.alpha(if (blockHeight != null) 1f else 0f)) {
-                            BlockHeightBadge(blockHeight ?: 0)
+                        Box(modifier = Modifier.alpha(if (viewModel.blockHeight != null) 1f else 0f)) {
+                            BlockHeightBadge(viewModel.blockHeight ?: 0)
                         }
 
                         // Network hashrate: show last known value even during refresh.
-                        Box(modifier = Modifier.alpha(if (networkHashrate != null) 1f else 0f)) {
-                            HashrateRow(networkHashrate ?: 0.0)
+                        Box(modifier = Modifier.alpha(if (viewModel.networkHashrate != null) 1f else 0f)) {
+                            HashrateRow(viewModel.networkHashrate ?: 0.0)
                         }
                     }
                 }
@@ -567,8 +618,8 @@ fun WalletScreen(
                         // restore with a destructive-confirm dialog and a forced-backup
                         // variant when `backup_completed` is false.
                         val phrase = restoreWords.joinToString(" ")
-                        val assetsCount = ownedAssets?.size ?: 0
-                        val hasFunds = (walletBalance ?: 0.0) > 0.0 || assetsCount > 0
+                        val assetsCount = viewModel.ownedAssets?.size ?: 0
+                        val hasFunds = (viewModel.walletInfo?.balanceRvn ?: 0.0) > 0.0 || assetsCount > 0
                         if (hasFunds) {
                             pendingRestoreArgs = phrase to controlKey
                             showRestoreConfirmDialog = true
@@ -578,16 +629,16 @@ fun WalletScreen(
                     }
                 )
             }
-        } else if (walletInfo != null) {
+        } else if (resolvedWalletInfo != null) {
             item(key = "balance") {
                 Column {
-                    BalanceCard(s, walletInfo, rvnPrice = rvnPrice, onCopyAddress = { clipboard.setText(AnnotatedString(walletInfo.address)) })
+                    BalanceCard(s, resolvedWalletInfo, rvnPrice = viewModel.rvnPrice, onCopyAddress = { clipboard.setText(AnnotatedString(resolvedWalletInfo.address)) })
                     PendingBalanceLine(mempoolIncomingSat = mempoolIncomingSat)
                 }
             }
             item(key = "balance_spacer") { Spacer(modifier = Modifier.height(16.dp)) }
-            if (walletInfo.mnemonic != null) {
-                item(key = "mnemonic") { MnemonicCard(s, walletInfo.mnemonic, visible = showMnemonic, onToggle = { showMnemonic = !showMnemonic }) }
+            if (resolvedWalletInfo.mnemonic != null) {
+                item(key = "mnemonic") { MnemonicCard(s, resolvedWalletInfo.mnemonic, visible = showMnemonic, onToggle = { showMnemonic = !showMnemonic }) }
                 item(key = "mnemonic_spacer") { Spacer(modifier = Modifier.height(16.dp)) }
             }
             item(key = "actions") {
@@ -634,19 +685,19 @@ fun WalletScreen(
                     }
                 }
             }
-            if (walletInfo.error != null) {
+            if (resolvedWalletInfo.error != null) {
                 item(key = "error_spacer") { Spacer(modifier = Modifier.height(16.dp)) }
                 item(key = "error") {
                     Card(colors = CardDefaults.cardColors(containerColor = NotAuthenticRedBg), border = BorderStroke(1.dp, NotAuthenticRed.copy(alpha = 0.3f)), shape = RoundedCornerShape(12.dp)) {
                         Row(modifier = Modifier.padding(16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                             Icon(Icons.Default.Error, contentDescription = null, tint = NotAuthenticRed, modifier = Modifier.size(18.dp))
-                            Text(walletInfo.error, style = MaterialTheme.typography.bodySmall, color = NotAuthenticRed)
+                            Text(resolvedWalletInfo.error, style = MaterialTheme.typography.bodySmall, color = NotAuthenticRed)
                         }
                     }
                 }
             }
             item(key = "after_actions_spacer") { Spacer(modifier = Modifier.height(16.dp)) }
-            if (!isBrandApp && (walletBalance ?: 0.0) < 0.01 && hasWallet && !assetsLoading && !ownedAssets.isNullOrEmpty() && walletInfo?.isLoading != true) {
+            if (!isBrandApp && (viewModel.walletInfo?.balanceRvn ?: 0.0) < 0.01 && hasWallet && !viewModel.assetsLoading && !viewModel.ownedAssets.isNullOrEmpty() && resolvedWalletInfo?.isLoading != true) {
                 item(key = "low_rvn") {
                     Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF2D1A00)), border = BorderStroke(1.dp, RavenOrange.copy(alpha = 0.5f)), shape = RoundedCornerShape(10.dp), modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp)) {
                         Row(modifier = Modifier.padding(12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -657,7 +708,7 @@ fun WalletScreen(
                 }
             }
             // Auto-sweep in progress: spinner, no button (sweep handles it automatically)
-            if (autoSweepInProgress) {
+            if (viewModel.autoSweepInProgress) {
                 item(key = "autosweep_progress") {
                     Card(
                         colors = CardDefaults.cardColors(containerColor = Color(0xFF1A2D00)),
@@ -677,9 +728,9 @@ fun WalletScreen(
                     }
                 }
             }
-            // Manual consolidation: shown only when auto-sweep failed (needsConsolidation
+            // Manual consolidation: shown only when auto-sweep failed (viewModel.needsConsolidation
             // stays true because sweep caught an exception and couldn't clear it).
-            if (needsConsolidation && !autoSweepInProgress && onConsolidateFunds != null && !assetsLoading && !consolidationInProgress) {
+            if (viewModel.needsConsolidation && !viewModel.autoSweepInProgress && onConsolidateFunds != null && !viewModel.assetsLoading && !viewModel.consolidationInProgress) {
                 item(key = "consolidation_banner") {
                     Card(
                         colors = CardDefaults.cardColors(containerColor = Color(0xFF1A2D00)),
@@ -718,7 +769,7 @@ fun WalletScreen(
                 }
             }
             // Consolidation in progress banner
-            if (consolidationInProgress) {
+            if (viewModel.consolidationInProgress) {
                 item(key = "consolidation_progress") {
                     Card(
                         colors = CardDefaults.cardColors(containerColor = Color(0xFF1A2D00)),
@@ -756,7 +807,7 @@ fun WalletScreen(
             }
             item(key = "asset_filters_spacer") { Spacer(modifier = Modifier.height(4.dp)) }
             // Error card: only when no cached assets are available to show
-            if (!assetsLoading && assetsLoadError && filteredAssets.isEmpty()) {
+            if (!viewModel.assetsLoading && viewModel.assetsLoadError && filteredAssets.isEmpty()) {
                 item(key = "assets_load_error") {
                     Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF1A0D00)), border = BorderStroke(1.dp, RavenOrange.copy(alpha = 0.3f)), shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth()) {
                         Row(modifier = Modifier.padding(16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -803,7 +854,7 @@ fun WalletScreen(
                 }
             }
             item(key = "tx_header_spacer") { Spacer(modifier = Modifier.height(10.dp)) }
-            if (txHistory.isEmpty() && extraTxHistory.isEmpty()) {
+            if (viewModel.txHistory.isEmpty() && extraTxHistory.isEmpty()) {
                 // D-23 UI-SPEC empty state: heading + body (verbatim Copywriting Contract).
                 item(key = "tx_empty") {
                     Card(colors = CardDefaults.cardColors(containerColor = RavenCard), border = BorderStroke(1.dp, RavenBorder), shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth()) {
@@ -829,7 +880,7 @@ fun WalletScreen(
                     }
                 }
             } else {
-                items(txHistory, key = { "vm_${it.txid}" }) { tx ->
+                items(viewModel.txHistory, key = { "vm_${it.txid}" }) { tx ->
                     Box(modifier = Modifier.padding(bottom = 6.dp)) {
                         TxCard(s, tx)
                     }
@@ -840,8 +891,8 @@ fun WalletScreen(
                         TxCard(s, tx)
                     }
                 }
-                if (txHistoryLoadedCount < txHistoryTotal ||
-                    (txHistory.isNotEmpty() && extraTxHistory.size < 200)) {
+                if (viewModel.txHistoryLoadedCount < viewModel.txHistoryTotal ||
+                    (viewModel.txHistory.isNotEmpty() && extraTxHistory.size < 200)) {
                     item(key = "load_more_spacer") { Spacer(modifier = Modifier.height(8.dp)) }
                     item(key = "load_more") {
                         // D-23 Load more: primary = parent VM callback (enriches via network);
@@ -851,7 +902,7 @@ fun WalletScreen(
                             onClick = {
                                 onLoadMoreTransactions()
                                 scope.launch {
-                                    val offset = txHistory.size + extraTxHistory.size
+                                    val offset = viewModel.txHistory.size + extraTxHistory.size
                                     val local: List<TxHistoryDao.TxHistoryRow> = try {
                                         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                                             TxHistoryDao.getPage(offset = offset, limit = 20)
@@ -874,17 +925,17 @@ fun WalletScreen(
                                         )
                                     }
                                     if (localMapped.isNotEmpty()) {
-                                        val existing = (txHistory + extraTxHistory).map { it.txid }.toHashSet()
+                                        val existing = (viewModel.txHistory + extraTxHistory).map { it.txid }.toHashSet()
                                         extraTxHistory = extraTxHistory + localMapped.filter { it.txid !in existing }
                                     } else {
-                                        val addr = walletInfo?.address
+                                        val addr = resolvedWalletInfo?.address
                                         if (addr != null) {
                                             val network = try {
                                                 io.raventag.app.wallet.RavencoinPublicNode(context)
                                                     .getHistoryPaged(address = addr, offset = offset, limit = 20)
                                             } catch (_: Exception) { emptyList() }
                                             if (network.isNotEmpty()) {
-                                                val existing = (txHistory + extraTxHistory).map { it.txid }.toHashSet()
+                                                val existing = (viewModel.txHistory + extraTxHistory).map { it.txid }.toHashSet()
                                                 extraTxHistory = extraTxHistory + network.filter { it.txid !in existing }
                                             }
                                         }
@@ -1215,7 +1266,7 @@ private fun AssetPreviewDialog(asset: OwnedAsset, onDismiss: () -> Unit) {
 private fun BalanceCard(s: AppStrings, info: WalletInfo, rvnPrice: Double? = null, onCopyAddress: () -> Unit) {
     Card(colors = CardDefaults.cardColors(containerColor = RavenCard), border = BorderStroke(1.dp, RavenOrange.copy(alpha = 0.3f)), shape = RoundedCornerShape(20.dp), modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(20.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) { Icon(Icons.Default.AccountBalanceWallet, contentDescription = null, tint = RavenOrange, modifier = Modifier.size(18.dp)) ; Text(s.walletBalance, fontWeight = FontWeight.SemiBold, color = Color.White) }
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) { Icon(Icons.Default.AccountBalanceWallet, contentDescription = null, tint = RavenOrange, modifier = Modifier.size(18.dp)) ; Text((info.balanceRvn ?: 0.0).toString(), fontWeight = FontWeight.SemiBold, color = Color.White) }
             Spacer(modifier = Modifier.height(12.dp))
             Text(
                 text = run {
