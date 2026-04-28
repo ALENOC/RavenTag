@@ -3920,7 +3920,6 @@ fun RavenTagApp(
 
     val s = LocalStrings.current
     var currentTab by remember { mutableStateOf(AppTab.SCAN) }
-    val scope = rememberCoroutineScope()
 
     fun switchTab(tab: AppTab) {
         currentTab = tab
@@ -4271,123 +4270,15 @@ fun RavenTagApp(
             val settingsVisible = currentTab == AppTab.SETTINGS
 
             if (walletEverShown.value) {
-                // Stable lambda references: wrapping in remember prevents new instances
-                // on every RavenTagApp recomposition (e.g. currentTab change), so
-                // WalletScreen can skip recomposition when only visibility changes.
-                val isBrand = io.raventag.app.config.AppConfig.IS_BRAND_APP
-                val rememberOnGenerate: (String) -> Unit = remember(viewModel, scope, s, isBrand, onWalletRoleSave) {
-                    { controlKey: String ->
-                        if (!isBrand) {
-                            viewModel.generateWallet()
-                        } else {
-                            scope.launch {
-                                viewModel.controlKeyValidating = true
-                                viewModel.controlKeyError = null
-                                val role = viewModel.validateControlKey(viewModel.currentVerifyUrl, controlKey)
-                                viewModel.controlKeyValidating = false
-                                if (role == null) {
-                                    viewModel.controlKeyError = s.walletControlKeyInvalid
-                                } else {
-                                    onWalletRoleSave(role, controlKey)
-                                    viewModel.generateWallet()
-                                }
-                            }
-                        }
-                    }
-                }
-                val rememberOnRestore: (String, String) -> Unit = remember(viewModel, scope, s, isBrand, onWalletRoleSave) {
-                    { mnemonic: String, controlKey: String ->
-                        if (!isBrand) {
-                            viewModel.restoreWallet(mnemonic)
-                        } else {
-                            scope.launch {
-                                viewModel.controlKeyValidating = true
-                                viewModel.controlKeyError = null
-                                val role = viewModel.validateControlKey(viewModel.currentVerifyUrl, controlKey)
-                                viewModel.controlKeyValidating = false
-                                if (role == null) {
-                                    viewModel.controlKeyError = s.walletControlKeyInvalid
-                                } else {
-                                    onWalletRoleSave(role, controlKey)
-                                    viewModel.restoreWallet(mnemonic)
-                                }
-                            }
-                        }
-                    }
-                }
-                val rememberOnRefresh: () -> Unit = remember(viewModel) {
-                    {
-                        viewModel.checkElectrumStatus()
-                        viewModel.fetchBlockHeight()
-                        viewModel.fetchRvnPrice()
-                        viewModel.fetchNetworkHashrate()
-                        viewModel.refreshBalance()
-                    }
-                }
-                val rememberOnDelete: () -> Unit = remember(viewModel, onWalletDelete) {
-                    { viewModel.deleteWallet(); onWalletDelete() }
-                }
-                val rememberOnReceive: () -> Unit = remember(viewModel) { { viewModel.showReceive = true } }
-                val rememberOnSend: () -> Unit = remember(viewModel) { { viewModel.showSend = true } }
-                val rememberOnTransfer: (io.raventag.app.ravencoin.OwnedAsset) -> Unit = remember(viewModel) {
-                    { asset: io.raventag.app.ravencoin.OwnedAsset ->
-                        viewModel.prefilledTransferAssetName = asset.name
-                        viewModel.issueMode = when (asset.type) {
-                            io.raventag.app.ravencoin.AssetType.ROOT -> IssueMode.TRANSFER_ROOT
-                            io.raventag.app.ravencoin.AssetType.SUB -> IssueMode.TRANSFER_SUB
-                            io.raventag.app.ravencoin.AssetType.UNIQUE -> IssueMode.TRANSFER
-                        }
-                    }
-                }
-                val rememberOnLoadMoreTx: () -> Unit = remember(viewModel) { { viewModel.loadMoreTransactions() } }
-                val rememberOnRestoreMode: (Boolean) -> Unit = remember(viewModel) {
-                    { restoreActive: Boolean -> viewModel.restoreModeActive = restoreActive }
-                }
-                val rememberOnConsolidate: (() -> Unit)? = remember(viewModel) {
-                    { viewModel.consolidateFunds() }
-                }
-                // Derived walletBalance: read lazily so viewModel.walletInfo changes
-                // don't force RavenTagApp recomposition through this read.
-                val walletBal by remember {
-                    derivedStateOf { viewModel.walletInfo?.balanceRvn ?: 0.0 }
-                }
-
                 TabLayer(visible = walletVisible) {
                     WalletScreen(
+                        viewModel = viewModel,
                         modifier = Modifier.fillMaxSize(),
                         active = walletVisible,
-                        walletInfo = viewModel.walletInfo,
-                        hasWallet = viewModel.hasWallet,
-                        isGenerating = viewModel.walletGenerating,
-                        ownedAssets = viewModel.ownedAssets,
-                        assetsLoading = viewModel.assetsLoading,
-                        assetsLoadError = viewModel.assetsLoadError,
-                        needsConsolidation = viewModel.needsConsolidation,
-                        consolidationInProgress = viewModel.consolidationInProgress,
-                        autoSweepInProgress = viewModel.autoSweepInProgress,
-                        onConsolidateFunds = rememberOnConsolidate,
-                        electrumStatus = viewModel.electrumStatus,
-                        blockHeight = viewModel.blockHeight,
-                        rvnPrice = viewModel.rvnPrice,
-                        networkHashrate = viewModel.networkHashrate,
                         walletRole = walletRole,
-                        controlKeyValidating = viewModel.controlKeyValidating,
-                        controlKeyError = viewModel.controlKeyError,
-                        restoreError = viewModel.restoreError,
-                        onGenerateWallet = rememberOnGenerate,
-                        onRestoreWallet = rememberOnRestore,
-                        onRefreshBalance = rememberOnRefresh,
-                        onDeleteWallet = rememberOnDelete,
-                        onReceive = rememberOnReceive,
-                        onSend = rememberOnSend,
-                        onTransferAsset = rememberOnTransfer,
-                        walletBalance = walletBal,
-                        txHistory = viewModel.txHistory,
-                        txHistoryLoading = viewModel.txHistoryLoading,
-                        txHistoryTotal = viewModel.txHistoryTotal,
-                        txHistoryLoadedCount = viewModel.txHistoryLoadedCount,
-                        onLoadMoreTransactions = rememberOnLoadMoreTx,
-                        onRestoreModeChange = rememberOnRestoreMode
+                        onWalletRoleSave = onWalletRoleSave,
+                        onWalletDelete = onWalletDelete,
+                        onRestoreModeChange = { active -> viewModel.restoreModeActive = active },
                     )
                 }
             }
