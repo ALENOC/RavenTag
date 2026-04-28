@@ -222,8 +222,9 @@ fun WalletScreen(
     }
     LaunchedEffect(active, walletInfo?.address, walletInfo?.balanceRvn) {
         if (!active || walletInfo == null) return@LaunchedEffect
-        mempoolIncomingSat = withContext(Dispatchers.IO) {
-            (WalletCacheDao.readState()?.utxos.orEmpty())
+        mempoolIncomingSat = withContext(Dispatchers.Default) {
+            val state = withContext(Dispatchers.IO) { WalletCacheDao.readState() }
+            (state?.utxos.orEmpty())
                 .filter { it.height <= 0 }
                 .sumOf { it.satoshis }
         }
@@ -269,11 +270,12 @@ fun WalletScreen(
         }
         subscriptionManager.eventsFlow().collect { ev ->
             when (ev) {
-                is ScripthashEvent.StatusChanged -> {
+                is ScripthashEvent.StatusChanged -> withContext(Dispatchers.Default) {
                     val beforeSat = withContext(Dispatchers.IO) { WalletCacheDao.readState()?.balanceSat ?: 0L }
                     onRefreshBalance()
                     val afterSat = withContext(Dispatchers.IO) { WalletCacheDao.readState()?.balanceSat ?: 0L }
                     val deltaSat = afterSat - beforeSat
+                    val timestamp = withContext(Dispatchers.IO) { WalletCacheDao.getLastRefreshedAt() }
                     if (deltaSat > 0L) {
                         val rvn = String.format(java.util.Locale.ROOT, "%.8f", deltaSat / 1e8)
                         scope.launch {
@@ -282,9 +284,7 @@ fun WalletScreen(
                             )
                         }
                     }
-                    cachedLastRefreshedAt = withContext(Dispatchers.IO) {
-                        WalletCacheDao.getLastRefreshedAt()
-                    }
+                    cachedLastRefreshedAt = timestamp
                     cachedBannerVisible = false
                 }
                 else -> {}
@@ -370,13 +370,15 @@ fun WalletScreen(
         )
     }
 
-    val filteredAssets = remember(ownedAssets, assetFilter, showOwnerTokens) {
-        ownedAssets.orEmpty().filter { asset ->
-            val typeMatch = assetFilter == null || asset.type == assetFilter
-            val ownerTokenMatch = showOwnerTokens || !asset.name.endsWith("!")
-            typeMatch && ownerTokenMatch
+    val filteredAssets = remember(ownedAssets) {
+        derivedStateOf {
+            ownedAssets.orEmpty().filter { asset ->
+                val typeMatch = assetFilter == null || asset.type == assetFilter
+                val ownerTokenMatch = showOwnerTokens || !asset.name.endsWith("!")
+                typeMatch && ownerTokenMatch
+            }
         }
-    }
+    }.value
     // Full-screen loading ONLY on first-ever load. Periodic refresh uses the
     // inline LinearProgressIndicator (isRefreshing) below so the UI doesn't
     // flash to a black spinner on every tick.
