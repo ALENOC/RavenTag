@@ -1266,7 +1266,7 @@ private fun AssetPreviewDialog(asset: OwnedAsset, onDismiss: () -> Unit) {
 private fun BalanceCard(s: AppStrings, info: WalletInfo, rvnPrice: Double? = null, onCopyAddress: () -> Unit) {
     Card(colors = CardDefaults.cardColors(containerColor = RavenCard), border = BorderStroke(1.dp, RavenOrange.copy(alpha = 0.3f)), shape = RoundedCornerShape(20.dp), modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(20.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) { Icon(Icons.Default.AccountBalanceWallet, contentDescription = null, tint = RavenOrange, modifier = Modifier.size(18.dp)) ; Text((info.balanceRvn ?: 0.0).toString(), fontWeight = FontWeight.SemiBold, color = Color.White) }
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) { Icon(Icons.Default.AccountBalanceWallet, contentDescription = null, tint = RavenOrange, modifier = Modifier.size(18.dp)) ; Text(s.walletBalance, fontWeight = FontWeight.SemiBold, color = Color.White) }
             Spacer(modifier = Modifier.height(12.dp))
             Text(
                 text = run {
