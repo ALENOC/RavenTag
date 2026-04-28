@@ -1130,10 +1130,61 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Load more transactions (next page).
-     * With multi-address aggregation, all transactions are loaded at once,
-     * so this is a no-op for now.
+     * Raw asset loading for batch startup: returns data without updating state.
+     * Called from loadWalletInfo() to batch all state updates together.
      */
+    private suspend fun loadOwnedAssetsRaw(): List<io.raventag.app.ravencoin.OwnedAsset>? {
+        val wm = walletManager ?: return null
+        return try {
+            withContext(Dispatchers.IO) {
+                val currentIndex = wm.getCurrentAddressIndex()
+                val addresses = wm.getAddressBatch(0, 0..currentIndex).values.toList()
+                val node = io.raventag.app.wallet.RavencoinPublicNode(getApplication())
+                val totals = try { node.getTotalAssetBalances(addresses) } catch (_: Exception) { emptyMap() }
+                val previous = ownedAssets?.associateBy { it.name } ?: emptyMap()
+                totals.map { (name, amount) ->
+                    val type = when {
+                        name.contains('#') -> io.raventag.app.ravencoin.AssetType.UNIQUE
+                        name.contains('/') -> io.raventag.app.ravencoin.AssetType.SUB
+                        else -> io.raventag.app.ravencoin.AssetType.ROOT
+                    }
+                    val base = io.raventag.app.ravencoin.OwnedAsset(name = name, balance = amount, type = type, ipfsHash = null)
+                    val prev = previous[base.name]
+                    if (prev?.ipfsHash != null || prev?.imageUrl != null || prev?.description != null) {
+                        base.copy(ipfsHash = prev.ipfsHash, imageUrl = prev.imageUrl, description = prev.description)
+                    } else base
+                }.sortedWith(compareBy({ it.type.ordinal }, { it.name }))
+            }
+        } catch (_: Throwable) { null }
+    }
+
+    /**
+     * Raw tx history loading for batch startup: returns data without updating state.
+     */
+    private suspend fun loadTransactionHistoryRaw(): List<io.raventag.app.wallet.TxHistoryEntry> {
+        val wm = walletManager ?: return emptyList()
+        return try {
+            withContext(Dispatchers.IO) {
+                val currentIndex = wm.getCurrentAddressIndex()
+                val node = io.raventag.app.wallet.RavencoinPublicNode(getApplication())
+                val addresses = wm.getAddressBatch(0, 0..(currentIndex + 1))
+                val ownedSet = addresses.values.toSet()
+                addresses.values.map { addr ->
+                    async {
+                        try { node.getTransactionHistory(addr, limit = txHistoryPageSize, ownedAddresses = ownedSet) }
+                        catch (_: Throwable) { emptyList() }
+                    }
+                }.awaitAll().flatten()
+                    .distinctBy { it.txid }
+                    .sortedWith(
+                        compareByDescending<io.raventag.app.wallet.TxHistoryEntry> {
+                            if (it.height <= 0) Int.MAX_VALUE else it.height
+                        }.thenByDescending { it.timestamp }
+                    )
+                    .take(txHistoryPageSize)
+            }
+        } catch (_: Throwable) { emptyList() }
+    }
     fun loadMoreTransactions() {
         if (txHistoryLoadedCount >= txHistoryTotal) return
 
@@ -1241,9 +1292,39 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (hasWallet && walletInfo == null) {
             walletInfo = WalletInfo(address = "", balanceRvn = null, isLoading = false)
             viewModelScope.launch {
+                // Load all data in parallel on IO threads
                 val startupCache = loadStartupWalletCache(wm)
+                // Apply lightweight state first (address + balance)
                 if (walletManager === wm && hasWallet) {
-                    applyStartupWalletCache(startupCache)
+                    val current = walletInfo
+                    walletInfo = current?.copy(
+                        address = startupCache.address.ifEmpty { current.address },
+                        balanceRvn = current.balanceRvn ?: startupCache.balanceRvn,
+                        isLoading = false
+                    ) ?: WalletInfo(
+                        address = startupCache.address,
+                        balanceRvn = startupCache.balanceRvn,
+                        isLoading = false
+                    )
+                    if ((blockHeight == null || blockHeight == 0) && startupCache.blockHeight != null) {
+                        blockHeight = startupCache.blockHeight
+                    }
+                }
+                // Spread heavy state updates across frames to avoid recomposition burst
+                delay(200)
+                if (walletManager === wm && hasWallet && ownedAssets.isNullOrEmpty() && !startupCache.assets.isNullOrEmpty()) {
+                    ownedAssets = startupCache.assets
+                }
+                delay(200)
+                if (walletManager === wm && hasWallet && txHistory.isEmpty() && startupCache.txHistory.isNotEmpty()) {
+                    txHistory = startupCache.txHistory
+                    txHistoryTotal = startupCache.txHistory.size
+                    txHistoryLoadedCount = startupCache.txHistory.size
+                }
+                // Full network refresh: also batched internally in loadWalletInfo
+                delay(300)
+                if (walletManager === wm && hasWallet) {
+                    refreshWalletAfterVisible()
                 }
             }
         } else if (hasWallet) {
@@ -1463,8 +1544,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** Initialise [walletInfo] with the address and start loading balance + history. */
     fun loadWalletInfo() {
         val wm = walletManager ?: return
-        // Preserve existing data while refreshing. Any disk/Keystore-backed cold-start
-        // cache seed runs on Dispatchers.IO in initWallet(), never on the main thread.
         if (walletInfo == null) {
             walletInfo = WalletInfo(
                 address = "",
@@ -1476,26 +1555,32 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         viewModelScope.launch {
-            // STEP 1: Load balance + assets + tx history immediately from the stored index.
-            // Do NOT wait for reconcile/sweep: users see data in seconds instead of 30+ s.
-            // getLocalBalance() uses getAddressBatch() internally: one Keystore decrypt, then
-            // parallel ElectrumX balance queries.
+            // Run all network fetches in parallel on IO, then apply state in a
+            // single batch on Main to minimize recomposition bursts.
             val balanceDeferred = async(Dispatchers.IO) { wm.getLocalBalance() }
             val addressDeferred = async(Dispatchers.IO) { try { wm.getCurrentAddress() ?: "" } catch (_: Throwable) { "" } }
-            launch { loadOwnedAssets() }
-            launch { loadTransactionHistory() }
+            val assetsDeferred = async(Dispatchers.IO) { loadOwnedAssetsRaw() }
+            val txDeferred = async(Dispatchers.IO) { loadTransactionHistoryRaw() }
 
             val balance = balanceDeferred.await()
             val address = addressDeferred.await()
+            val assets = assetsDeferred.await()
+            val txList = txDeferred.await()
+
+            // Single state batch: one recomposition instead of four
             walletInfo = walletInfo?.copy(
-                // Keep existing address/balance if new load fails (network error)
                 address = address.ifEmpty { walletInfo?.address ?: "" },
                 balanceRvn = balance ?: walletInfo?.balanceRvn,
                 isLoading = false
             )
+            if (!assets.isNullOrEmpty()) ownedAssets = assets
+            if (txList.isNotEmpty()) {
+                txHistory = txList
+                txHistoryTotal = txList.size
+                txHistoryLoadedCount = txList.size
+            }
 
-            // Persist the just-fetched balance so the next cold start can render
-            // it instantly from cache instead of showing "Loading…" again.
+            // Persist balance for next cold start
             if (balance != null) {
                 withContext(Dispatchers.IO) {
                     try {
@@ -3855,10 +3940,6 @@ fun RavenTagApp(
         if (currentTab == AppTab.WALLET && viewModel.hasWallet) {
             delay(150)
             viewModel.warmVisibleIpfsMetadata()
-            // getCurrentAddress()/Keystore and RPC refresh must not run in the
-            // same frame as the tab transition. Cached wallet data renders first.
-            delay(3_850)
-            viewModel.refreshWalletAfterVisible()
         }
     }
 
@@ -4173,9 +4254,9 @@ fun RavenTagApp(
             val settingsEverShown = remember { mutableStateOf(currentTab == AppTab.SETTINGS) }
 
             LaunchedEffect(viewModel.hasWallet, isBrandApp) {
-                delay(800)
+                delay(3_000)
                 walletEverShown.value = true
-                delay(1_200)
+                delay(600)
                 if (isBrandApp) brandEverShown.value = true
                 delay(200)
                 settingsEverShown.value = true
@@ -4190,6 +4271,87 @@ fun RavenTagApp(
             val settingsVisible = currentTab == AppTab.SETTINGS
 
             if (walletEverShown.value) {
+                // Stable lambda references: wrapping in remember prevents new instances
+                // on every RavenTagApp recomposition (e.g. currentTab change), so
+                // WalletScreen can skip recomposition when only visibility changes.
+                val isBrand = io.raventag.app.config.AppConfig.IS_BRAND_APP
+                val rememberOnGenerate: (String) -> Unit = remember(viewModel, scope, s, isBrand, onWalletRoleSave) {
+                    { controlKey: String ->
+                        if (!isBrand) {
+                            viewModel.generateWallet()
+                        } else {
+                            scope.launch {
+                                viewModel.controlKeyValidating = true
+                                viewModel.controlKeyError = null
+                                val role = viewModel.validateControlKey(viewModel.currentVerifyUrl, controlKey)
+                                viewModel.controlKeyValidating = false
+                                if (role == null) {
+                                    viewModel.controlKeyError = s.walletControlKeyInvalid
+                                } else {
+                                    onWalletRoleSave(role, controlKey)
+                                    viewModel.generateWallet()
+                                }
+                            }
+                        }
+                    }
+                }
+                val rememberOnRestore: (String, String) -> Unit = remember(viewModel, scope, s, isBrand, onWalletRoleSave) {
+                    { mnemonic: String, controlKey: String ->
+                        if (!isBrand) {
+                            viewModel.restoreWallet(mnemonic)
+                        } else {
+                            scope.launch {
+                                viewModel.controlKeyValidating = true
+                                viewModel.controlKeyError = null
+                                val role = viewModel.validateControlKey(viewModel.currentVerifyUrl, controlKey)
+                                viewModel.controlKeyValidating = false
+                                if (role == null) {
+                                    viewModel.controlKeyError = s.walletControlKeyInvalid
+                                } else {
+                                    onWalletRoleSave(role, controlKey)
+                                    viewModel.restoreWallet(mnemonic)
+                                }
+                            }
+                        }
+                    }
+                }
+                val rememberOnRefresh: () -> Unit = remember(viewModel) {
+                    {
+                        viewModel.checkElectrumStatus()
+                        viewModel.fetchBlockHeight()
+                        viewModel.fetchRvnPrice()
+                        viewModel.fetchNetworkHashrate()
+                        viewModel.refreshBalance()
+                    }
+                }
+                val rememberOnDelete: () -> Unit = remember(viewModel, onWalletDelete) {
+                    { viewModel.deleteWallet(); onWalletDelete() }
+                }
+                val rememberOnReceive: () -> Unit = remember(viewModel) { { viewModel.showReceive = true } }
+                val rememberOnSend: () -> Unit = remember(viewModel) { { viewModel.showSend = true } }
+                val rememberOnTransfer: (io.raventag.app.ravencoin.OwnedAsset) -> Unit = remember(viewModel) {
+                    { asset: io.raventag.app.ravencoin.OwnedAsset ->
+                        viewModel.prefilledTransferAssetName = asset.name
+                        viewModel.issueMode = when (asset.type) {
+                            io.raventag.app.ravencoin.AssetType.ROOT -> IssueMode.TRANSFER_ROOT
+                            io.raventag.app.ravencoin.AssetType.SUB -> IssueMode.TRANSFER_SUB
+                            io.raventag.app.ravencoin.AssetType.UNIQUE -> IssueMode.TRANSFER
+                        }
+                    }
+                }
+                val rememberOnLoadMoreTx: () -> Unit = remember(viewModel) { { viewModel.loadMoreTransactions() } }
+                val rememberOnRestoreMode: (Boolean) -> Unit = remember(viewModel) {
+                    { restoreActive: Boolean -> viewModel.restoreModeActive = restoreActive }
+                }
+                val rememberOnConsolidate: (() -> Unit)? = remember(viewModel) {
+                    { viewModel.consolidateFunds() }
+                }
+                // Derived walletBalance: read lazily so viewModel.walletInfo changes
+                // don't force RavenTagApp recomposition through this read.
+                val walletBal by remember {
+                    derivedStateOf { viewModel.walletInfo?.balanceRvn ?: 0.0 }
+                }
+
                 TabLayer(visible = walletVisible) {
                     WalletScreen(
                         modifier = Modifier.fillMaxSize(),
@@ -4203,7 +4365,7 @@ fun RavenTagApp(
                         needsConsolidation = viewModel.needsConsolidation,
                         consolidationInProgress = viewModel.consolidationInProgress,
                         autoSweepInProgress = viewModel.autoSweepInProgress,
-                        onConsolidateFunds = { viewModel.consolidateFunds() },
+                        onConsolidateFunds = rememberOnConsolidate,
                         electrumStatus = viewModel.electrumStatus,
                         blockHeight = viewModel.blockHeight,
                         rvnPrice = viewModel.rvnPrice,
@@ -4212,72 +4374,20 @@ fun RavenTagApp(
                         controlKeyValidating = viewModel.controlKeyValidating,
                         controlKeyError = viewModel.controlKeyError,
                         restoreError = viewModel.restoreError,
-                        onGenerateWallet = { controlKey ->
-                            if (!io.raventag.app.config.AppConfig.IS_BRAND_APP) {
-                                viewModel.generateWallet()
-                            } else {
-                                scope.launch {
-                                    viewModel.controlKeyValidating = true
-                                    viewModel.controlKeyError = null
-                                    val role = viewModel.validateControlKey(viewModel.currentVerifyUrl, controlKey)
-                                    viewModel.controlKeyValidating = false
-                                    if (role == null) {
-                                        viewModel.controlKeyError = s.walletControlKeyInvalid
-                                    } else {
-                                        onWalletRoleSave(role, controlKey)
-                                        viewModel.generateWallet()
-                                    }
-                                }
-                            }
-                        },
-                        onRestoreWallet = { mnemonic, controlKey ->
-                            if (!io.raventag.app.config.AppConfig.IS_BRAND_APP) {
-                                viewModel.restoreWallet(mnemonic)
-                            } else {
-                                scope.launch {
-                                    viewModel.controlKeyValidating = true
-                                    viewModel.controlKeyError = null
-                                    val role = viewModel.validateControlKey(viewModel.currentVerifyUrl, controlKey)
-                                    viewModel.controlKeyValidating = false
-                                    if (role == null) {
-                                        viewModel.controlKeyError = s.walletControlKeyInvalid
-                                    } else {
-                                        onWalletRoleSave(role, controlKey)
-                                        viewModel.restoreWallet(mnemonic)
-                                    }
-                                }
-                            }
-                        },
-                        onRefreshBalance = {
-                            viewModel.checkElectrumStatus()
-                            viewModel.fetchBlockHeight()
-                            viewModel.fetchRvnPrice()
-                            viewModel.fetchNetworkHashrate()
-                            viewModel.refreshBalance()
-                        },
-                        onDeleteWallet = {
-                            viewModel.deleteWallet()
-                            onWalletDelete()
-                        },
-                        onReceive = { viewModel.showReceive = true },
-                        onSend = { viewModel.showSend = true },
-                        onTransferAsset = { asset ->
-                            viewModel.prefilledTransferAssetName = asset.name
-                            viewModel.issueMode = when (asset.type) {
-                                io.raventag.app.ravencoin.AssetType.ROOT -> IssueMode.TRANSFER_ROOT
-                                io.raventag.app.ravencoin.AssetType.SUB -> IssueMode.TRANSFER_SUB
-                                io.raventag.app.ravencoin.AssetType.UNIQUE -> IssueMode.TRANSFER
-                            }
-                        },
-                        walletBalance = viewModel.walletInfo?.balanceRvn ?: 0.0,
+                        onGenerateWallet = rememberOnGenerate,
+                        onRestoreWallet = rememberOnRestore,
+                        onRefreshBalance = rememberOnRefresh,
+                        onDeleteWallet = rememberOnDelete,
+                        onReceive = rememberOnReceive,
+                        onSend = rememberOnSend,
+                        onTransferAsset = rememberOnTransfer,
+                        walletBalance = walletBal,
                         txHistory = viewModel.txHistory,
                         txHistoryLoading = viewModel.txHistoryLoading,
                         txHistoryTotal = viewModel.txHistoryTotal,
                         txHistoryLoadedCount = viewModel.txHistoryLoadedCount,
-                        onLoadMoreTransactions = { viewModel.loadMoreTransactions() },
-                        onRestoreModeChange = { restoreActive ->
-                            viewModel.restoreModeActive = restoreActive
-                        }
+                        onLoadMoreTransactions = rememberOnLoadMoreTx,
+                        onRestoreModeChange = rememberOnRestoreMode
                     )
                 }
             }
