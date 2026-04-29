@@ -914,24 +914,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 // One Keystore decrypt + one pipelined batch for all asset balances.
                 val (basic, detectedNeedsConsolidation) = withContext(Dispatchers.IO) {
-                    val currentIndex = wm.getCurrentAddressIndex()
-                    val addresses = wm.getAddressBatch(0, 0..currentIndex).values.toList()
+                    val address = wm.getCurrentAddress()
+                        ?: return@withContext emptyList<io.raventag.app.ravencoin.OwnedAsset>() to false
+                    val addresses = listOf(address)
                     val node = io.raventag.app.wallet.RavencoinPublicNode(getApplication())
 
                     // Fetch both asset balances and RVN balance in parallel
                     val (totals, _) = coroutineScope {
                         val assetsDeferred = async { node.getTotalAssetBalances(addresses) }
-                        val rvnDeferred = async { 
+                        val rvnDeferred = async {
                             try { node.getTotalBalance(addresses) } catch (_: Exception) { 0.0 }
                         }
-                        
+
                         Pair(assetsDeferred.await(), rvnDeferred.await())
                     }
                     
                     // Consolidation banner logic:
-                    // Trigger if ANY address BEFORE the current one (0 until currentIndex) holds funds.
-                    // The current address (currentIndex) is safe until it spends, and will be
-                    // cycled automatically during the next outgoing transaction.
+                    // Trigger if ANY address BEFORE the current one holds funds.
+                    val currentIndex = wm.getCurrentAddressIndex()
                     val hasFundsOnOldAddresses = if (currentIndex > 0) {
                         val oldAddresses = wm.getAddressBatch(0, 0 until currentIndex).values.toList()
                         var hasOldFunds = try {
@@ -1137,8 +1137,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val wm = walletManager ?: return null
         return try {
             withContext(Dispatchers.IO) {
-                val currentIndex = wm.getCurrentAddressIndex()
-                val addresses = wm.getAddressBatch(0, 0..currentIndex).values.toList()
+                val address = wm.getCurrentAddress() ?: return@withContext null
+                val addresses = listOf(address)
                 val node = io.raventag.app.wallet.RavencoinPublicNode(getApplication())
                 val totals = try { node.getTotalAssetBalances(addresses) } catch (_: Exception) { emptyMap() }
                 val previous = ownedAssets?.associateBy { it.name } ?: emptyMap()
@@ -1776,8 +1776,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         try {
             // One Keystore decrypt + one pipelined batch for all asset balances
             val (totals, detectedNeedsConsolidation) = withContext(Dispatchers.IO) {
-                val currentIndex = wm.getCurrentAddressIndex()
-                val addresses = wm.getAddressBatch(0, 0..currentIndex).values.toList()
+                val address = wm.getCurrentAddress()
+                    ?: return@withContext emptyList<io.raventag.app.ravencoin.OwnedAsset>() to false
+                val addresses = listOf(address)
                 val node = io.raventag.app.wallet.RavencoinPublicNode(getApplication())
                 val (assets, _) = coroutineScope {
                     val assetsDeferred = async { node.getTotalAssetBalances(addresses) }
@@ -1803,6 +1804,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }.sortedWith(compareBy({ it.type.ordinal }, { it.name }))
 
                 // Consolidation banner logic: only trigger if addresses before currentIndex have funds
+                val currentIndex = wm.getCurrentAddressIndex()
                 val hasFundsOnOldAddresses = if (currentIndex > 0) {
                     val oldAddresses = wm.getAddressBatch(0, 0 until currentIndex).values.toList()
                     var hasOldFunds = try {
