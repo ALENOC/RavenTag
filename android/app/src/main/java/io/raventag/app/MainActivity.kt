@@ -2424,6 +2424,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** True = send succeeded, false = failed, null = not yet run. */
     var sendSuccess by mutableStateOf<Boolean?>(null)
 
+    /** Progress log lines shown during send to keep the UI responsive. */
+    var sendProgressLog by mutableStateOf<List<String>>(emptyList())
+
     /** True when the fee estimate is unavailable (ElectrumX offline or no UTXOs). */
     var sendFeeUnavailable by mutableStateOf(false)
 
@@ -2461,6 +2464,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             sendLoading = true
             sendFeeUnavailable = false
+            sendProgressLog = emptyList()
 
             try {
                 // Show broadcasting notification (D-03, D-05)
@@ -2468,7 +2472,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
                 // Execute send with retry (D-06)
                 val result = RetryUtils.retryWithBackoff {
-                    withContext(Dispatchers.IO) { wm.sendRvnLocal(toAddress, amount) }
+                    withContext(Dispatchers.IO) {
+                        wm.sendRvnLocal(toAddress, amount) { msg ->
+                            sendProgressLog = sendProgressLog + msg
+                        }
+                    }
                 }
 
                 val txid = result.substringBefore("|fee:")
@@ -2486,6 +2494,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 // Update UI state
                 sendLoading = false
                 sendSuccess = true
+                sendProgressLog = emptyList()
                 sendResult = s.walletSendResult.replace("%1", amount.toString())
                     .replace("%2", "%.5f".format(feeRvn))
                     .replace("%3", "${txid.take(20)}...")
@@ -2506,6 +2515,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 loadWalletBalance()
             } catch (e: io.raventag.app.wallet.FeeUnavailableException) {
                 sendLoading = false
+                sendProgressLog = emptyList()
                 sendFeeUnavailable = true
                 TransactionNotificationHelper.showFailed(getApplication(), "Fee unavailable: ${e.message}")
             } catch (e: Throwable) {
@@ -2514,6 +2524,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
                 val s = getStrings()
                 sendLoading = false
+                sendProgressLog = emptyList()
                 sendSuccess = false
                 sendResult = s.walletSendError.replace("%1", e.message ?: "Unknown error")
 
@@ -4099,6 +4110,7 @@ fun RavenTagApp(
             isLoading = viewModel.sendLoading,
             resultMessage = viewModel.sendResult,
             resultSuccess = viewModel.sendSuccess,
+            progressLog = viewModel.sendProgressLog,
             feeUnavailable = viewModel.sendFeeUnavailable,
             estimatedFee = viewModel.estimatedFee,
             feeEstimator = sendFeeEstimator,
