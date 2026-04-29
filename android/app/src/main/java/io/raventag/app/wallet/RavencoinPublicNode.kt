@@ -937,22 +937,37 @@ class RavencoinPublicNode(private val context: Context) {
                         .map { "${it.utxo.txid}:${it.utxo.outputIndex}" }
                         .toMutableSet()
                     val mode = if (fetchMissingAssetUtxos) "all asset UTXOs" else "owner tokens"
-                    android.util.Log.i("RavencoinPublicNode", "  secondary: get_balance has ${assetBalances.size}; fetching $mode via getAssetUtxosFull")
-                    for (ab in assetBalances) {
-                        if (!fetchMissingAssetUtxos && !ab.name.endsWith("!")) continue
-                        try {
-                            val utxos = getAssetUtxosFull(address, ab.name)
+                    android.util.Log.i("RavencoinPublicNode", "  secondary: get_balance has ${assetBalances.size}; fetching $mode via getAssetUtxosFull (parallel)")
+                    val toFetch = assetBalances.filter { fetchMissingAssetUtxos || it.name.endsWith("!") }
+                    val executor = java.util.concurrent.Executors.newFixedThreadPool(
+                        minOf(toFetch.size, 8)
+                    )
+                    try {
+                        val futures = toFetch.map { ab ->
+                            executor.submit<java.util.AbstractMap.SimpleEntry<String, List<AssetUtxo>>> {
+                                try {
+                                    java.util.AbstractMap.SimpleEntry(ab.name, getAssetUtxosFull(address, ab.name))
+                                } catch (e: Exception) {
+                                    android.util.Log.w("RavencoinPublicNode", "  secondary: getAssetUtxosFull failed for ${ab.name}: ${e.message}")
+                                    java.util.AbstractMap.SimpleEntry(ab.name, emptyList<AssetUtxo>())
+                                }
+                            }
+                        }
+                        for (future in futures) {
+                            val entry = future.get()
+                            val name = entry.key
+                            val utxos = entry.value
                             val freshUtxos = utxos.filter { assetUtxo ->
                                 existingAssetOutpoints.add("${assetUtxo.utxo.txid}:${assetUtxo.utxo.outputIndex}")
                             }
                             if (freshUtxos.isNotEmpty()) {
-                                assetUtxosMap.getOrPut(ab.name) { mutableListOf() }.addAll(freshUtxos)
+                                assetUtxosMap.getOrPut(name) { mutableListOf() }.addAll(freshUtxos)
                                 assetOutpoints.addAll(freshUtxos.map { "${it.utxo.txid}:${it.utxo.outputIndex}" })
-                                android.util.Log.i("RavencoinPublicNode", "  secondary: ${ab.name} -> ${freshUtxos.size} additional UTXO(s) via getAssetUtxosFull")
+                                android.util.Log.i("RavencoinPublicNode", "  secondary: ${name} -> ${freshUtxos.size} additional UTXO(s) via getAssetUtxosFull")
                             }
-                        } catch (e: Exception) {
-                            android.util.Log.w("RavencoinPublicNode", "  secondary: getAssetUtxosFull failed for ${ab.name}: ${e.message}")
                         }
+                    } finally {
+                        executor.shutdown()
                     }
                     // For non-owner assets: try re-parsing from cached raw txs
                     val balanceNames = assetBalances.map { it.name }.toSet()
