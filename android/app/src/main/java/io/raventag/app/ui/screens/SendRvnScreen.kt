@@ -50,6 +50,7 @@ fun SendRvnScreen(
     isLoading: Boolean,
     resultMessage: String?,
     resultSuccess: Boolean?,
+    progressLog: List<String> = emptyList(),
     feeUnavailable: Boolean = false,
     estimatedFee: Double = 0.0,
     feeEstimator: FeeEstimator? = null,
@@ -376,6 +377,38 @@ fun SendRvnScreen(
                 Icon(Icons.Default.Send, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(s.walletSendConfirm, fontWeight = FontWeight.SemiBold)
+            }
+        }
+
+        // Progress log: shows step-by-step status while the transaction is being built.
+        if (isLoading && progressLog.isNotEmpty()) {
+            Spacer(modifier = Modifier.height(12.dp))
+            Card(
+                colors = CardDefaults.cardColors(containerColor = RavenCard),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(12.dp)) {
+                    progressLog.forEachIndexed { i, msg ->
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(vertical = 2.dp)
+                        ) {
+                            val isLast = i == progressLog.lastIndex
+                            Text(
+                                if (isLast) "●" else "✓",
+                                color = if (isLast) RavenOrange else RavenMuted,
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                msg,
+                                color = if (isLast) Color.White else RavenMuted,
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    }
+                }
             }
         }
     }
