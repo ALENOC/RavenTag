@@ -1365,14 +1365,9 @@ class WalletManager(private val context: Context) {
         try {
             val node = RavencoinPublicNode(context)
             val currentIndex = getCurrentAddressIndex()
-            val addresses = getAddressBatch(0, 0..currentIndex).values.toList()
-            // If the Keystore is locked (device asleep + screen lock),
-            // getSeed() returns null and getAddressBatch yields an empty map.
-            // getTotalBalance(empty) returns 0.0, which would overwrite the
-            // last-known correct balance. Return null so callers preserve
-            // the cached balance instead of flashing "0.00000000 RVN".
-            if (addresses.isEmpty()) return@withContext null
-            node.getTotalBalance(addresses)
+            val address = getAddress(0, currentIndex)
+                ?: return@withContext null
+            node.getTotalBalance(listOf(address))
         } catch (_: Exception) { null }
     }
 
@@ -1443,36 +1438,9 @@ class WalletManager(private val context: Context) {
         data class OldFunds(val index: Int, val rvn: List<Utxo>, val assets: Map<String, List<AssetUtxo>>)
         val oldFunds = mutableListOf<OldFunds>()
         if (currentIndex > 0) {
-            val oldAddrBatch = getAddressBatch(0, 0 until currentIndex)
-            val oldAddrList = (0 until currentIndex).mapNotNull { i ->
-                oldAddrBatch[i]?.let { i to it }
-            }
-            // Single batch call to find which old addresses have funds before fetching UTXOs.
-            var fundedAddrs = try {
-                node.getAddressesWithFunds(oldAddrList.map { it.second })
-            } catch (_: Exception) { emptySet() }
-            // Secondary check: getAddressesWithFunds may miss asset-only addresses
-            // if get_balance?asset=true batch returns all errors (same fix as consolidation banner).
-            if (fundedAddrs.isEmpty()) {
-                fundedAddrs = oldAddrList.mapNotNull { (_, addr) ->
-                    if (node.hasAnyUtxos(addr)) addr else null
-                }.toSet()
-            }
-
-            if (fundedAddrs.isNotEmpty()) {
-                android.util.Log.i("WalletManager", "sendRvn: ${fundedAddrs.size} old address(es) with funds, fetching UTXOs")
-                try {
-                    for ((index, addr) in oldAddrList) {
-                        if (addr !in fundedAddrs) continue
-                        val r = node.getUtxosAndAllAssetUtxosBatch(addr, fetchMissingAssetUtxos = true)
-                        if (r.first.isNotEmpty() || r.third.isNotEmpty()) {
-                            oldFunds.add(OldFunds(index, r.first, r.third))
-                        }
-                    }
-                } catch (e: Exception) {
-                    android.util.Log.e("WalletManager", "sendRvn: old funds fetch failed", e)
-                }
-            }
+            // Skip old-address scan during send: the periodic sweep already
+            // consolidates any stray funds into the current address. Scanning
+            // all historical addresses here added 40-90s to every send.
         }
 
         val mergedAssets = mutableMapOf<String, MutableList<AssetUtxo>>()

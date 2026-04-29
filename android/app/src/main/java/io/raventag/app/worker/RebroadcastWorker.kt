@@ -3,7 +3,6 @@ package io.raventag.app.worker
 import android.content.Context
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
-import androidx.work.Data
 import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
@@ -15,6 +14,7 @@ import io.raventag.app.wallet.cache.PendingConsolidationDao
 import io.raventag.app.wallet.cache.ReservedUtxoDao
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.File
 import java.util.concurrent.TimeUnit
 
 /**
@@ -28,6 +28,10 @@ import java.util.concurrent.TimeUnit
  * D-27: consolidation ALWAYS broadcasts. The only constraint is
  * NetworkType.CONNECTED so we don't waste cycles offline.
  * No battery/power-save constraints that would defer broadcast.
+ *
+ * Raw transaction hex is stored in an internal file to avoid the
+ * WorkManager Data serialization limit of 10240 bytes (large multi-asset
+ * transactions easily exceed this).
  */
 class RebroadcastWorker(
     ctx: Context,
@@ -40,7 +44,7 @@ class RebroadcastWorker(
         io.raventag.app.wallet.health.NodeHealthMonitor.init(applicationContext)
 
         val txid = inputData.getString(KEY_TXID) ?: return@withContext Result.failure()
-        val rawHex = inputData.getString(KEY_RAW_HEX) ?: return@withContext Result.failure()
+        val hexPath = inputData.getString(KEY_RAW_HEX_PATH) ?: return@withContext Result.failure()
         val attempt = inputData.getInt(KEY_ATTEMPT, 0)
 
         if (attempt >= MAX_ATTEMPTS) {
@@ -55,6 +59,9 @@ class RebroadcastWorker(
             )
             return@withContext Result.success()
         }
+
+        val hexFile = File(hexPath)
+        val rawHex = if (hexFile.exists()) hexFile.readText() else return@withContext Result.failure()
 
         val node = RavencoinPublicNode(applicationContext)
 
@@ -75,6 +82,7 @@ class RebroadcastWorker(
         if (confirmed) {
             ReservedUtxoDao.releaseFor(txid)
             PendingConsolidationDao.clear(txid)
+            hexFile.delete()
             return@withContext Result.success()
         }
 
@@ -105,11 +113,13 @@ class RebroadcastWorker(
 
     companion object {
         const val KEY_TXID = "txid"
-        const val KEY_RAW_HEX = "raw_hex"
+        const val KEY_RAW_HEX_PATH = "raw_hex_path"
         const val KEY_ATTEMPT = "attempt"
         const val MAX_ATTEMPTS = 5
         // D-25 ladder: delays AFTER attempt N (attempt 0 = first scheduled 30 min later)
         val DELAY_LADDER_MINUTES: List<Long> = listOf(30L, 60L, 120L, 240L, 480L)
+
+        private const val HEX_DIR = "rebroadcast_hex"
 
         /** Public entry used by WalletManager after a successful broadcast. */
         fun schedule(
@@ -119,6 +129,11 @@ class RebroadcastWorker(
             attempt: Int,
             initialDelayMinutes: Long
         ) {
+            val dir = File(context.filesDir, HEX_DIR)
+            dir.mkdirs()
+            val hexFile = File(dir, "$txid.hex")
+            hexFile.writeText(rawHex)
+
             val req = OneTimeWorkRequestBuilder<RebroadcastWorker>()
                 .setInitialDelay(initialDelayMinutes, TimeUnit.MINUTES)
                 .setConstraints(
@@ -129,7 +144,7 @@ class RebroadcastWorker(
                 .setInputData(
                     workDataOf(
                         KEY_TXID to txid,
-                        KEY_RAW_HEX to rawHex,
+                        KEY_RAW_HEX_PATH to hexFile.absolutePath,
                         KEY_ATTEMPT to attempt
                     )
                 )
