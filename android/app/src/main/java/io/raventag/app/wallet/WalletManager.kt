@@ -1371,17 +1371,21 @@ class WalletManager(private val context: Context) {
         } catch (_: Exception) { null }
     }
 
-    suspend fun sendRvnLocal(toAddress: String, amountRvn: Double): String = withContext(Dispatchers.IO) {
+    suspend fun sendRvnLocal(toAddress: String, amountRvn: Double, onProgress: ((String) -> Unit)? = null): String = withContext(Dispatchers.IO) {
         var currentIndex = getCurrentAddressIndex()
         var address = getAddress(0, currentIndex) ?: error("No wallet")
         val node = RavencoinPublicNode(context)
+
+        onProgress?.invoke("Preparing transaction...")
 
         // Use cached UTXOs if still fresh (avoids slow per-asset getAssetUtxosFull calls)
         val cached = getCachedUtxos(address)
         val (utxoResult, satPerByte) = if (cached != null) {
             android.util.Log.i("WalletManager", "sendRvn: using cached UTXOs for $address")
+            onProgress?.invoke("UTXOs cached, fetching fee rate...")
             Pair(cached, node.getMinRelayFeeRateSatPerByte())
         } else {
+            onProgress?.invoke("Fetching UTXOs and assets...")
             coroutineScope {
                 val utxosDeferred = async { node.getUtxosAndAllAssetUtxosBatch(address, fetchMissingAssetUtxos = true) }
                 val feeDeferred   = async { node.getMinRelayFeeRateSatPerByte() }
@@ -1449,6 +1453,9 @@ class WalletManager(private val context: Context) {
 
         val hasAssets   = mergedAssets.isNotEmpty()
         val hasOldFunds = oldFunds.isNotEmpty()
+        val assetCount = mergedAssets.size
+        if (assetCount > 0) onProgress?.invoke("Found $assetCount asset(s), building transaction...")
+        else onProgress?.invoke("Building transaction...")
 
         var oldKeyPairs: Map<Int, Pair<ByteArray, ByteArray>> = emptyMap()
 
@@ -1497,11 +1504,8 @@ class WalletManager(private val context: Context) {
                     feeSat            = feeSatActual,
                     changeAddress     = nextAddress
                 )
+                onProgress?.invoke("Broadcasting transaction...")
                 txid = node.broadcastWithAllServers(tx.hex)
-                broadcastRawHex = tx.hex
-                consumedUtxos = rvnUtxos + oldFunds.flatMap { it.rvn } +
-                    assetUtxosMap.values.flatten().map { it.utxo } +
-                    oldFunds.flatMap { it.assets.values.flatten().map { au -> au.utxo } }
 
                 android.util.Log.i("WalletManager", "sendRvn atomic: sent $amountRvn RVN to $toAddress, " +
                     "all assets and remaining RVN to $nextAddress, txid=$txid")
@@ -1542,6 +1546,7 @@ class WalletManager(private val context: Context) {
                     privKeyBytes = privKey!!,
                     pubKeyBytes = pubKey
                 )
+                onProgress?.invoke("Broadcasting transaction...")
                 txid = node.broadcastWithAllServers(tx.hex)
                 broadcastRawHex = tx.hex
                 consumedUtxos = rvnUtxos
