@@ -617,11 +617,14 @@ fun WalletScreen(
                     onRestore = {
                         // D-14: if the current wallet holds funds or assets, gate the
                         // restore with a destructive-confirm dialog and a forced-backup
-                        // variant when `backup_completed` is false.
+                        // variant when `backup_completed` is false. Skip the gate when
+                        // no wallet is actually stored: cached balance/asset state can
+                        // linger across uninstall/reinstall and must not block a
+                        // first-time mnemonic restore.
                         val phrase = restoreWords.joinToString(" ")
                         val assetsCount = viewModel.ownedAssets?.size ?: 0
                         val hasFunds = (viewModel.walletInfo?.balanceRvn ?: 0.0) > 0.0 || assetsCount > 0
-                        if (hasFunds) {
+                        if (hasFunds && hasWallet) {
                             pendingRestoreArgs = phrase to controlKey
                             showRestoreConfirmDialog = true
                         } else {
