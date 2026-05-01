@@ -271,27 +271,47 @@ class RavencoinPublicNode(private val context: Context) {
      * @return Map of asset name to total balance; empty if no assets or network failure.
      */
     fun getTotalAssetBalances(addresses: List<String>): Map<String, Double> {
-        if (addresses.isEmpty()) return emptyMap()
+        return getBalanceAndAssets(addresses).second
+    }
+
+    /**
+     * Single-batch combined fetch: aggregates RVN balance and per-asset balances
+     * across [addresses] in one pipelined `blockchain.scripthash.get_balance(asset=true)`
+     * batch. Replaces two separate batches (getTotalBalance + getTotalAssetBalances)
+     * with one TLS roundtrip.
+     *
+     * @return Pair(totalRvn, assetMap). Both balances are in human-readable units
+     *         (divided by 10^8). Owner-token "!" assets are included in assetMap.
+     */
+    fun getBalanceAndAssets(addresses: List<String>): Pair<Double, Map<String, Double>> {
+        if (addresses.isEmpty()) return 0.0 to emptyMap()
         val requests = addresses.map { addr ->
             "blockchain.scripthash.get_balance" to listOf(addressToScripthash(addr), true) as List<Any>
         }
         val responses = callWithFailoverBatch(requests)
+        var rvnTotal = 0L
         val totals = mutableMapOf<String, Long>()
-        addresses.forEachIndexed { i, addr ->
+        addresses.forEachIndexed { i, _ ->
             val resp = responses.getOrNull(i) ?: return@forEachIndexed
             if (resp == null || !resp.isJsonObject) return@forEachIndexed
-            for ((name, value) in resp.asJsonObject.entrySet()) {
-                if (name == "rvn" || name == "RVN") continue
+            val obj = resp.asJsonObject
+            // Top-level confirmed/unconfirmed = RVN balance
+            try {
+                rvnTotal += (obj.get("confirmed")?.asLong ?: 0L) +
+                            (obj.get("unconfirmed")?.asLong ?: 0L)
+            } catch (_: Exception) {}
+            for ((name, value) in obj.entrySet()) {
+                if (name == "confirmed" || name == "unconfirmed" || name == "rvn" || name == "RVN") continue
                 try {
-                    val obj = value.asJsonObject
-                    val sat = (obj.get("confirmed")?.asLong ?: 0L) + (obj.get("unconfirmed")?.asLong ?: 0L)
+                    val a = value.asJsonObject
+                    val sat = (a.get("confirmed")?.asLong ?: 0L) + (a.get("unconfirmed")?.asLong ?: 0L)
                     if (sat > 0) {
-                                        totals[name] = (totals[name] ?: 0L) + sat
+                        totals[name] = (totals[name] ?: 0L) + sat
                     }
                 } catch (_: Exception) {}
             }
         }
-        return totals.mapValues { (_, sat) -> sat / 1e8 }
+        return (rvnTotal / 1e8) to totals.mapValues { (_, sat) -> sat / 1e8 }
     }
 
     /**

@@ -63,7 +63,9 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import io.raventag.app.nfc.NfcCounterCache
 import io.raventag.app.nfc.Ntag424Configurator
@@ -723,11 +725,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /**
      * Owned assets for the wallet address (null = not yet loaded, empty = none found).
      * Items are progressively enriched with IPFS metadata after the initial load.
+     * Initialized eagerly from disk cache so the list and IPFS previews render
+     * on the first frame after cold start, with no empty flash.
      */
-    var ownedAssets by mutableStateOf<List<OwnedAsset>?>(emptyList())
+    var ownedAssets by mutableStateOf<List<OwnedAsset>?>(loadAssetsCacheBoot(application))
 
     /** True while the asset list is being fetched. */
-    var assetsLoading by mutableStateOf(false)
+    // Default to true: at cold start the network query has not yet confirmed
+    // whether the wallet truly has zero assets, so we must not show the
+    // "nessun asset trovato" empty card during the brief gap before the first
+    // network response. The first successful load (cache hydrate or network)
+    // flips this to false.
+    var assetsLoading by mutableStateOf(true)
 
     /** True if the last asset-list fetch failed with an error. */
     var assetsLoadError by mutableStateOf(false)
@@ -754,12 +763,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * rendering does not have to re-parse IPFS metadata before showing images.
      */
     private data class CachedAsset(
-        val name: String,
-        val balance: Double,
-        val typeOrdinal: Int,
-        val ipfsHash: String?,
-        val imageUrl: String? = null,
-        val description: String? = null
+        @com.google.gson.annotations.SerializedName("name") val name: String,
+        @com.google.gson.annotations.SerializedName("balance") val balance: Double,
+        @com.google.gson.annotations.SerializedName("typeOrdinal") val typeOrdinal: Int,
+        @com.google.gson.annotations.SerializedName("ipfsHash") val ipfsHash: String?,
+        @com.google.gson.annotations.SerializedName("imageUrl") val imageUrl: String? = null,
+        @com.google.gson.annotations.SerializedName("description") val description: String? = null
     )
 
     private data class StartupWalletCache(
@@ -787,8 +796,88 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             val json = com.google.gson.Gson().toJson(cached)
             getApplication<Application>().getSharedPreferences("raventag_assets_cache", Application.MODE_PRIVATE)
-                .edit().putString(addr, json).apply()
+                .edit()
+                .putString(addr, json)
+                // "_boot" sentinel: address-agnostic copy used at ViewModel init
+                // before walletManager has resolved the current address. Lets
+                // the asset list (and IPFS previews) render on the first frame
+                // of cold start without a flash of empty state.
+                .putString("_boot", json)
+                .apply()
         } catch (_: Exception) {}
+    }
+
+    companion object {
+        /**
+         * Read the boot-time asset cache without needing a WalletManager.
+         * Called from the ownedAssets state initializer so the very first
+         * recomposition after cold start shows the previous session's list.
+         */
+        fun loadAssetsCacheBoot(app: Application): List<OwnedAsset>? {
+            return try {
+                val prefs = app.getSharedPreferences("raventag_assets_cache", Application.MODE_PRIVATE)
+                android.util.Log.i("MainActivity", "loadAssetsCacheBoot: keys=${prefs.all.keys}")
+                // Prefer the address-agnostic `_boot` snapshot. Fall back to the
+                // largest per-address entry for compatibility with caches written
+                // before `_boot` existed.
+                val json = prefs.getString("_boot", null) ?: run {
+                    val all = prefs.all
+                    var best: String? = null
+                    var bestLen = -1
+                    for ((k, v) in all) {
+                        if (k == "_boot") continue
+                        val s = v as? String ?: continue
+                        if (s.length > bestLen) { bestLen = s.length; best = s }
+                    }
+                    best
+                } ?: return emptyList()
+                android.util.Log.i("MainActivity", "loadAssetsCacheBoot: json length=${json.length}, prefix='${json.take(80)}'")
+                // Manual JSON parse rather than Gson reflection: prior R8 builds
+                // obfuscated CachedAsset field names to a/b/c/d/e/f. This parser
+                // accepts both the new stable names and any legacy single-letter
+                // mapping by position.
+                val arr = try { com.google.gson.JsonParser.parseString(json).asJsonArray } catch (_: Exception) { null }
+                    ?: return emptyList()
+                val cached = arr.mapNotNull { el ->
+                    try {
+                        val o = el.asJsonObject
+                        fun str(vararg keys: String): String? {
+                            for (k in keys) if (o.has(k) && !o.get(k).isJsonNull) return o.get(k).asString
+                            return null
+                        }
+                        fun dbl(vararg keys: String): Double? {
+                            for (k in keys) if (o.has(k) && !o.get(k).isJsonNull) return o.get(k).asDouble
+                            return null
+                        }
+                        fun int(vararg keys: String): Int? {
+                            for (k in keys) if (o.has(k) && !o.get(k).isJsonNull) return o.get(k).asInt
+                            return null
+                        }
+                        val name = str("name", "a") ?: return@mapNotNull null
+                        val balance = dbl("balance", "b") ?: 0.0
+                        val typeOrdinal = int("typeOrdinal", "c") ?: 0
+                        val ipfsHash = str("ipfsHash", "d")
+                        val imageUrl = str("imageUrl", "e")
+                        val description = str("description", "f")
+                        CachedAsset(name, balance, typeOrdinal, ipfsHash, imageUrl, description)
+                    } catch (_: Exception) { null }
+                }
+                android.util.Log.i("MainActivity", "loadAssetsCacheBoot: parsed ${cached.size} CachedAsset entries")
+                val result = cached.map { ca ->
+                    io.raventag.app.ravencoin.OwnedAsset(
+                        name = ca.name,
+                        balance = ca.balance,
+                        type = io.raventag.app.ravencoin.AssetType.values().getOrNull(ca.typeOrdinal)
+                            ?: io.raventag.app.ravencoin.AssetType.ROOT,
+                        ipfsHash = ca.ipfsHash,
+                        imageUrl = ca.imageUrl,
+                        description = ca.description
+                    )
+                }
+                android.util.Log.i("MainActivity", "loadAssetsCacheBoot: returning ${result.size} cached assets")
+                result
+            } catch (_: Exception) { emptyList() }
+        }
     }
 
     private fun loadAssetsCache(): List<OwnedAsset>? {
@@ -913,10 +1002,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
             try {
                 // One Keystore decrypt + one pipelined batch for all asset balances.
+                // Asset UTXOs can live on any address in 0..currentIndex (each tx
+                // rotates), so we must query the full set, not just the current one.
                 val (basic, detectedNeedsConsolidation) = withContext(Dispatchers.IO) {
-                    val address = wm.getCurrentAddress()
-                        ?: return@withContext emptyList<io.raventag.app.ravencoin.OwnedAsset>() to false
-                    val addresses = listOf(address)
+                    val currentIdx = wm.getCurrentAddressIndex()
+                    val addresses = wm.getAddressBatch(0, 0..currentIdx).values.toList()
+                    if (addresses.isEmpty()) return@withContext emptyList<io.raventag.app.ravencoin.OwnedAsset>() to false
                     val node = io.raventag.app.wallet.RavencoinPublicNode(getApplication())
 
                     // Fetch both asset balances and RVN balance in parallel
@@ -1137,8 +1228,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val wm = walletManager ?: return null
         return try {
             withContext(Dispatchers.IO) {
-                val address = wm.getCurrentAddress() ?: return@withContext null
-                val addresses = listOf(address)
+                val currentIdx = wm.getCurrentAddressIndex()
+                val addresses = wm.getAddressBatch(0, 0..currentIdx).values.toList()
+                if (addresses.isEmpty()) return@withContext null
                 val node = io.raventag.app.wallet.RavencoinPublicNode(getApplication())
                 val totals = try { node.getTotalAssetBalances(addresses) } catch (_: Exception) { emptyMap() }
                 val previous = ownedAssets?.associateBy { it.name } ?: emptyMap()
@@ -1494,43 +1586,192 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     return@launch
                 }
 
-                // Discover the correct address index on the blockchain.
-                // isGenerating stays true so WalletSetupCard shows a spinner, not the form.
-                try {
-                    wm.discoverCurrentIndex()
-                } catch (_: Exception) {
-                    Log.w("MainActivity", "discoverCurrentIndex failed, using index 0")
-                }
-
-                val address = wm.getCurrentAddress() ?: ""
-                walletInfo = WalletInfo(address = address, balanceRvn = null, isLoading = true)
+                // Show wallet shell immediately with a progress message so the user
+                // never sees a "0 RVN" empty state during discovery.
+                walletInfo = WalletInfo(
+                    address = "",
+                    balanceRvn = null,
+                    isLoading = true,
+                    loadingMessage = "Searching for your wallet on the blockchain..."
+                )
                 hasWallet = true
 
-                // Parallel restore: load balance, assets, and history simultaneously
+                // Speculative range covers the vast majority of wallets in one shot.
+                // While discoverCurrentIndex is running, we already pre-derive
+                // 0..SPECULATIVE_RANGE and fire balance + asset + tx queries on it
+                // in parallel. If discover lands within this range (almost always),
+                // results are valid immediately. Otherwise we fetch the delta.
+                val SPECULATIVE_RANGE = 256
+
+                val node = io.raventag.app.wallet.RavencoinPublicNode(getApplication())
+
                 coroutineScope {
-                    val balanceDeferred = async(Dispatchers.IO) {
-                        RetryUtils.retryWithBackoff {
-                            loadWalletBalanceInternal(wm)
+                    val discoverDeferred = async(Dispatchers.IO) {
+                        try {
+                            wm.discoverCurrentIndex { progress ->
+                                viewModelScope.launch(Dispatchers.Main) {
+                                    walletInfo = walletInfo?.copy(loadingMessage = progress)
+                                }
+                            }
+                        } catch (e: Exception) {
+                            Log.w("MainActivity", "discoverCurrentIndex failed, using index 0", e)
+                            0
                         }
                     }
 
-                    val assetsDeferred = async(Dispatchers.IO) {
-                        RetryUtils.retryWithBackoff {
-                            loadOwnedAssetsInternal(wm)
+                    // Pre-derive speculative range (one Keystore decrypt) and fire
+                    // combined balance+asset query in parallel with discover.
+                    val speculativeDeferred = async(Dispatchers.IO) {
+                        try {
+                            val addrs = wm.getAddressBatch(0, 0..SPECULATIVE_RANGE).values.toList()
+                            if (addrs.isEmpty()) return@async Triple(0.0, emptyMap<String, Double>(), addrs)
+                            val (rvn, assets) = node.getBalanceAndAssets(addrs)
+                            Triple(rvn, assets, addrs)
+                        } catch (e: Exception) {
+                            Log.w("MainActivity", "speculative balance+assets failed", e)
+                            Triple(0.0, emptyMap<String, Double>(), emptyList<String>())
                         }
                     }
 
-                    val historyDeferred = async(Dispatchers.IO) {
-                        RetryUtils.retryWithBackoff {
-                            loadTransactionHistoryInternal(wm)
+                    val speculativeTxDeferred = async(Dispatchers.IO) {
+                        try {
+                            val addrs = wm.getAddressBatch(0, 0..SPECULATIVE_RANGE)
+                            val ownedSet = addrs.values.toSet()
+                            addrs.values.map { addr ->
+                                async {
+                                    try { node.getTransactionHistory(addr, limit = txHistoryPageSize, ownedAddresses = ownedSet) }
+                                    catch (_: Throwable) { emptyList() }
+                                }
+                            }.awaitAll().flatten()
+                        } catch (e: Exception) {
+                            Log.w("MainActivity", "speculative tx history failed", e)
+                            emptyList()
                         }
                     }
 
-                    // Wait for all three operations to complete
-                    awaitAll(balanceDeferred, assetsDeferred, historyDeferred)
+                    val discoveredIdx = discoverDeferred.await()
+                    var (rvn, assets, addrs) = speculativeDeferred.await()
+                    var txList = speculativeTxDeferred.await()
+                    Log.i("MainActivity", "restoreWallet: speculative rvn=$rvn assets=${assets.size} discoveredIdx=$discoveredIdx")
+
+                    // Delta fetch if the discovered index sits beyond the speculative
+                    // window. Rare path; merges incremental results.
+                    if (discoveredIdx > SPECULATIVE_RANGE) {
+                        Log.i("MainActivity", "Discovered idx=$discoveredIdx beyond speculative range, fetching delta")
+                        withContext(Dispatchers.Main) {
+                            walletInfo = walletInfo?.copy(loadingMessage = "Loading remaining addresses...")
+                        }
+                        try {
+                            val deltaAddrs = wm.getAddressBatch(0, (SPECULATIVE_RANGE + 1)..discoveredIdx).values.toList()
+                            val (dRvn, dAssets) = node.getBalanceAndAssets(deltaAddrs)
+                            rvn += dRvn
+                            val merged = assets.toMutableMap()
+                            for ((k, v) in dAssets) merged[k] = (merged[k] ?: 0.0) + v
+                            assets = merged
+                            val deltaTx = deltaAddrs.map { addr ->
+                                async(Dispatchers.IO) {
+                                    try { node.getTransactionHistory(addr, limit = txHistoryPageSize, ownedAddresses = (addrs + deltaAddrs).toSet()) }
+                                    catch (_: Throwable) { emptyList() }
+                                }
+                            }.awaitAll().flatten()
+                            txList = (txList + deltaTx)
+                        } catch (e: Exception) {
+                            Log.w("MainActivity", "delta fetch failed", e)
+                        }
+                    }
+
+                    val address = wm.getCurrentAddress() ?: ""
+
+                    // Apply assets
+                    val assetList = assets.map { (name, amount) ->
+                        val type = when {
+                            name.contains('#') -> io.raventag.app.ravencoin.AssetType.UNIQUE
+                            name.contains('/') -> io.raventag.app.ravencoin.AssetType.SUB
+                            else -> io.raventag.app.ravencoin.AssetType.ROOT
+                        }
+                        io.raventag.app.ravencoin.OwnedAsset(
+                            name = name, balance = amount, type = type, ipfsHash = null
+                        )
+                    }.sortedWith(compareBy({ it.type.ordinal }, { it.name }))
+
+                    // Dedup tx + sort
+                    val deduped = txList.distinctBy { it.txid }
+                        .sortedWith(
+                            compareByDescending<io.raventag.app.wallet.TxHistoryEntry> {
+                                if (it.height <= 0) Int.MAX_VALUE else it.height
+                            }.thenByDescending { it.timestamp }
+                        )
+
+                    withContext(Dispatchers.Main) {
+                        walletInfo = walletInfo?.copy(
+                            address = address,
+                            balanceRvn = rvn,
+                            isLoading = false,
+                            loadingMessage = null
+                        )
+                        ownedAssets = assetList
+                        assetsLoading = false
+                        val firstPage = deduped.take(txHistoryPageSize)
+                        txHistory = firstPage
+                        txHistoryTotal = deduped.size
+                        txHistoryLoadedCount = firstPage.size
+                        txHistoryLoading = false
+                    }
+
+                    // Persist for next cold start
+                    if (assetList.isNotEmpty()) withContext(Dispatchers.IO) { saveAssetsCache(assetList) }
+                    withContext(Dispatchers.IO) {
+                        try { io.raventag.app.wallet.cache.WalletCacheDao.writeBalanceSat((rvn * 1e8).toLong()) } catch (_: Throwable) {}
+                    }
+
+                    // IPFS enrichment for asset previews. Runs in background after the
+                    // primary list is on screen so users see balances immediately and
+                    // images fade in as they resolve.
+                    if (assetList.isNotEmpty()) {
+                        launch(Dispatchers.IO) {
+                            try {
+                                val needsEnrichment = assetList.filter { it.imageUrl == null }
+                                if (needsEnrichment.isEmpty()) return@launch
+                                val metaBatch = try {
+                                    node.getAssetMetaBatch(needsEnrichment.map { it.name })
+                                } catch (_: Exception) { emptyMap() }
+                                val withHashes = needsEnrichment.map { a ->
+                                    val h = metaBatch[a.name]?.ipfsHash
+                                    if (h != null) a.copy(ipfsHash = h) else a
+                                }
+                                val enriched = assetList.map { existing ->
+                                    withHashes.firstOrNull { it.name == existing.name } ?: existing
+                                }
+                                withContext(Dispatchers.Main) {
+                                    ownedAssets = enriched
+                                }
+                                saveAssetsCache(enriched)
+                            } catch (e: Exception) {
+                                Log.w("MainActivity", "IPFS enrichment failed", e)
+                            }
+                        }
+                    }
+
+                    // Authoritative balance verification: if speculative returned 0
+                    // but the wallet has activity, fall back to a direct balance query
+                    // on the discovered current address. This guards against the rare
+                    // case where the speculative batch silently dropped the funded
+                    // address's response.
+                    if (rvn <= 0.0 && discoveredIdx > 0) {
+                        launch(Dispatchers.IO) {
+                            try {
+                                val verified = wm.getLocalBalance() ?: 0.0
+                                if (verified > 0.0) {
+                                    Log.i("MainActivity", "restoreWallet: speculative rvn=0, verified=$verified")
+                                    withContext(Dispatchers.Main) {
+                                        walletInfo = walletInfo?.copy(balanceRvn = verified)
+                                    }
+                                    try { io.raventag.app.wallet.cache.WalletCacheDao.writeBalanceSat((verified * 1e8).toLong()) } catch (_: Throwable) {}
+                                }
+                            } catch (_: Exception) {}
+                        }
+                    }
                 }
-
-                walletInfo = walletInfo?.copy(isLoading = false)
             } catch (e: Throwable) {
                 restoreError = "Restore failed: ${e.message}"
                 walletInfo = walletInfo?.copy(isLoading = false)
@@ -1555,6 +1796,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         viewModelScope.launch {
+            // Show cached assets first so IPFS previews render immediately on
+            // cold start, before any network query completes.
+            if (ownedAssets.isNullOrEmpty()) {
+                val cached = withContext(Dispatchers.IO) { loadAssetsCache() }
+                if (!cached.isNullOrEmpty()) ownedAssets = cached
+            }
+
             // Run all network fetches in parallel on IO, then apply state in a
             // single batch on Main to minimize recomposition bursts.
             val balanceDeferred = async(Dispatchers.IO) { wm.getLocalBalance() }
@@ -1574,6 +1822,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 isLoading = false
             )
             if (!assets.isNullOrEmpty()) ownedAssets = assets
+            // IPFS enrichment for any asset still missing previews. Runs in
+            // background so the list itself shows up first.
+            launch(Dispatchers.IO) { enrichOwnedAssetsIpfs() }
             if (txList.isNotEmpty()) {
                 txHistory = txList
                 txHistoryTotal = txList.size
@@ -1594,30 +1845,58 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // STEP 2: Background maintenance (does not block the UI).
             launch(Dispatchers.IO) {
 
-                // Auto-discovery: run when index is 0 and balance is 0 or null.
-                // This handles the case where the stored index was lost/reset but
-                // the user has funds at a higher address index.
-                val currentIdx = wm.getCurrentAddressIndex()
-                if (currentIdx == 0 && (balance == null || balance == 0.0)) {
+                // Auto-discovery: run whenever the wallet shows zero balance.
+                // syncCurrentIndex only looks 10 addresses ahead, so if the stored
+                // index is far behind the real one (e.g. fresh install reusing an
+                // old mnemonic, or a sibling app flavor advanced the chain), we
+                // need a full sliding-window discovery to find funds.
+                val noAssets = ownedAssets.isNullOrEmpty()
+                if ((balance == null || balance == 0.0) && noAssets) {
                     try {
-                        Log.i("MainViewModel", "Zero balance at index 0, running discoverCurrentIndex")
-                        wm.discoverCurrentIndex()
+                        val currentIdx = wm.getCurrentAddressIndex()
+                        Log.i("MainViewModel", "Zero balance at index $currentIdx, running discoverCurrentIndex")
+                        withContext(Dispatchers.Main) {
+                            walletInfo = walletInfo?.copy(
+                                isLoading = true,
+                                loadingMessage = "Searching for your wallet on the blockchain..."
+                            )
+                        }
+                        wm.discoverCurrentIndex { progress ->
+                            viewModelScope.launch(Dispatchers.Main) {
+                                walletInfo = walletInfo?.copy(loadingMessage = progress)
+                            }
+                        }
                         val discoveredAddr = wm.getCurrentAddress()
-                        if (discoveredAddr != null && discoveredAddr != walletInfo?.address) {
+                        val discoveredIdx = wm.getCurrentAddressIndex()
+                        if (discoveredIdx != currentIdx || discoveredAddr != walletInfo?.address) {
                             withContext(Dispatchers.Main) {
-                                walletInfo = walletInfo?.copy(address = discoveredAddr, isLoading = true)
+                                walletInfo = walletInfo?.copy(
+                                    address = discoveredAddr ?: walletInfo?.address ?: "",
+                                    isLoading = true,
+                                    loadingMessage = "Loading balance and assets..."
+                                )
                             }
                             val newBalance = wm.getLocalBalance()
                             withContext(Dispatchers.Main) {
                                 walletInfo = walletInfo?.copy(
                                     balanceRvn = newBalance,
-                                    isLoading = false
+                                    isLoading = false,
+                                    loadingMessage = null
                                 )
                             }
                             loadOwnedAssets()
                             loadTransactionHistory()
+                        } else {
+                            withContext(Dispatchers.Main) {
+                                walletInfo = walletInfo?.copy(isLoading = false, loadingMessage = null)
+                            }
                         }
-                    } catch (_: Exception) {}
+                    } catch (e: Exception) {
+                        Log.w("MainViewModel", "discoverCurrentIndex on cold start failed", e)
+                        withContext(Dispatchers.Main) {
+                            walletInfo = walletInfo?.copy(isLoading = false, loadingMessage = null)
+                        }
+                    }
                 }
 
                 // Auto-sweep is now triggered by loadOwnedAssets() when
@@ -1651,6 +1930,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val isRefreshing = java.util.concurrent.atomic.AtomicBoolean(false)
 
     fun refreshBalance() {
+        // Don't pile a refresh on top of an active wallet generate/restore: the
+        // restore flow is already running discoverCurrentIndex + parallel
+        // balance/assets/history loads. A concurrent refresh races against it
+        // and writes stale empty assets while discovery is still finding the
+        // real index.
+        if (walletGenerating) return
         if (isRefreshing.getAndSet(true)) return
 
         val wm = walletManager ?: run { isRefreshing.set(false); return }
@@ -1772,17 +2057,55 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private suspend fun loadOwnedAssetsInternal(wm: WalletManager) {
+    private val ownedAssetsMutex = Mutex()
+
+    /**
+     * Resolve missing IPFS hashes for the current ownedAssets via getAssetMetaBatch
+     * and update both state and on-disk cache. Runs in caller's coroutine context.
+     * Safe to call repeatedly: only assets with imageUrl == null get enriched.
+     */
+    private suspend fun enrichOwnedAssetsIpfs() {
+        val source = ownedAssets.orEmpty()
+        if (source.isEmpty()) return
+        val needsEnrichment = source.filter { it.imageUrl == null && it.ipfsHash == null }
+        if (needsEnrichment.isEmpty()) return
+        try {
+            val node = io.raventag.app.wallet.RavencoinPublicNode(getApplication())
+            val metaBatch = withContext(Dispatchers.IO) {
+                try { node.getAssetMetaBatch(needsEnrichment.map { it.name }) }
+                catch (_: Exception) { emptyMap() }
+            }
+            if (metaBatch.isEmpty()) return
+            val current = ownedAssets.orEmpty()
+            val enriched = current.map { a ->
+                if (a.imageUrl != null || a.ipfsHash != null) a
+                else {
+                    val h = metaBatch[a.name]?.ipfsHash
+                    if (h != null) a.copy(ipfsHash = h) else a
+                }
+            }
+            withContext(Dispatchers.Main) { ownedAssets = enriched }
+            withContext(Dispatchers.IO) { saveAssetsCache(enriched) }
+        } catch (e: Exception) {
+            Log.w("MainActivity", "enrichOwnedAssetsIpfs failed", e)
+        }
+    }
+
+    private suspend fun loadOwnedAssetsInternal(wm: WalletManager) = ownedAssetsMutex.withLock {
         withContext(Dispatchers.Main) {
             assetsLoading = true
         }
 
         try {
-            // One Keystore decrypt + one pipelined batch for all asset balances
+            // One Keystore decrypt + one pipelined batch for all asset balances.
+            // Asset UTXOs can live on any address from 0..currentIndex (each tx
+            // rotates the wallet to the next address). Querying only the current
+            // address misses assets that landed on prior receive addresses.
+            val queriedIdx = wm.getCurrentAddressIndex()
             val (totals, detectedNeedsConsolidation) = withContext(Dispatchers.IO) {
-                val address = wm.getCurrentAddress()
-                    ?: return@withContext emptyList<io.raventag.app.ravencoin.OwnedAsset>() to false
-                val addresses = listOf(address)
+                val addresses = wm.getAddressBatch(0, 0..queriedIdx).values.toList()
+                Log.i("MainViewModel", "loadOwnedAssetsInternal: currentIdx=$queriedIdx addressesQueried=${addresses.size}")
+                if (addresses.isEmpty()) return@withContext emptyList<io.raventag.app.ravencoin.OwnedAsset>() to false
                 val node = io.raventag.app.wallet.RavencoinPublicNode(getApplication())
                 val (assets, _) = coroutineScope {
                     val assetsDeferred = async { node.getTotalAssetBalances(addresses) }
@@ -1792,6 +2115,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
                     Pair(assetsDeferred.await(), rvnDeferred.await())
                 }
+                Log.i("MainViewModel", "loadOwnedAssetsInternal: getTotalAssetBalances returned ${assets.size} assets: ${assets.keys}")
 
                 val assetList = assets.map { (name, amount) ->
                     val type = when {
@@ -1840,11 +2164,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     asset
                 }
             }
+            // Stale-write protection: if the wallet rotated past the index we
+            // queried (e.g. discoverCurrentIndex landed on a higher index while
+            // this call was in flight), our results are out-of-date. Drop the
+            // empty/partial write so the fresher call's data is the one the UI
+            // ends up with.
+            val nowIdx = wm.getCurrentAddressIndex()
+            val stale = nowIdx > queriedIdx && merged.isEmpty()
+            if (stale) {
+                Log.i("MainViewModel", "loadOwnedAssetsInternal: skipping stale empty write (queriedIdx=$queriedIdx nowIdx=$nowIdx)")
+            }
             withContext(Dispatchers.Main) {
-                if (merged.isNotEmpty() || ownedAssets.isNullOrEmpty()) {
+                if (!stale && (merged.isNotEmpty() || ownedAssets.isNullOrEmpty())) {
                     ownedAssets = merged
                 }
-                assetsLoading = false
+                if (!stale) assetsLoading = false
                 if (needsConsolidation && !consolidationInProgress) {
                     launchAutoSweep(wm)
                 }
