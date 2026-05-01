@@ -81,7 +81,8 @@ data class WalletInfo(
     val balanceRvn: Double?, // null = not yet loaded / fetch failed; non-null = confirmed balance
     val mnemonic: String? = null,
     val isLoading: Boolean = false,
-    val error: String? = null
+    val error: String? = null,
+    val loadingMessage: String? = null
 )
 
 private fun assetPreviewCandidates(asset: OwnedAsset): List<String> {
@@ -816,6 +817,19 @@ fun WalletScreen(
                         }
                     }
                 }
+            } else if (filteredAssets.isEmpty() && viewModel.assetsLoading) {
+                item(key = "assets_loading") {
+                    Card(colors = CardDefaults.cardColors(containerColor = RavenCard), border = BorderStroke(1.dp, RavenBorder), shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth()) {
+                        Row(
+                            modifier = Modifier.padding(20.dp).fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            CircularProgressIndicator(color = RavenOrange, modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                            Text(s.walletLoading, style = MaterialTheme.typography.bodySmall, color = RavenMuted)
+                        }
+                    }
+                }
             } else if (filteredAssets.isEmpty()) {
                 item(key = "assets_empty") {
                     Card(colors = CardDefaults.cardColors(containerColor = RavenCard), border = BorderStroke(1.dp, RavenBorder), shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth()) {
@@ -1271,7 +1285,8 @@ private fun BalanceCard(s: AppStrings, info: WalletInfo, rvnPrice: Double? = nul
             Text(
                 text = run {
                     if (info.balanceRvn == null) {
-                        AnnotatedString(if (info.isLoading) s.walletLoading else (info.error ?: s.walletLoading))
+                        val loadingText = info.loadingMessage ?: s.walletLoading
+                        AnnotatedString(if (info.isLoading) loadingText else (info.error ?: s.walletLoading))
                     } else {
                         val full = String.format(java.util.Locale.US, "%.8f", info.balanceRvn)
                         val dotIdx = full.indexOf('.')

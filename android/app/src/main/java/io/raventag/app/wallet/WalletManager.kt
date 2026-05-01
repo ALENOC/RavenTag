@@ -530,48 +530,114 @@ class WalletManager(private val context: Context) {
 
     fun ensureCurrentAddressClean() {}
 
-    suspend fun discoverCurrentIndex(): Int = withContext(Dispatchers.IO) {
+    suspend fun discoverCurrentIndex(
+        onProgress: ((String) -> Unit)? = null
+    ): Int = withContext(Dispatchers.IO) {
         val node = RavencoinPublicNode(context)
         val currentStoredIndex = getCurrentAddressIndex()
-        val searchLimit = maxOf(currentStoredIndex + 50, 100)
 
-        android.util.Log.i("WalletManager", "discoverCurrentIndex: Scanning 0..$searchLimit for RVN and assets")
+        // Three-phase O(log N) discovery: no upper bound, finds wallets at any
+        // depth in just a few batched RPC roundtrips.
+        //
+        //   Phase A: exponential probe at indices 0,1,3,7,...,2^24-1.
+        //     One BIP32 derivation batch + one electrum status batch.
+        //     Locates the bracket [H, L) where H = highest probe with
+        //     history, L = next probe (no history).
+        //
+        //   Phase B: bisection inside (H, L) until the bracket is small
+        //     enough for a dense scan (<= chunkSize). Each step probes a
+        //     gapLimit-wide window at the midpoint.
+        //
+        //   Phase C: dense scan of the final narrow bracket to pin down
+        //     lastUsed exactly, then a single getAddressesWithFunds batch
+        //     across all history-bearing addresses to pick the live index.
+        val gapLimit = 20
+        val chunkSize = 100
+        val maxProbeBits = 24 // 2^24 = 16,777,216, far beyond any real wallet
+        val statusByIndex = mutableMapOf<Int, RavencoinPublicNode.AddressStatus>()
+        val addressByIndex = mutableMapOf<Int, String>()
 
-        val batchMap = getAddressBatch(0, 0 until searchLimit)
-        if (batchMap.isEmpty()) return@withContext currentStoredIndex
-
-        // Phase 1: Find last address with any history (existing approach)
-        val addrList = batchMap.values.toList()
-        val statusMap = try {
-            node.getAddressStatusBatch(addrList)
-        } catch (e: Exception) {
-            android.util.Log.e("WalletManager", "discoverCurrentIndex: batch status check failed", e)
-            emptyMap()
+        suspend fun statusBatchByIndex(indices: Collection<Int>): Map<Int, RavencoinPublicNode.AddressStatus> {
+            if (indices.isEmpty()) return emptyMap()
+            val needed = indices.filter { it !in addressByIndex }
+            if (needed.isNotEmpty()) {
+                val derived = getAddressBatch(0, needed)
+                addressByIndex.putAll(derived)
+            }
+            val toQuery = indices.mapNotNull { i ->
+                if (i in statusByIndex) null
+                else addressByIndex[i]?.let { i to it }
+            }
+            if (toQuery.isNotEmpty()) {
+                val resp = try {
+                    node.getAddressStatusBatch(toQuery.map { it.second })
+                } catch (e: Exception) {
+                    android.util.Log.e("WalletManager", "discoverCurrentIndex: status batch failed", e)
+                    emptyMap()
+                }
+                for ((i, addr) in toQuery) {
+                    statusByIndex[i] = resp[addr] ?: RavencoinPublicNode.AddressStatus.NO_HISTORY
+                }
+            }
+            return indices.associateWith { statusByIndex[it] ?: RavencoinPublicNode.AddressStatus.NO_HISTORY }
         }
 
-        var lastUsed = -1
-        for (i in 0 until searchLimit) {
-            val addr = batchMap[i] ?: continue
-            val status = statusMap[addr] ?: RavencoinPublicNode.AddressStatus.NO_HISTORY
-            if (status != RavencoinPublicNode.AddressStatus.NO_HISTORY) {
-                lastUsed = i
+        // Phase A: exponential probe
+        onProgress?.invoke("Locating wallet on blockchain...")
+        val probeIndices = (0..maxProbeBits).map { (1 shl it) - 1 } // 0,1,3,7,...,16M-1
+        val probeStatus = statusBatchByIndex(probeIndices)
+        val probesWithHistory = probeIndices.filter {
+            probeStatus[it] != RavencoinPublicNode.AddressStatus.NO_HISTORY
+        }
+        val highestProbe = probesWithHistory.maxOrNull() ?: -1
+        val pos = if (highestProbe < 0) -1 else probeIndices.indexOf(highestProbe)
+        val nextProbe = if (pos >= 0 && pos + 1 < probeIndices.size) probeIndices[pos + 1] else -1
+        android.util.Log.i("WalletManager", "discoverCurrentIndex: probe phase highestProbe=$highestProbe nextProbe=$nextProbe")
+
+        // Phase B: bisection inside (highestProbe, nextProbe)
+        var low = if (highestProbe < 0) 0 else highestProbe
+        var high = if (nextProbe < 0) low + chunkSize else nextProbe
+        while (high - low > chunkSize) {
+            val mid = low + (high - low) / 2
+            val window = (mid until (mid + gapLimit).coerceAtMost(high)).toList()
+            onProgress?.invoke("Narrowing search around index $mid")
+            val midStatus = statusBatchByIndex(window)
+            val anyHistory = window.any {
+                midStatus[it] != RavencoinPublicNode.AddressStatus.NO_HISTORY
+            }
+            if (anyHistory) low = mid else high = mid
+            android.util.Log.i("WalletManager", "discoverCurrentIndex: bisect mid=$mid anyHistory=$anyHistory low=$low high=$high")
+        }
+
+        // Phase C: dense scan in the narrow bracket
+        val denseLo = (low - gapLimit).coerceAtLeast(0)
+        val denseHi = (high + gapLimit)
+        onProgress?.invoke("Scanning addresses $denseLo..$denseHi")
+        statusBatchByIndex((denseLo..denseHi).toList())
+        var lastUsed = highestProbe
+        for (i in denseLo..denseHi) {
+            if (statusByIndex[i] != null && statusByIndex[i] != RavencoinPublicNode.AddressStatus.NO_HISTORY) {
+                if (i > lastUsed) lastUsed = i
             }
         }
+        // Every probe with history below the dense range is also "used".
+        for (p in probesWithHistory) if (p > lastUsed) lastUsed = p
 
-        // Phase 2: Find the highest address that currently holds funds (RVN or assets).
-        // Single batch call (get_balance?asset=true) replaces N*2 sequential TLS calls.
+        onProgress?.invoke("Checking balances")
+
+        // Phase 2: lastWithFunds across every address we have history for.
+        val historyEntries = statusByIndex.entries
+            .filter { it.value != RavencoinPublicNode.AddressStatus.NO_HISTORY }
+            .mapNotNull { (i, _) -> addressByIndex[i]?.let { i to it } }
         var lastWithFunds = -1
-        val addressesWithHistory = (0 until searchLimit).mapNotNull { i ->
-            val addr = batchMap[i] ?: return@mapNotNull null
-            val status = statusMap[addr] ?: RavencoinPublicNode.AddressStatus.NO_HISTORY
-            if (status != RavencoinPublicNode.AddressStatus.NO_HISTORY) i to addr else null
-        }
-        if (addressesWithHistory.isNotEmpty()) {
-            val historyAddrList = addressesWithHistory.map { it.second }
+        if (historyEntries.isNotEmpty()) {
             val withFunds = try {
-                node.getAddressesWithFunds(historyAddrList)
-            } catch (_: Exception) { emptySet() }
-            for ((i, addr) in addressesWithHistory) {
+                node.getAddressesWithFunds(historyEntries.map { it.second })
+            } catch (e: Exception) {
+                android.util.Log.e("WalletManager", "discoverCurrentIndex: getAddressesWithFunds failed", e)
+                emptySet()
+            }
+            for ((i, addr) in historyEntries) {
                 if (addr in withFunds) {
                     lastWithFunds = maxOf(lastWithFunds, i)
                     android.util.Log.i("WalletManager", "discoverCurrentIndex: index $i has funds")
@@ -579,16 +645,10 @@ class WalletManager(private val context: Context) {
             }
         }
 
-        // Determine current index:
-        // - If funds exist: stay at that address unless its key is already exposed
-        //   (HAS_OUTGOING means a signed tx revealed the public key, so move to next).
-        // - If no funds anywhere: next address after the last one with any history.
-        // - Empty wallet: index 0.
         val finalResult = maxOf(
             when {
                 lastWithFunds >= 0 -> {
-                    val fundsAddr = batchMap[lastWithFunds]
-                    val fundsStatus = fundsAddr?.let { statusMap[it] }
+                    val fundsStatus = statusByIndex[lastWithFunds]
                         ?: RavencoinPublicNode.AddressStatus.NO_HISTORY
                     if (fundsStatus == RavencoinPublicNode.AddressStatus.HAS_OUTGOING) {
                         android.util.Log.i("WalletManager", "discoverCurrentIndex: index $lastWithFunds key exposed, using ${lastWithFunds + 1}")
@@ -605,6 +665,7 @@ class WalletManager(private val context: Context) {
         )
         setCurrentAddressIndex(finalResult)
         android.util.Log.i("WalletManager", "Discover: current index = $finalResult (lastUsed=$lastUsed, lastWithFunds=$lastWithFunds)")
+        onProgress?.invoke("Found wallet at index $finalResult")
         finalResult
     }
 
@@ -1244,6 +1305,27 @@ class WalletManager(private val context: Context) {
         }
     }
 
+    fun getAddressBatch(accountIndex: Int, indices: Iterable<Int>): Map<Int, String> {
+        val seed = getSeed() ?: return emptyMap()
+        val result = mutableMapOf<Int, String>()
+        try {
+            for (i in indices) {
+                var privKey: ByteArray? = null
+                try {
+                    privKey = derivePrivateKey(seed, accountIndex, i)
+                    val address = publicKeyToRavenAddress(privateKeyToPublicKey(privKey))
+                    result[i] = address
+                } catch (_: Throwable) {
+                } finally {
+                    privKey?.fill(0)
+                }
+            }
+        } finally {
+            seed.fill(0)
+        }
+        return result
+    }
+
     fun getAddressBatch(accountIndex: Int, indices: IntRange): Map<Int, String> {
         val now = System.currentTimeMillis()
         val cached = addressBatchCache
@@ -1637,22 +1719,50 @@ class WalletManager(private val context: Context) {
             val assetUtxos: Map<String, List<AssetUtxo>>
         )
         val addrBatch = getAddressBatch(0, 0..currentIndex)
-        val allFunds = mutableListOf<AddrFunds>()
-        for ((i, addr) in addrBatch.entries.sortedBy { it.key }) {
-            try {
-                val r = node.getUtxosAndAllAssetUtxosBatch(addr)
-                if (r.first.isNotEmpty() || r.third.isNotEmpty()) {
-                    allFunds.add(AddrFunds(i, r.first, r.third))
+        suspend fun scanAllAddresses(): List<AddrFunds> = coroutineScope {
+            addrBatch.entries.sortedBy { it.key }.map { (i, addr) ->
+                async {
+                    try {
+                        val r = node.getUtxosAndAllAssetUtxosBatch(addr, fetchMissingAssetUtxos = true)
+                        if (r.first.isNotEmpty() || r.third.isNotEmpty()) {
+                            AddrFunds(i, r.first, r.third)
+                        } else null
+                    } catch (e: Exception) {
+                        android.util.Log.w(
+                            "WalletManager",
+                            "transferAssetLocal: scan failed at index $i (${addr.take(8)}...): ${e.javaClass.simpleName}: ${e.message}"
+                        )
+                        null
+                    }
                 }
-            } catch (_: Exception) {}
+            }.awaitAll().filterNotNull()
         }
 
-        val primaryByIndex: Map<Int, List<AssetUtxo>> = allFunds
+        var allFunds = scanAllAddresses()
+        var primaryByIndex: Map<Int, List<AssetUtxo>> = allFunds
             .filter { it.assetUtxos.containsKey(assetName) }
             .associate { it.index to it.assetUtxos.getValue(assetName) }
 
+        // Mempool propagation fallback: balance endpoint sees the asset (assets list shows it)
+        // but listunspent on the server we hit may lag. Retry up to 3x with delay before failing.
         if (primaryByIndex.isEmpty()) {
-            error("Asset $assetName not found on any wallet address. Try refreshing the wallet.")
+            android.util.Log.w("WalletManager", "transferAssetLocal: asset $assetName not found on first scan, retrying for mempool propagation")
+            repeat(3) { attempt ->
+                kotlinx.coroutines.delay(2000L)
+                allFunds = scanAllAddresses()
+                primaryByIndex = allFunds
+                    .filter { it.assetUtxos.containsKey(assetName) }
+                    .associate { it.index to it.assetUtxos.getValue(assetName) }
+                if (primaryByIndex.isNotEmpty()) {
+                    android.util.Log.i("WalletManager", "transferAssetLocal: asset $assetName found on retry ${attempt + 1}")
+                    return@repeat
+                }
+            }
+        }
+
+        if (primaryByIndex.isEmpty()) {
+            val seenAssets = allFunds.flatMap { it.assetUtxos.keys }.distinct()
+            error("Asset $assetName not found on any wallet address. Try refreshing the wallet. (Scanned ${allFunds.size} addresses, saw: $seenAssets)")
         }
 
         val totalRawAmount = primaryByIndex.values.sumOf { utxos -> utxos.sumOf { it.assetRawAmount } }
