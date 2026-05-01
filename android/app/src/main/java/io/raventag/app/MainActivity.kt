@@ -1723,11 +1723,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val balance = wm.getLocalBalance()
                 if (balance != null) {
-                    walletInfo = walletInfo?.copy(balanceRvn = balance, isLoading = false)
+                    // Avoid flashing 0 RVN right after address rotation when ElectrumX
+                    // servers have not yet propagated the change UTXO from mempool.
+                    val prev = walletInfo?.balanceRvn
+                    val effective = if (balance == 0.0 && prev != null && prev > 0.0) prev else balance
+                    walletInfo = walletInfo?.copy(balanceRvn = effective, isLoading = false)
                     withContext(Dispatchers.IO) {
                         try {
                             io.raventag.app.wallet.cache.WalletCacheDao.writeBalanceSat(
-                                (balance * 1e8).toLong()
+                                (effective * 1e8).toLong()
                             )
                         } catch (_: Throwable) {}
                     }
@@ -2070,6 +2074,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private suspend fun pollingLoop(txid: String) {
         val node = RavencoinPublicNode(getApplication())
         var confirmations = 0
+        // Quick mempool propagation retries: refresh balance/assets every 3s for first ~30s
+        // so the UI picks up the change UTXO once any ElectrumX server sees the broadcast.
+        repeat(10) {
+            delay(3_000L)
+            try { loadWalletBalance() } catch (_: Throwable) {}
+            try { loadOwnedAssets() } catch (_: Throwable) {}
+        }
         while (confirmations < 6) {
             delay(30_000L)
             try {
@@ -2080,6 +2091,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val tip = withContext(Dispatchers.IO) { node.getBlockHeight() } ?: 0
                 confirmations = if (height > 0) tip - height + 1 else 0
             } catch (_: Exception) { }
+            try { loadWalletBalance() } catch (_: Throwable) {}
+            try { loadOwnedAssets() } catch (_: Throwable) {}
         }
         if (confirmations >= 6) {
             issueStep = IssueStep.Success(IssueStep.StepName.CONFIRMING)
