@@ -1110,9 +1110,14 @@ class WalletManager(private val context: Context) {
         // exceptions propagate to the UI so the restore dialog can react.
         val normalizedWords = validateMnemonic(mnemonic)
         val hasBackedUp = prefs().getBoolean(KEY_BACKUP_COMPLETED, false)
-        val currentBalanceSat = runCatching {
-            io.raventag.app.wallet.cache.WalletCacheDao.readState()?.balanceSat ?: 0L
-        }.getOrDefault(0L)
+        // Backup gate only applies when there is actually a wallet to back up.
+        // Cached balance from a previous session can persist across wipes/uninstalls
+        // and must not block a fresh restore when no seed is stored.
+        val currentBalanceSat = if (hasWallet()) {
+            runCatching {
+                io.raventag.app.wallet.cache.WalletCacheDao.readState()?.balanceSat ?: 0L
+            }.getOrDefault(0L)
+        } else 0L
         checkRestorePreconditions(currentBalanceSat, hasBackedUp)
 
         val normalized = normalizedWords.joinToString(" ")
