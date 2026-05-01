@@ -1751,15 +1751,22 @@ class WalletManager(private val context: Context) {
     }
 
     suspend fun issueAssetLocal(
-        assetName: String,
+        assetNameRaw: String,
         qty: Double,
         toAddress: String,
         units: Int = 0,
         reissuable: Boolean = false,
         ipfsHash: String? = null
     ): String = withContext(Dispatchers.IO) {
+        val assetName = assetNameRaw.trim()
         require(assetName.length <= RavencoinTxBuilder.MAX_ASSET_NAME_LENGTH) {
             "Asset name too long (${assetName.length}/${RavencoinTxBuilder.MAX_ASSET_NAME_LENGTH}): $assetName"
+        }
+        // Ravencoin consensus: ROOT [A-Z0-9._]{3,}, SUB/UNIQUE allow / and #.
+        // Reject any whitespace or other invalid char to avoid bad-txns-issue-burn-not-found.
+        val validAssetName = Regex("^[A-Z0-9._/#]+$")
+        require(validAssetName.matches(assetName)) {
+            "Invalid asset name: '$assetName' (only A-Z, 0-9, '.', '_', '/', '#' allowed)"
         }
         val currentIndex = getCurrentAddressIndex()
         val address = getAddress(0, currentIndex) ?: error("No wallet")

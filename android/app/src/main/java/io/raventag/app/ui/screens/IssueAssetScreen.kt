@@ -315,8 +315,10 @@ fun IssueAssetScreen(
                 } else {
                     s.assetNameHint
                 }
-                // Asset name is auto-uppercased (Ravencoin protocol requires uppercase asset names).
-                RavenTextField(s.fieldAssetName, assetName, { assetName = it.uppercase() }, "MYASSET", rootNameHint)
+                // Asset name is auto-uppercased and stripped of invalid chars (Ravencoin protocol).
+                RavenTextField(s.fieldAssetName, assetName, { input ->
+                    assetName = input.uppercase().filter { c -> c in 'A'..'Z' || c in '0'..'9' || c == '.' || c == '_' }
+                }, "MYASSET", rootNameHint)
                 Spacer(Modifier.height(12.dp))
                 RavenTextField(s.fieldQty, qty, { qty = it }, "1", keyboardType = KeyboardType.Number)
                 Spacer(Modifier.height(12.dp))
@@ -353,7 +355,9 @@ fun IssueAssetScreen(
                 val maxNameLen = RavencoinTxBuilder.MAX_ASSET_NAME_LENGTH
                 val subFullName = "${parentAsset.ifBlank { "PARENT" }}/${childName.ifBlank { "CHILD" }}"
                 val subNameTooLong = parentAsset.isNotBlank() && childName.isNotBlank() && subFullName.length > maxNameLen
-                RavenTextField(s.fieldParent, parentAsset, { parentAsset = it.uppercase() }, "MYASSET")
+                RavenTextField(s.fieldParent, parentAsset, { input ->
+                    parentAsset = input.uppercase().filter { c -> c in 'A'..'Z' || c in '0'..'9' || c == '.' || c == '_' }
+                }, "MYASSET")
                 // Inline autocomplete dropdown for owned root assets.
                 AssetAutocompleteSuggestions(
                     suggestions = rootAssetSuggestions,
@@ -362,7 +366,9 @@ fun IssueAssetScreen(
                 )
                 Spacer(Modifier.height(12.dp))
                 // Live preview hint shows the final asset path as the user types (e.g. "PARENT/CHILD").
-                RavenTextField(s.fieldChild, childName, { childName = it.uppercase() }, "ITEM01",
+                RavenTextField(s.fieldChild, childName, { input ->
+                    childName = input.uppercase().filter { c -> c in 'A'..'Z' || c in '0'..'9' || c == '.' || c == '_' }
+                }, "ITEM01",
                     hint = if (subNameTooLong) {
                         "Too long: ${subFullName.length}/$maxNameLen. Shorten parent or child."
                     } else {
@@ -423,7 +429,9 @@ fun IssueAssetScreen(
                 Spacer(Modifier.height(16.dp))
                 // The parentSub field accepts a sub-asset (e.g. "FASHIONX/BAG01") under which
                 // the unique token "#SERIAL" is minted, forming "FASHIONX/BAG01#SERIAL".
-                RavenTextField(s.fieldSubAsset, subAsset, { subAsset = it.uppercase() }, "FASHIONX/BAG01", s.fieldSubAssetHint)
+                RavenTextField(s.fieldSubAsset, subAsset, { input ->
+                    subAsset = input.uppercase().filter { c -> c in 'A'..'Z' || c in '0'..'9' || c == '.' || c == '_' || c == '/' }
+                }, "FASHIONX/BAG01", s.fieldSubAssetHint)
                 // Autocomplete list of owned sub-assets narrows as the user types.
                 AssetAutocompleteSuggestions(
                     suggestions = subAssetSuggestions,
