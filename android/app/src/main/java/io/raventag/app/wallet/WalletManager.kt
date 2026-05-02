@@ -1707,7 +1707,8 @@ class WalletManager(private val context: Context) {
     suspend fun transferAssetLocal(
         assetName: String,
         toAddress: String,
-        qty: Double = 1.0
+        qty: Double = 1.0,
+        includeOwnerToken: Boolean = false
     ): String = withContext(Dispatchers.IO) {
         val currentIndex = getCurrentAddressIndex()
         val nextAddress = getAddress(0, currentIndex + 1) ?: error("Cannot derive next address")
@@ -1778,11 +1779,43 @@ class WalletManager(private val context: Context) {
 
         val assetChangeRaw = totalRawAmount - rawQtyRequested
 
+        // Determine the owner token name for this asset, if the user opted to bundle it.
+        // Each root and sub-asset has its own owner token (e.g. RAVENTAG -> RAVENTAG!,
+        // RAVENTAG/FINE_ART -> RAVENTAG/FINE_ART!). Unique tokens (containing '#') have none.
+        val ownerTokenName: String? = if (includeOwnerToken) {
+            when {
+                assetName.contains('#') -> null
+                assetName.endsWith('!') -> null
+                else -> "$assetName!"
+            }
+        } else null
+
+        // Locate owner token UTXOs across addresses.
+        val ownerByIndex: Map<Int, List<AssetUtxo>> = if (ownerTokenName != null) {
+            allFunds
+                .filter { it.assetUtxos.containsKey(ownerTokenName) }
+                .associate { it.index to it.assetUtxos.getValue(ownerTokenName) }
+        } else emptyMap()
+
+        if (ownerTokenName != null) {
+            require(ownerByIndex.isNotEmpty()) {
+                "Owner token $ownerTokenName not found in this wallet. Cannot include it with the transfer."
+            }
+        }
+
+        val ownerOutpoints: Set<String> = ownerByIndex.values.flatten()
+            .map { "${it.utxo.txid}:${it.utxo.outputIndex}" }.toSet()
+
         val otherByIndex = allFunds.associate { af ->
-            af.index to af.assetUtxos.filterKeys { it != assetName }
+            af.index to af.assetUtxos
+                .filterKeys { it != assetName && it != ownerTokenName }
+                .mapValues { (_, utxos) ->
+                    utxos.filterNot { "${it.utxo.txid}:${it.utxo.outputIndex}" in ownerOutpoints }
+                }
+                .filterValues { it.isNotEmpty() }
         }.filter { (_, m) -> m.isNotEmpty() }
 
-        val involvedIndices = (primaryByIndex.keys + otherByIndex.keys + allFunds.map { it.index }).toSet()
+        val involvedIndices = (primaryByIndex.keys + otherByIndex.keys + ownerByIndex.keys + allFunds.map { it.index }).toSet()
         val minIdx = involvedIndices.minOrNull() ?: currentIndex
         val maxIdx = involvedIndices.maxOrNull() ?: currentIndex
         val keyPairs = getKeyPairBatch(0, minIdx..maxIdx)
@@ -1802,20 +1835,30 @@ class WalletManager(private val context: Context) {
                 }
             }
 
+            val secondaryKeyed = mutableMapOf<String, MutableList<RavencoinTxBuilder.KeyedAssetUtxo>>()
+            if (ownerTokenName != null) {
+                for ((idx, utxos) in ownerByIndex) {
+                    val (priv, pub) = keyPairs[idx] ?: continue
+                    secondaryKeyed.getOrPut(ownerTokenName) { mutableListOf() }
+                        .addAll(utxos.map { RavencoinTxBuilder.KeyedAssetUtxo(it, priv, pub) })
+                }
+            }
+
             val rvnKeyed = allFunds.flatMap { af ->
                 val (priv, pub) = keyPairs[af.index] ?: return@flatMap emptyList()
                 af.rvnUtxos.map { RavencoinTxBuilder.KeyedUtxo(it, priv, pub) }
             }
 
             val primaryAssetChangeOutputs = if (assetChangeRaw > 0) 1 else 0
-            val totalAssetOutputs = 1 + primaryAssetChangeOutputs + otherKeyed.size
-            val totalInputs = primaryKeyed.size + otherKeyed.values.sumOf { it.size } + rvnKeyed.size
+            val totalAssetOutputs = 1 + primaryAssetChangeOutputs + otherKeyed.size + secondaryKeyed.size
+            val totalInputs = primaryKeyed.size + otherKeyed.values.sumOf { it.size } + secondaryKeyed.values.sumOf { it.size } + rvnKeyed.size
             val feeSat = (10L + 148L * totalInputs + 70L * totalAssetOutputs + 34L) * maxOf(satPerByte, 200L)
             val dustEstimate = 600L * totalAssetOutputs
 
             val totalRvnIn = rvnKeyed.sumOf { it.utxo.satoshis } +
                              primaryKeyed.sumOf { it.assetUtxo.utxo.satoshis } +
-                             otherKeyed.values.flatten().sumOf { it.assetUtxo.utxo.satoshis }
+                             otherKeyed.values.flatten().sumOf { it.assetUtxo.utxo.satoshis } +
+                             secondaryKeyed.values.flatten().sumOf { it.assetUtxo.utxo.satoshis }
 
             if (totalRvnIn < feeSat + dustEstimate) {
                 error("Insufficient RVN for fee and dust. Need ${(feeSat + dustEstimate) / 1e8} RVN, " +
@@ -1829,7 +1872,8 @@ class WalletManager(private val context: Context) {
                 primaryAsset       = RavencoinTxBuilder.AssetOutput(assetName, rawQtyRequested, toAddress),
                 primaryAssetChange = assetChangeRaw,
                 feeSat             = feeSat,
-                changeAddress      = nextAddress
+                changeAddress      = nextAddress,
+                secondaryAssetsToToAddress = secondaryKeyed
             )
             val txid = node.broadcastWithAllServers(tx.hex)
 

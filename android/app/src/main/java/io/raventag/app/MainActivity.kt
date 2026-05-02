@@ -2512,9 +2512,64 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 issuedTxid = txid
                 walletInfo = walletInfo?.copy(address = wm.getCurrentAddress() ?: walletInfo?.address ?: "", isLoading = true)
                 notifyRavenTagRegistry(fullName, txid, "sub")
+
+                // Optimistically add the freshly issued sub-asset to ownedAssets so
+                // the user sees it immediately instead of waiting for loadOwnedAssets.
+                if (ownedAssets?.none { it.name.equals(fullName, ignoreCase = true) } != false) {
+                    val newAsset = io.raventag.app.ravencoin.OwnedAsset(
+                        name = fullName,
+                        balance = qty.toDouble(),
+                        type = io.raventag.app.ravencoin.AssetType.SUB,
+                        ipfsHash = ipfsHash
+                    )
+                    ownedAssets = ((ownedAssets ?: emptyList()) + newAsset)
+                        .sortedWith(compareBy({ it.type.ordinal }, { it.name }))
+                }
+
+                // Optimistically prepend the issuance tx to history so it shows up now.
+                val nowMs = System.currentTimeMillis()
+                val nowSec = nowMs / 1000L
+                val burnSat = io.raventag.app.wallet.RavencoinTxBuilder.BURN_SUB_SAT
+                val rawAssetAmount = qty * io.raventag.app.wallet.RavencoinTxBuilder.ASSET_UNIT_RAW
+                if (txHistory.none { it.txid == txid }) {
+                    val optimistic = io.raventag.app.wallet.TxHistoryEntry(
+                        txid = txid,
+                        height = 0,
+                        confirmations = 0,
+                        amountSat = 0L,
+                        sentSat = 0L,
+                        isIncoming = false,
+                        isSelfTransfer = false,
+                        timestamp = nowSec,
+                        cycledSat = 0L,
+                        feeSat = 0L,
+                        assetName = fullName,
+                        assetAmount = rawAssetAmount,
+                        isIssuance = true,
+                        issuanceBurnSat = burnSat
+                    )
+                    txHistory = listOf(optimistic) + txHistory
+                    txHistoryTotal += 1
+                    txHistoryLoadedCount += 1
+                    withContext(Dispatchers.IO) {
+                        try {
+                            io.raventag.app.wallet.cache.TxHistoryDao.upsert(listOf(
+                                io.raventag.app.wallet.cache.TxHistoryDao.TxHistoryRow(
+                                    txid = txid, height = 0, confirms = 0,
+                                    amountSat = 0L, sentSat = 0L, cycledSat = 0L, feeSat = 0L,
+                                    isIncoming = false, isSelf = false,
+                                    timestamp = nowSec, cachedAt = nowMs,
+                                    isIssuance = true, issuanceBurnSat = burnSat
+                                )
+                            ))
+                        } catch (_: Throwable) {}
+                    }
+                }
+
                 // Rotate balance/assets to fresh address (currentIndex+1)
                 loadWalletBalance()
                 loadOwnedAssets()
+                loadTransactionHistory()
                 issueStep = IssueStep.InProgress(IssueStep.StepName.CONFIRMING)
                 viewModelScope.launch { pollingLoop(txid) }
             } catch (e: Throwable) {
@@ -2995,7 +3050,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * Transfer an asset from the local wallet to [toAddress] via ElectrumX (consumer mode).
      * Used from the Wallet tab when the user holds an asset and wants to send it.
      */
-    fun transferAssetConsumer(assetName: String, toAddress: String, qty: Long) {
+    fun transferAssetConsumer(assetName: String, toAddress: String, qty: Long, includeOwnerToken: Boolean = false) {
         val s = getStrings()
         val wm = walletManager ?: run { issueSuccess = false; issueResult = s.walletNoWallet; return }
         viewModelScope.launch {
@@ -3008,7 +3063,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 // Execute transfer with retry (D-06)
                 val txid = RetryUtils.retryWithBackoff {
                     withContext(Dispatchers.IO) {
-                        wm.transferAssetLocal(assetName, toAddress, qty.toDouble())
+                        wm.transferAssetLocal(assetName, toAddress, qty.toDouble(), includeOwnerToken = includeOwnerToken)
                     }
                 }
 
@@ -3045,6 +3100,50 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     } else a
                 }
 
+                // Optimistically prepend the just-sent asset transfer to tx history
+                // so the user sees it immediately instead of waiting for the next poll.
+                val nowMs = System.currentTimeMillis()
+                val nowSec = nowMs / 1000L
+                val rawAssetAmount = qty.toLong() * io.raventag.app.wallet.RavencoinTxBuilder.ASSET_UNIT_RAW
+                if (txHistory.none { it.txid == txid }) {
+                    val optimistic = io.raventag.app.wallet.TxHistoryEntry(
+                        txid = txid,
+                        height = 0,
+                        confirmations = 0,
+                        amountSat = 0L,
+                        sentSat = 0L,
+                        isIncoming = false,
+                        isSelfTransfer = false,
+                        timestamp = nowSec,
+                        cycledSat = 0L,
+                        feeSat = 0L,
+                        assetName = assetName,
+                        assetAmount = rawAssetAmount
+                    )
+                    txHistory = listOf(optimistic) + txHistory
+                    txHistoryTotal += 1
+                    txHistoryLoadedCount += 1
+                    withContext(Dispatchers.IO) {
+                        try {
+                            io.raventag.app.wallet.cache.TxHistoryDao.upsert(listOf(
+                                io.raventag.app.wallet.cache.TxHistoryDao.TxHistoryRow(
+                                    txid = txid,
+                                    height = 0,
+                                    confirms = 0,
+                                    amountSat = 0L,
+                                    sentSat = 0L,
+                                    cycledSat = 0L,
+                                    feeSat = 0L,
+                                    isIncoming = false,
+                                    isSelf = false,
+                                    timestamp = nowSec,
+                                    cachedAt = nowMs
+                                )
+                            ))
+                        } catch (_: Throwable) {}
+                    }
+                }
+
                 // Snapshot the pre-broadcast balance so we can reject obviously wrong
                 // (mempool race) refresh values that would temporarily double the total.
                 val preBalance = walletInfo?.balanceRvn ?: 0.0
@@ -3063,6 +3162,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     loadWalletBalance()
                 }
                 loadOwnedAssets()
+                // Refresh tx history so the optimistic row gets enriched with the
+                // network-confirmed entry (assetName/assetAmount preserved by reload).
+                loadTransactionHistory()
             } catch (e: Throwable) {
                 // Show failed notification (D-05, D-06)
                 TransactionNotificationHelper.showFailed(getApplication(), "Transfer failed: ${e.message}")
@@ -4573,9 +4675,10 @@ fun RavenTagApp(
             prefilledAssetName = viewModel.prefilledTransferAssetName,
             showLowRvnWarning = !AppConfig.IS_BRAND_APP && (viewModel.walletInfo?.balanceRvn ?: 0.0) < 0.01,
             feeEstimator = transferFeeEstimator,
+            ownedAssets = viewModel.ownedAssets,
             onBack = { viewModel.issueMode = null; viewModel.clearIssueResult() },
-            onTransfer = { assetName, toAddress, qty ->
-                viewModel.transferAssetConsumer(assetName, toAddress, qty)
+            onTransfer = { assetName, toAddress, qty, includeOwner ->
+                viewModel.transferAssetConsumer(assetName, toAddress, qty, includeOwner)
             }
         )
         return
