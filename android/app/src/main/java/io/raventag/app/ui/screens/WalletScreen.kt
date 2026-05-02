@@ -88,7 +88,14 @@ data class WalletInfo(
 private fun assetPreviewCandidates(asset: OwnedAsset): List<String> {
     return when {
         asset.imageUrl != null -> when {
-            asset.imageUrl.startsWith("file://") -> listOf(asset.imageUrl!!)
+            asset.imageUrl.startsWith("file://") -> {
+                // Local cache file may have been deleted by the user clearing app data.
+                // Append remote IPFS gateway fallbacks so Coil can recover transparently.
+                val cached = asset.imageUrl!!
+                val hash = cached.substringAfterLast('/')
+                val gatewayFallbacks = if (hash.startsWith("Qm")) IpfsResolver.candidateUrls(hash) else emptyList()
+                listOf(cached) + gatewayFallbacks
+            }
             else -> IpfsResolver.candidateUrls(asset.imageUrl!!)
         }
         asset.ipfsHash != null -> IpfsResolver.candidateUrls(asset.ipfsHash!!)
@@ -231,6 +238,9 @@ fun WalletScreen(
     }
     val onLoadMoreTransactions: () -> Unit = remember(viewModel) { { viewModel.loadMoreTransactions() } }
     var pendingTransferAsset by remember { mutableStateOf<OwnedAsset?>(null) }
+    var pendingReissueAsset by remember { mutableStateOf<OwnedAsset?>(null) }
+    var reissueIpfsInput by remember { mutableStateOf("") }
+    var reissueAddQtyInput by remember { mutableStateOf("0") }
     var showMnemonic by remember { mutableStateOf(false) }
     // D-23 extra paged rows appended locally via TxHistoryDao.getPage / getHistoryPaged
     // in addition to viewModel.txHistory provided by MainViewModel.
@@ -414,6 +424,93 @@ fun WalletScreen(
             dismissButton = {
                 OutlinedButton(
                     onClick = { pendingTransferAsset = null },
+                    border = BorderStroke(1.dp, RavenBorder),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)
+                ) { Text(s.walletCancelBtn) }
+            }
+        )
+    }
+
+    pendingReissueAsset?.let { asset ->
+        val ownedNames = viewModel.ownedAssets.orEmpty().map { it.name }
+        val ownerToken = "${asset.name}!"
+        val hasOwnerToken = ownerToken in ownedNames
+        val pickerState = rememberImagePickerState()
+        // Sync the auto-uploaded CID back into the IPFS text field as soon as the upload finishes.
+        LaunchedEffect(pickerState.value.ipfsCid) {
+            pickerState.value.ipfsCid?.let { cid -> reissueIpfsInput = cid }
+        }
+        AlertDialog(
+            onDismissRequest = { pendingReissueAsset = null },
+            containerColor = Color(0xFF101020),
+            title = { Text(s.reissueDialogTitle.replace("%1", asset.name), color = Color.White, fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(s.reissueDialogBody, color = RavenMuted, style = MaterialTheme.typography.bodySmall)
+                    if (!hasOwnerToken) {
+                        Text(
+                            s.reissueMissingOwner.replace("%1", ownerToken),
+                            color = NotAuthenticRed, style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                    // Image picker: lets the user upload a new image to IPFS (Pinata or Kubo)
+                    // straight from the dialog. The resulting CID auto-fills the field below.
+                    ImagePickerButton(
+                        state = pickerState,
+                        adminKey = "",
+                        pinataJwt = viewModel.pinataJwt,
+                        kuboNodeUrl = viewModel.kuboNodeUrl,
+                        pinataValidated = viewModel.pinataJwtStatus == MainViewModel.AdminKeyStatus.VALID,
+                        kuboValidated = viewModel.kuboNodeStatus == MainViewModel.AdminKeyStatus.VALID
+                    )
+                    OutlinedTextField(
+                        value = reissueIpfsInput,
+                        onValueChange = { reissueIpfsInput = it.trim() },
+                        label = { Text(s.reissueNewIpfsLabel, color = RavenMuted) },
+                        placeholder = { Text("Qm...", color = RavenMuted, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = RavenOrange, unfocusedBorderColor = RavenBorder,
+                            focusedTextColor = Color.White, unfocusedTextColor = Color.White,
+                            cursorColor = RavenOrange,
+                            focusedContainerColor = RavenCard, unfocusedContainerColor = RavenCard
+                        )
+                    )
+                    OutlinedTextField(
+                        value = reissueAddQtyInput,
+                        onValueChange = { reissueAddQtyInput = it.filter { c -> c.isDigit() } },
+                        label = { Text(s.reissueAddQtyLabel, color = RavenMuted) },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = RavenOrange, unfocusedBorderColor = RavenBorder,
+                            focusedTextColor = Color.White, unfocusedTextColor = Color.White,
+                            cursorColor = RavenOrange,
+                            focusedContainerColor = RavenCard, unfocusedContainerColor = RavenCard
+                        )
+                    )
+                    Text(s.reissueBurnNote, color = RavenOrange.copy(alpha = 0.85f), style = MaterialTheme.typography.bodySmall)
+                }
+            },
+            confirmButton = {
+                Button(
+                    enabled = hasOwnerToken && (reissueIpfsInput.isNotBlank() || (reissueAddQtyInput.toLongOrNull() ?: 0L) > 0L),
+                    onClick = {
+                        val ipfs = reissueIpfsInput.takeIf { it.isNotBlank() }
+                        val addQty = (reissueAddQtyInput.toLongOrNull() ?: 0L).toDouble()
+                        viewModel.reissueAsset(asset.name, addQty = addQty, newIpfsHash = ipfs)
+                        pendingReissueAsset = null
+                        reissueIpfsInput = ""
+                        reissueAddQtyInput = "0"
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = RavenOrange)
+                ) { Text(s.reissueConfirmBtn, fontWeight = FontWeight.Bold) }
+            },
+            dismissButton = {
+                OutlinedButton(
+                    onClick = { pendingReissueAsset = null },
                     border = BorderStroke(1.dp, RavenBorder),
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)
                 ) { Text(s.walletCancelBtn) }
@@ -845,13 +942,20 @@ fun WalletScreen(
                 // Operators can only transfer UNIQUE tokens; ROOT/SUB transfers are admin-only.
                 items(filteredAssets, key = { it.name }) { asset ->
                     val canTransferThis = onTransferAsset != null && (!isOperator || asset.type == AssetType.UNIQUE)
+                    val canReissueThis = !isOperator && asset.type != AssetType.UNIQUE && !asset.name.endsWith("!") &&
+                        viewModel.ownedAssets.orEmpty().any { it.name == "${asset.name}!" }
                     Box(modifier = Modifier.padding(bottom = 8.dp)) {
                         AssetCard(
                             s = s,
                             asset = asset,
                             previewsActive = active,
                             onPreview = if (asset.imageUrl != null || asset.ipfsHash != null) ({ previewAsset = asset }) else null,
-                            onTransfer = if (canTransferThis) { { if (asset.type != AssetType.UNIQUE) { pendingTransferAsset = asset } else { onTransferAsset!!.invoke(asset) } } } else null
+                            onTransfer = if (canTransferThis) { { if (asset.type != AssetType.UNIQUE) { pendingTransferAsset = asset } else { onTransferAsset!!.invoke(asset) } } } else null,
+                            onReissue = if (canReissueThis) ({
+                                pendingReissueAsset = asset
+                                reissueIpfsInput = ""
+                                reissueAddQtyInput = "0"
+                            }) else null
                         )
                     }
                 }
@@ -989,7 +1093,8 @@ private fun AssetCard(
     asset: OwnedAsset,
     previewsActive: Boolean = true,
     onPreview: (() -> Unit)? = null,
-    onTransfer: (() -> Unit)? = null
+    onTransfer: (() -> Unit)? = null,
+    onReissue: (() -> Unit)? = null
 ) {
     val previewUrls = remember(previewsActive, asset.imageUrl, asset.ipfsHash) {
         if (previewsActive) assetPreviewCandidates(asset) else emptyList()
@@ -1017,6 +1122,7 @@ private fun AssetCard(
             )
             if (onTransfer != null) { AssetActionChip(label = "Tx", icon = Icons.Default.Send, color = typeColor, onClick = onTransfer) }
             else if (asset.ipfsHash != null || asset.imageUrl != null) { AssetActionChip(label = "Open", icon = Icons.Default.Image, color = Color.White, onClick = { onPreview?.invoke() }, enabled = onPreview != null) }
+            if (onReissue != null) { AssetActionChip(label = "Re", icon = Icons.Default.Edit, color = RavenOrange, onClick = onReissue) }
         }
     }
 }
