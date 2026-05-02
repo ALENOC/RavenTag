@@ -2987,6 +2987,50 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
+     * Reissue an asset on-chain to update its IPFS metadata (and optionally mint
+     * additional supply). Requires the wallet to hold the matching ASSETNAME!
+     * owner token; burns 100 RVN.
+     */
+    fun reissueAsset(
+        assetName: String,
+        addQty: Double = 0.0,
+        newUnits: Int = -1,
+        reissuable: Boolean = true,
+        newIpfsHash: String? = null
+    ) {
+        val s = getStrings()
+        val wm = walletManager ?: run { issueSuccess = false; issueResult = s.walletNoWallet; return }
+        viewModelScope.launch {
+            issueLoading = true
+            try {
+                TransactionNotificationHelper.showBroadcasting(getApplication())
+                val txid = RetryUtils.retryWithBackoff {
+                    withContext(Dispatchers.IO) {
+                        wm.reissueAssetLocal(assetName, addQty, newUnits, reissuable, newIpfsHash)
+                    }
+                }
+                TransactionNotificationHelper.showConfirming(getApplication(), 1, 1)
+                kotlinx.coroutines.delay(2000)
+                TransactionNotificationHelper.showCompleted(getApplication(), txid)
+                issueSuccess = true
+                issueResult = s.reissueSuccess.replace("%1", assetName).replace("%2", "${txid.take(20)}...")
+                issuedTxid = txid
+                walletInfo = walletInfo?.copy(address = wm.getCurrentAddress() ?: walletInfo?.address ?: "", isLoading = true)
+                loadWalletBalance()
+                loadOwnedAssets()
+                loadTransactionHistory()
+            } catch (e: Throwable) {
+                TransactionNotificationHelper.showFailed(getApplication(), "Reissue failed: ${e.message}")
+                issueSuccess = false
+                issueResult = s.reissueError.replace("%1", e.message ?: "Unknown error")
+                android.util.Log.e("MainActivity", "reissueAsset failed", e)
+            } finally {
+                issueLoading = false
+            }
+        }
+    }
+
+    /**
      * Auto-sweep launched from detection when old funds are found.
      * Runs in background without blocking UI; shows sweep banner.
      */

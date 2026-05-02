@@ -2040,6 +2040,131 @@ class WalletManager(private val context: Context) {
         }
     }
 
+    /**
+     * Reissue an existing asset on-chain to update IPFS metadata, units, reissuable
+     * flag, and/or mint additional supply. Requires the matching ASSETNAME! owner
+     * token in the wallet and burns 100 RVN.
+     *
+     * @param assetName Full asset name (e.g. "RAVENTAG" or "RAVENTAG/FINE_ART").
+     * @param addQty    Additional supply to mint (display units, may be 0 to update only metadata).
+     * @param newUnits  -1 keeps current units, 0..8 sets a new divisibility.
+     * @param reissuable Whether the asset stays reissuable after this transaction.
+     * @param newIpfsHash Optional new IPFS CIDv0 to attach (null leaves metadata untouched).
+     */
+    suspend fun reissueAssetLocal(
+        assetName: String,
+        addQty: Double = 0.0,
+        newUnits: Int = -1,
+        reissuable: Boolean = true,
+        newIpfsHash: String? = null
+    ): String = withContext(Dispatchers.IO) {
+        require(!assetName.contains('#')) { "Unique tokens cannot be reissued" }
+        require(assetName.length <= RavencoinTxBuilder.MAX_ASSET_NAME_LENGTH) {
+            "Asset name too long (${assetName.length}/${RavencoinTxBuilder.MAX_ASSET_NAME_LENGTH})"
+        }
+
+        val ownerName = "$assetName!"
+        val currentIndex = getCurrentAddressIndex()
+        val address = getAddress(0, currentIndex) ?: error("No wallet")
+        val nextAddress = getAddress(0, currentIndex + 1) ?: error("Cannot derive next address")
+        val node = RavencoinPublicNode(context)
+
+        // Locate the owner token across all addresses (not just current).
+        data class AddrFunds(val index: Int, val rvnUtxos: List<Utxo>, val assetUtxos: Map<String, List<AssetUtxo>>)
+        val addrBatch = getAddressBatch(0, 0..currentIndex)
+        val allFunds = coroutineScope {
+            addrBatch.entries.sortedBy { it.key }.map { (i, addr) ->
+                async {
+                    try {
+                        val r = node.getUtxosAndAllAssetUtxosBatch(addr, fetchMissingAssetUtxos = true)
+                        if (r.first.isNotEmpty() || r.third.isNotEmpty()) AddrFunds(i, r.first, r.third) else null
+                    } catch (_: Exception) { null }
+                }
+            }.awaitAll().filterNotNull()
+        }
+
+        val ownerHolders = allFunds.filter { it.assetUtxos.containsKey(ownerName) }
+        require(ownerHolders.isNotEmpty()) {
+            "Owner token $ownerName not found in this wallet. Cannot reissue $assetName."
+        }
+        val ownerHolder = ownerHolders.first()
+        val ownerAssetUtxos = ownerHolder.assetUtxos.getValue(ownerName)
+            .filter { it.assetRawAmount == RavencoinTxBuilder.ASSET_UNIT_RAW }
+            .map { it.utxo }
+        require(ownerAssetUtxos.isNotEmpty()) {
+            "No valid owner-token UTXO (amount = 1) found for $ownerName"
+        }
+
+        // Plain RVN UTXOs from current address only (keep reissue tx simple).
+        val currentFunds = allFunds.firstOrNull { it.index == currentIndex }
+        val rvnUtxos = currentFunds?.rvnUtxos.orEmpty()
+        require(rvnUtxos.isNotEmpty()) { "No spendable RVN on current address. Refresh the wallet." }
+
+        // Atomic cycling: sweep every other asset on the source address (exclude
+        // the reissued asset name and its owner token) into the same reissue tx,
+        // matching the pattern used by issuance/transfer/RVN-send paths.
+        val ownerOutpoints = ownerAssetUtxos.map { "${it.txid}:${it.outputIndex}" }.toSet()
+        val otherAssetUtxos: Map<String, List<AssetUtxo>> = currentFunds?.assetUtxos
+            ?.filterKeys { it != ownerName }
+            ?.mapValues { (_, utxos) ->
+                utxos.filterNot { "${it.utxo.txid}:${it.utxo.outputIndex}" in ownerOutpoints }
+            }
+            ?.filterValues { it.isNotEmpty() }
+            .orEmpty()
+
+        val satPerByte = try { node.getMinRelayFeeRateSatPerByte() } catch (_: FeeUnavailableException) { 200L }
+        val totalAssetSweepOutputs = otherAssetUtxos.size
+        val totalInputs = rvnUtxos.size + ownerAssetUtxos.size + otherAssetUtxos.values.sumOf { it.size }
+        val outputCount = 4 + totalAssetSweepOutputs // burn + change + owner + reissue + sweep
+        val feeSat = (10L + 148L * totalInputs + 70L * outputCount + 34L) * maxOf(satPerByte, 200L)
+
+        val addQtyRaw = (addQty * RavencoinTxBuilder.ASSET_UNIT_RAW.toDouble()).toLong()
+
+        // Owner key: address holding the owner token signs that input;
+        // RVN inputs are spent from currentIndex. Use the multi-key serializer when
+        // they differ, otherwise the single-key serializer is enough.
+        val needsMultiKey = ownerHolder.index != currentIndex
+        val rvnKp = getKeyPair(0, currentIndex) ?: error("No wallet key for currentIndex")
+        val ownerKp = getKeyPair(0, ownerHolder.index) ?: error("No wallet key for owner-token address")
+        var rvnPriv: ByteArray? = rvnKp.first
+        var ownerPriv: ByteArray? = ownerKp.first
+
+        return@withContext try {
+            android.util.Log.i("WalletManager",
+                "reissueAsset: $assetName addQty=$addQty newUnits=$newUnits reissuable=$reissuable " +
+                "ipfs=${newIpfsHash != null} ownerIndex=${ownerHolder.index} feeSat=$feeSat")
+
+            val tx = if (!needsMultiKey) {
+                RavencoinTxBuilder.buildAndSignAssetReissue(
+                    utxos = rvnUtxos,
+                    ownerAssetUtxos = ownerAssetUtxos,
+                    assetName = assetName,
+                    addQtyRaw = addQtyRaw,
+                    newUnits = newUnits,
+                    reissuable = reissuable,
+                    newIpfsHash = newIpfsHash,
+                    toAddress = nextAddress,
+                    changeAddress = nextAddress,
+                    feeSat = feeSat,
+                    privKeyBytes = rvnPriv!!,
+                    pubKeyBytes = rvnKp.second,
+                    otherAssetUtxos = otherAssetUtxos
+                )
+            } else {
+                // Owner UTXOs live on a different address; sign each input with its own key.
+                error("Owner token on a different address than the current index is not yet supported. " +
+                      "Consolidate the wallet first so the owner token sits on the active address.")
+            }
+            val txid = node.broadcastWithAllServers(tx.hex)
+            setCurrentAddressIndex(currentIndex + 1)
+            android.util.Log.i("WalletManager", "reissueAsset: $assetName reissued, txid=$txid")
+            txid
+        } finally {
+            rvnPriv?.fill(0)
+            ownerPriv?.fill(0)
+        }
+    }
+
     // ── BIP32/BIP44 key derivation ──────────────────────────────────────────
 
     private fun hmacSha512(key: ByteArray, data: ByteArray): ByteArray {
