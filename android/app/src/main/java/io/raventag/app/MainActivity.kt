@@ -2858,8 +2858,54 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 }
 
+                // Optimistically prepend the just-sent tx to the history list so the
+                // user sees it immediately instead of waiting for the next ElectrumX poll.
+                val nowMs = System.currentTimeMillis()
+                val nowSec = nowMs / 1000L
+                val sentSatOpt = (amount * 1e8).toLong()
+                val feeSatOpt = (feeRvn * 1e8).toLong()
+                if (txHistory.none { it.txid == txid }) {
+                    val optimistic = io.raventag.app.wallet.TxHistoryEntry(
+                        txid = txid,
+                        height = 0,
+                        confirmations = 0,
+                        amountSat = 0L,
+                        sentSat = sentSatOpt,
+                        isIncoming = false,
+                        isSelfTransfer = false,
+                        timestamp = nowSec,
+                        cycledSat = 0L,
+                        feeSat = feeSatOpt
+                    )
+                    txHistory = listOf(optimistic) + txHistory
+                    txHistoryTotal += 1
+                    txHistoryLoadedCount += 1
+                    withContext(Dispatchers.IO) {
+                        try {
+                            io.raventag.app.wallet.cache.TxHistoryDao.upsert(listOf(
+                                io.raventag.app.wallet.cache.TxHistoryDao.TxHistoryRow(
+                                    txid = txid,
+                                    height = 0,
+                                    confirms = 0,
+                                    amountSat = 0L,
+                                    sentSat = sentSatOpt,
+                                    cycledSat = 0L,
+                                    feeSat = feeSatOpt,
+                                    isIncoming = false,
+                                    isSelf = false,
+                                    timestamp = nowSec,
+                                    cachedAt = nowMs
+                                )
+                            ))
+                        } catch (_: Throwable) {}
+                    }
+                }
+
                 // Refresh balance from network (confirms the exact post-send amount)
                 loadWalletBalance()
+                // Refresh tx history so the optimistic row gets replaced by the
+                // network-confirmed entry as soon as ElectrumX sees the broadcast.
+                loadTransactionHistory()
             } catch (e: io.raventag.app.wallet.FeeUnavailableException) {
                 sendLoading = false
                 sendProgressLog = emptyList()
