@@ -62,8 +62,9 @@ fun TransferScreen(
     prefilledAssetName: String? = null,
     showLowRvnWarning: Boolean = false,
     feeEstimator: FeeEstimator? = null,
+    ownedAssets: List<io.raventag.app.ravencoin.OwnedAsset>? = null,
     onBack: () -> Unit,
-    onTransfer: (assetName: String, toAddress: String, qty: Long) -> Unit
+    onTransfer: (assetName: String, toAddress: String, qty: Long, includeOwnerToken: Boolean) -> Unit
 ) {
     val s = LocalStrings.current
 
@@ -71,6 +72,21 @@ fun TransferScreen(
     var assetName by remember { mutableStateOf(prefilledAssetName ?: "") }
     var toAddress by remember { mutableStateOf("") }
     var qty by remember { mutableStateOf("1") }
+    var includeOwnerToken by remember { mutableStateOf(false) }
+
+    // Owner token name = the asset's own owner ("ASSET!"). Each root and sub-asset
+    // has its own owner token; unique tokens (containing '#') have none.
+    // Visible as a checkbox only when the wallet actually holds that owner token.
+    val ownerTokenName = remember(assetName) {
+        when {
+            assetName.length < 3 -> null
+            assetName.contains('#') -> null
+            assetName.endsWith('!') -> null
+            else -> "$assetName!"
+        }
+    }
+    val ownerTokenAvailable = ownerTokenName != null &&
+        ownedAssets?.any { it.name.equals(ownerTokenName, ignoreCase = true) } == true
 
     // Controls whether the QR scanner overlay replaces this screen temporarily.
     var showScanner by remember { mutableStateOf(false) }
@@ -179,7 +195,7 @@ fun TransferScreen(
                 Button(
                     onClick = {
                         showConfirm = false
-                        onTransfer(assetName, toAddress, qty.toLongOrNull() ?: 1L)
+                        onTransfer(assetName, toAddress, qty.toLongOrNull() ?: 1L, includeOwnerToken && ownerTokenAvailable)
                         feeSatPerKb = null
                         feeUsedFallback = false
                         feeOverrideText = ""
@@ -342,6 +358,48 @@ fun TransferScreen(
             singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
         )
+
+        // Owner-token bundle option: visible only when the wallet holds the owner token
+        // for the entered asset. Sending the owner token cedes future issuance rights
+        // for the entire asset branch to the recipient.
+        if (ownerTokenAvailable && ownerTokenName != null) {
+            Spacer(modifier = Modifier.height(16.dp))
+            Card(
+                colors = CardDefaults.cardColors(containerColor = RavenCard),
+                border = BorderStroke(1.dp, if (includeOwnerToken) RavenOrange else RavenBorder),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Checkbox(
+                        checked = includeOwnerToken,
+                        onCheckedChange = { includeOwnerToken = it },
+                        colors = CheckboxDefaults.colors(
+                            checkedColor = RavenOrange,
+                            uncheckedColor = RavenBorder,
+                            checkmarkColor = Color.Black
+                        )
+                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            s.transferIncludeOwnerLabel.replace("%1", ownerTokenName),
+                            color = Color.White,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            s.transferIncludeOwnerDesc,
+                            color = RavenOrange.copy(alpha = 0.85f),
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+            }
+        }
 
         Spacer(modifier = Modifier.height(24.dp))
 

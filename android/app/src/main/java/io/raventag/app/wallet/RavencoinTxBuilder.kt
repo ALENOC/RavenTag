@@ -421,7 +421,8 @@ object RavencoinTxBuilder {
         primaryAsset: AssetOutput,
         primaryAssetChange: Long,
         feeSat: Long,
-        changeAddress: String
+        changeAddress: String,
+        secondaryAssetsToToAddress: Map<String, List<KeyedAssetUtxo>> = emptyMap()
     ): SignedTx {
         val primaryDustIn = primaryAssetInputs.sumOf { it.assetUtxo.utxo.satoshis }
         val dustForPrimaryOut    = if (primaryDustIn > 0) 600L else 0L
@@ -437,10 +438,22 @@ object RavencoinTxBuilder {
             }
         }
 
-        val totalDust = dustForPrimaryOut + dustForPrimaryChange + dustForOtherAssets
+        // Secondary assets routed to the recipient (e.g. owner token bundled with the asset).
+        val secondaryOutputs = mutableListOf<AssetOutput>()
+        var dustForSecondaryAssets = 0L
+        for ((name, keyedUtxos) in secondaryAssetsToToAddress) {
+            val totalRaw = keyedUtxos.sumOf { it.assetUtxo.assetRawAmount }
+            if (totalRaw > 0) {
+                secondaryOutputs.add(AssetOutput(name, totalRaw, primaryAsset.toAddress))
+                if (keyedUtxos.sumOf { it.assetUtxo.utxo.satoshis } > 0) dustForSecondaryAssets += 600L
+            }
+        }
+
+        val totalDust = dustForPrimaryOut + dustForPrimaryChange + dustForOtherAssets + dustForSecondaryAssets
         val rvnIn = rvnInputs.sumOf { it.utxo.satoshis } +
                     primaryAssetInputs.sumOf { it.assetUtxo.utxo.satoshis } +
-                    otherAssetInputs.values.flatten().sumOf { it.assetUtxo.utxo.satoshis }
+                    otherAssetInputs.values.flatten().sumOf { it.assetUtxo.utxo.satoshis } +
+                    secondaryAssetsToToAddress.values.flatten().sumOf { it.assetUtxo.utxo.satoshis }
         val rvnChange = rvnIn - feeSat - totalDust
 
         require(rvnIn >= feeSat + totalDust) {
@@ -450,6 +463,7 @@ object RavencoinTxBuilder {
         data class InputEntry(val utxo: Utxo, val privKey: ByteArray, val pubKey: ByteArray)
         val allEntries = mutableListOf<InputEntry>()
         primaryAssetInputs.forEach  { allEntries.add(InputEntry(it.assetUtxo.utxo, it.privKey, it.pubKey)) }
+        secondaryAssetsToToAddress.values.flatten().forEach { allEntries.add(InputEntry(it.assetUtxo.utxo, it.privKey, it.pubKey)) }
         otherAssetInputs.values.flatten().forEach { allEntries.add(InputEntry(it.assetUtxo.utxo, it.privKey, it.pubKey)) }
         rvnInputs.forEach           { allEntries.add(InputEntry(it.utxo, it.privKey, it.pubKey)) }
 
@@ -463,6 +477,11 @@ object RavencoinTxBuilder {
         if (primaryAssetChange > 0) {
             outputs.add(ScriptedOutput(dustForPrimaryChange,
                 buildAssetTransferScript(changeAddress, primaryAsset.assetName, primaryAssetChange)))
+        }
+        for (ao in secondaryOutputs) {
+            val inputDust = secondaryAssetsToToAddress[ao.assetName]?.sumOf { it.assetUtxo.utxo.satoshis } ?: 0L
+            outputs.add(ScriptedOutput(if (inputDust > 0) 600L else 0L,
+                buildAssetTransferScript(ao.toAddress, ao.assetName, ao.rawAmount)))
         }
         for (ao in otherOutputs) {
             val inputDust = otherAssetInputs[ao.assetName]?.sumOf { it.assetUtxo.utxo.satoshis } ?: 0L
