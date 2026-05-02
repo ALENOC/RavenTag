@@ -75,6 +75,9 @@ object RavencoinTxBuilder {
     /** Generic burn address for asset revocation/destruction (not for issuance). */
     const val BURN_ADDRESS = "RXBurnXXXXXXXXXXXXXXXXXXXXXXWUo9FV"
 
+    /** Burn address for asset reissuance (cost: 100 RVN). */
+    const val BURN_ADDRESS_REISSUE = "RXReissueAssetXXXXXXXXXXXXXXVEFAWu"
+
     // ── Issuance burn amounts in satoshis (1 RVN = 1e8 satoshis) ─────────────
 
     /** RVN cost to issue a root asset: 500 RVN in satoshis. */
@@ -85,6 +88,9 @@ object RavencoinTxBuilder {
 
     /** RVN cost to issue a unique token: 5 RVN in satoshis. */
     const val BURN_UNIQUE_SAT = 500_000_000L
+
+    /** RVN cost to reissue an asset (root or sub): 100 RVN in satoshis. */
+    const val BURN_REISSUE_SAT = 10_000_000_000L
 
     /** One display asset unit in Ravencoin raw amount encoding. */
     const val ASSET_UNIT_RAW = 100_000_000L
@@ -1235,6 +1241,144 @@ object RavencoinTxBuilder {
      *   <= 255 bytes: OP_PUSHDATA1 (0x4c) + 1-byte length
      *   otherwise: OP_PUSHDATA2 (0x4d) + 2-byte LE length
      */
+    /**
+     * Build the OP_RVN_ASSET scriptPubKey for an asset reissuance ("rvnr" marker).
+     *
+     * Payload:
+     *   "rvnr"                  4 bytes: reissue type marker
+     *   compact_size(name_len)  1 byte
+     *   name_bytes              ASCII asset name
+     *   LE64(addQtyRaw)         8 bytes: additional quantity to mint (can be 0)
+     *   newUnits                1 byte: -1 (0xFF) keeps current units, 0..8 sets new value
+     *   reissuableFlag          1 byte: 0 = lock further reissues, 1 = remain reissuable
+     *   [ipfs_multihash]        34 bytes appended only when a new IPFS hash is provided
+     *                            (presence is detected by remaining payload length)
+     */
+    private fun buildAssetReissueScript(
+        address: String,
+        assetName: String,
+        addQtyRaw: Long,
+        newUnits: Int,
+        reissuable: Boolean,
+        newIpfsHash: String?
+    ): ByteArray {
+        val decoded = base58Decode(address)
+        val hash160 = decoded.copyOfRange(1, 21)
+        val nameBytes = assetName.toByteArray(Charsets.US_ASCII)
+        val ipfsBytes = newIpfsHash?.let { decodeIpfsCidV0(it) }
+
+        val payload = ByteArrayOutputStream()
+        payload.write(byteArrayOf(0x72, 0x76, 0x6e, 0x72)) // "rvnr"
+        payload.write(nameBytes.size)
+        payload.write(nameBytes)
+        payload.writeLE64(addQtyRaw)
+        payload.write(newUnits and 0xff)                   // -1 -> 0xFF (keep current units)
+        payload.write(if (reissuable) 1 else 0)
+        if (ipfsBytes != null) payload.write(ipfsBytes)
+
+        val payloadBytes = payload.toByteArray()
+
+        val buf = ByteArrayOutputStream()
+        buf.write(byteArrayOf(0x76.toByte(), 0xa9.toByte(), 0x14.toByte()))
+        buf.write(hash160)
+        buf.write(byteArrayOf(0x88.toByte(), 0xac.toByte(), 0xc0.toByte()))
+        when {
+            payloadBytes.size <= 75  -> { buf.write(payloadBytes.size); buf.write(payloadBytes) }
+            payloadBytes.size <= 255 -> { buf.write(0x4c); buf.write(payloadBytes.size); buf.write(payloadBytes) }
+            else -> { buf.write(0x4d)
+                buf.write(payloadBytes.size and 0xff)
+                buf.write((payloadBytes.size shr 8) and 0xff)
+                buf.write(payloadBytes) }
+        }
+        buf.write(0x75) // OP_DROP
+        return buf.toByteArray()
+    }
+
+    /**
+     * Build, sign, and serialise an asset reissuance transaction with atomic cycling.
+     *
+     * In addition to the reissue itself, all other RVN and asset UTXOs at the source
+     * address are swept to [changeAddress] in the same transaction so the active address
+     * advances cleanly without requiring a follow-up consolidation tx.
+     *
+     * Outputs (Ravencoin consensus order: P2PKH first, then OP_RVN_ASSET):
+     *   1. Burn output: 100 RVN to BURN_ADDRESS_REISSUE
+     *   2. RVN change to changeAddress (omitted if below dust)
+     *   3. Asset sweep outputs (all other assets to changeAddress)
+     *   4. Owner-token output: re-creates ASSETNAME! at changeAddress
+     *   5. Reissue output (rvnr) at toAddress (where new supply, if any, lands)
+     */
+    fun buildAndSignAssetReissue(
+        utxos: List<Utxo>,
+        ownerAssetUtxos: List<Utxo>,
+        assetName: String,
+        addQtyRaw: Long,
+        newUnits: Int,
+        reissuable: Boolean,
+        newIpfsHash: String?,
+        toAddress: String,
+        changeAddress: String,
+        feeSat: Long,
+        privKeyBytes: ByteArray,
+        pubKeyBytes: ByteArray,
+        otherAssetUtxos: Map<String, List<AssetUtxo>> = emptyMap()
+    ): SignedTx {
+        require(ownerAssetUtxos.isNotEmpty()) {
+            "Missing owner-token UTXO for $assetName! - cannot reissue"
+        }
+
+        val burnSat = BURN_REISSUE_SAT
+        val ownerDust = 0L
+        val reissueDust = 0L
+
+        // Aggregate every other asset (excluding owner + reissued asset) into one
+        // sweep output per name routed to changeAddress.
+        var dustForSweptAssets = 0L
+        val assetSweepOutputs = mutableListOf<AssetOutput>()
+        for ((name, utxosOther) in otherAssetUtxos) {
+            val totalRawAmount = utxosOther.sumOf { it.assetRawAmount }
+            if (totalRawAmount > 0) {
+                assetSweepOutputs.add(AssetOutput(name, totalRawAmount, changeAddress))
+                if (utxosOther.sumOf { it.utxo.satoshis } > 0) dustForSweptAssets += 600L
+            }
+        }
+
+        val otherAssetSatoshis = otherAssetUtxos.values.flatten().sumOf { it.utxo.satoshis }
+        val rvnAndOwnerInputs = utxos + ownerAssetUtxos
+        val totalIn = rvnAndOwnerInputs.sumOf { it.satoshis } + otherAssetSatoshis
+        val required = burnSat + ownerDust + reissueDust + feeSat + dustForSweptAssets
+        require(totalIn >= required) {
+            "Insufficient RVN: have ${"%.4f".format(totalIn / 1e8)} RVN, " +
+            "need ${"%.4f".format(required / 1e8)} RVN (burn + fee + asset dust)"
+        }
+        val changeSat = totalIn - burnSat - ownerDust - reissueDust - feeSat - dustForSweptAssets
+
+        val burnScript = p2pkhScript(BURN_ADDRESS_REISSUE)
+        val ownerScript = buildAssetTransferScript(changeAddress, "$assetName!", ASSET_UNIT_RAW)
+        val reissueScript = buildAssetReissueScript(toAddress, assetName, addQtyRaw, newUnits, reissuable, newIpfsHash)
+
+        val outputs = mutableListOf<ScriptedOutput>()
+        outputs.add(ScriptedOutput(burnSat, burnScript))
+        if (changeSat > 546) outputs.add(ScriptedOutput(changeSat, p2pkhScript(changeAddress)))
+        for (assetOutput in assetSweepOutputs) {
+            val inputDust = otherAssetUtxos[assetOutput.assetName]?.sumOf { it.utxo.satoshis } ?: 0L
+            val dustForThisOutput = if (inputDust > 0) 600L else 0L
+            outputs.add(ScriptedOutput(dustForThisOutput,
+                buildAssetTransferScript(changeAddress, assetOutput.assetName, assetOutput.rawAmount)))
+        }
+        outputs.add(ScriptedOutput(ownerDust, ownerScript))
+        outputs.add(ScriptedOutput(reissueDust, reissueScript))
+
+        // Order inputs deterministically: RVN, owner, other assets.
+        val allInputs = utxos + ownerAssetUtxos + otherAssetUtxos.values.flatten().map { it.utxo }
+        val signatures = allInputs.mapIndexed { idx, utxo ->
+            val sigHash = sigHashWithScriptedOutputs(allInputs, outputs, idx, utxo.script)
+            signEcdsa(sigHash, privKeyBytes)
+        }
+        val raw = serializeTxWithScripts(allInputs, outputs, signatures, pubKeyBytes)
+        return SignedTx(raw.toHex(), txid(raw))
+    }
+
     private fun buildAssetIssueScript(
         address: String,
         assetName: String,
