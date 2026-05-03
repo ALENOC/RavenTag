@@ -1611,11 +1611,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 coroutineScope {
                     val discoverDeferred = async(Dispatchers.IO) {
                         try {
-                            wm.discoverCurrentIndex { progress ->
+                            wm.discoverCurrentIndex(onProgress = { progress ->
                                 viewModelScope.launch(Dispatchers.Main) {
                                     walletInfo = walletInfo?.copy(loadingMessage = progress)
                                 }
-                            }
+                            })
                         } catch (e: Exception) {
                             Log.w("MainActivity", "discoverCurrentIndex failed, using index 0", e)
                             0
@@ -1864,11 +1864,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 loadingMessage = "Searching for your wallet on the blockchain..."
                             )
                         }
-                        wm.discoverCurrentIndex { progress ->
+                        wm.discoverCurrentIndex(onProgress = { progress ->
                             viewModelScope.launch(Dispatchers.Main) {
                                 walletInfo = walletInfo?.copy(loadingMessage = progress)
                             }
-                        }
+                        })
                         val discoveredAddr = wm.getCurrentAddress()
                         val discoveredIdx = wm.getCurrentAddressIndex()
                         if (discoveredIdx != currentIdx || discoveredAddr != walletInfo?.address) {
