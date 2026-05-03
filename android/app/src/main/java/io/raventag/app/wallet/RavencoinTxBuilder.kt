@@ -44,10 +44,11 @@ object RavencoinTxBuilder {
     private const val SIGHASH_ALL = 1
 
     /**
-     * nSequence = 0xFFFFFFFF disables relative locktime (RBF opt-out).
+     * nSequence = 0xFFFFFFFD signals BIP125 replaceability (RBF opt-in).
+     * Allows replacing a stuck mempool transaction with a higher-fee version.
      * Stored as Long to avoid sign issues when writing as unsigned 32-bit LE.
      */
-    private const val SEQUENCE = 0xFFFFFFFFL
+    private const val SEQUENCE = 0xFFFFFFFDL
 
     /** nLockTime = 0 means the transaction can be mined immediately. */
     private const val LOCKTIME = 0L
