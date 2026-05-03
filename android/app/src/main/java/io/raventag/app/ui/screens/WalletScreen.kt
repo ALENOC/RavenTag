@@ -942,7 +942,7 @@ fun WalletScreen(
                 // Operators can only transfer UNIQUE tokens; ROOT/SUB transfers are admin-only.
                 items(filteredAssets, key = { it.name }) { asset ->
                     val canTransferThis = onTransferAsset != null && (!isOperator || asset.type == AssetType.UNIQUE)
-                    val canReissueThis = !isOperator && asset.type != AssetType.UNIQUE && !asset.name.endsWith("!") &&
+                    val canReissueThis = isBrandApp && !isOperator && asset.type != AssetType.UNIQUE && !asset.name.endsWith("!") &&
                         viewModel.ownedAssets.orEmpty().any { it.name == "${asset.name}!" }
                     Box(modifier = Modifier.padding(bottom = 8.dp)) {
                         AssetCard(
