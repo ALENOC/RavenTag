@@ -1192,6 +1192,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 if (deduped.isNotEmpty()) {
                     withContext(Dispatchers.IO) {
                         try {
+                            // Purge stale mempool rows before re-inserting live ones
+                            io.raventag.app.wallet.cache.WalletReliabilityDb.getDatabase()
+                                .delete("tx_history", "height = 0", null)
                             val now = System.currentTimeMillis()
                             val rows = deduped.map { e ->
                                 io.raventag.app.wallet.cache.TxHistoryDao.TxHistoryRow(
@@ -2284,6 +2287,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // immediately from cache instead of waiting for the network.
             if (deduped.isNotEmpty()) {
                 try {
+                    // Purge stale mempool rows before re-inserting live ones
+                    io.raventag.app.wallet.cache.WalletReliabilityDb.getDatabase()
+                        .delete("tx_history", "height = 0", null)
                     val now = System.currentTimeMillis()
                     val rows = deduped.map { e ->
                         io.raventag.app.wallet.cache.TxHistoryDao.TxHistoryRow(
