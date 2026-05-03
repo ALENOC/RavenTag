@@ -531,7 +531,8 @@ class WalletManager(private val context: Context) {
     fun ensureCurrentAddressClean() {}
 
     suspend fun discoverCurrentIndex(
-        onProgress: ((String) -> Unit)? = null
+        onProgress: ((String) -> Unit)? = null,
+        force: Boolean = false
     ): Int = withContext(Dispatchers.IO) {
         val node = RavencoinPublicNode(context)
         val currentStoredIndex = getCurrentAddressIndex()
@@ -645,24 +646,31 @@ class WalletManager(private val context: Context) {
             }
         }
 
-        val finalResult = maxOf(
-            when {
-                lastWithFunds >= 0 -> {
-                    val fundsStatus = statusByIndex[lastWithFunds]
-                        ?: RavencoinPublicNode.AddressStatus.NO_HISTORY
-                    if (fundsStatus == RavencoinPublicNode.AddressStatus.HAS_OUTGOING) {
-                        android.util.Log.i("WalletManager", "discoverCurrentIndex: index $lastWithFunds key exposed, using ${lastWithFunds + 1}")
-                        lastWithFunds + 1
-                    } else {
-                        android.util.Log.i("WalletManager", "discoverCurrentIndex: index $lastWithFunds has funds, key safe, staying there")
-                        lastWithFunds
-                    }
+        val discovered = when {
+            lastWithFunds >= 0 -> {
+                val fundsStatus = statusByIndex[lastWithFunds]
+                    ?: RavencoinPublicNode.AddressStatus.NO_HISTORY
+                if (fundsStatus == RavencoinPublicNode.AddressStatus.HAS_OUTGOING) {
+                    android.util.Log.i("WalletManager", "discoverCurrentIndex: index $lastWithFunds key exposed, using ${lastWithFunds + 1}")
+                    lastWithFunds + 1
+                } else {
+                    android.util.Log.i("WalletManager", "discoverCurrentIndex: index $lastWithFunds has funds, key safe, staying there")
+                    lastWithFunds
                 }
-                lastUsed >= 0 -> lastUsed + 1
-                else -> 0
-            },
-            currentStoredIndex
-        )
+            }
+            lastUsed >= 0 -> lastUsed + 1
+            else -> 0
+        }
+        // In normal mode the stored index acts as a floor: if discovery returns
+        // a lower value (e.g. Electrum servers are down and all probes timed out),
+        // we keep the stored index. When force=true the floor is skipped so the
+        // wallet can roll back after phantom mempool transactions evict.
+        val finalResult = if (force) {
+            android.util.Log.i("WalletManager", "discoverCurrentIndex: force mode, skipping stored-index floor ($currentStoredIndex)")
+            discovered
+        } else {
+            maxOf(discovered, currentStoredIndex)
+        }
         setCurrentAddressIndex(finalResult)
         android.util.Log.i("WalletManager", "Discover: current index = $finalResult (lastUsed=$lastUsed, lastWithFunds=$lastWithFunds)")
         onProgress?.invoke("Found wallet at index $finalResult")
@@ -846,6 +854,7 @@ class WalletManager(private val context: Context) {
             return emptyList()
         }
         if (sweepRunning) return emptyList()
+        if (!ensureNoPendingSends(throwOnPending = false)) return emptyList()
         sweepRunning = true
         try {
             return sweepOldAddressesInternal()
@@ -1458,7 +1467,40 @@ class WalletManager(private val context: Context) {
         } catch (_: Exception) { null }
     }
 
+    /**
+     * Guards against chained unconfirmed sends: rejects new sends when the wallet
+     * already has pending transactions. Chaining sends on unconfirmed outputs
+     * creates a mempool dependency cascade (child-pays-parent) that stalls the
+     * entire wallet if the parent tx is deprioritised or dropped.
+     *
+     * @param throwOnPending If true, throws an [IllegalStateException] when pending
+     *   txs exist. If false, logs a warning and returns false (caller can decide).
+     * @return true if safe to proceed, false if pending txs exist and the caller
+     *   should abort.
+     */
+    private fun ensureNoPendingSends(throwOnPending: Boolean = true): Boolean {
+        try {
+            val db = io.raventag.app.wallet.cache.WalletReliabilityDb.getDatabase()
+            val unconfirmed = db.rawQuery(
+                "SELECT COUNT(*) FROM tx_history WHERE height = 0", null
+            ).use { c -> if (c.moveToFirst()) c.getInt(0) else 0 }
+            if (unconfirmed > 0) {
+                if (throwOnPending) {
+                    error("Cannot send: $unconfirmed transaction(s) still pending confirmation. Wait 1-2 blocks and try again.")
+                } else {
+                    android.util.Log.w("WalletManager", "Skipping automatic sweep/consolidation: $unconfirmed tx(s) still pending confirmation")
+                    return false
+                }
+            }
+        } catch (e: Exception) {
+            if (e is IllegalStateException) throw e
+            // DB not initialized yet — safe to proceed
+        }
+        return true
+    }
+
     suspend fun sendRvnLocal(toAddress: String, amountRvn: Double, onProgress: ((String) -> Unit)? = null): String = withContext(Dispatchers.IO) {
+        ensureNoPendingSends()
         var currentIndex = getCurrentAddressIndex()
         var address = getAddress(0, currentIndex) ?: error("No wallet")
         val node = RavencoinPublicNode(context)
@@ -1710,6 +1752,7 @@ class WalletManager(private val context: Context) {
         qty: Double = 1.0,
         includeOwnerToken: Boolean = false
     ): String = withContext(Dispatchers.IO) {
+        ensureNoPendingSends()
         val currentIndex = getCurrentAddressIndex()
         val nextAddress = getAddress(0, currentIndex + 1) ?: error("Cannot derive next address")
         val node = RavencoinPublicNode(context)
@@ -1917,6 +1960,7 @@ class WalletManager(private val context: Context) {
         reissuable: Boolean = false,
         ipfsHash: String? = null
     ): String = withContext(Dispatchers.IO) {
+        ensureNoPendingSends()
         val assetName = assetNameRaw.trim()
         require(assetName.length <= RavencoinTxBuilder.MAX_ASSET_NAME_LENGTH) {
             "Asset name too long (${assetName.length}/${RavencoinTxBuilder.MAX_ASSET_NAME_LENGTH}): $assetName"
@@ -2058,6 +2102,7 @@ class WalletManager(private val context: Context) {
         reissuable: Boolean = true,
         newIpfsHash: String? = null
     ): String = withContext(Dispatchers.IO) {
+        ensureNoPendingSends()
         require(!assetName.contains('#')) { "Unique tokens cannot be reissued" }
         require(assetName.length <= RavencoinTxBuilder.MAX_ASSET_NAME_LENGTH) {
             "Asset name too long (${assetName.length}/${RavencoinTxBuilder.MAX_ASSET_NAME_LENGTH})"
@@ -2318,6 +2363,7 @@ class WalletManager(private val context: Context) {
     }
 
     suspend fun healAndSweepTarget(index: Int) = withContext(Dispatchers.IO) {
+        if (!ensureNoPendingSends(throwOnPending = false)) return@withContext
         val currentIndex = getCurrentAddressIndex()
         val addr = getAddress(0, index) ?: return@withContext
         val keyPair = getKeyPair(0, index) ?: return@withContext
@@ -2388,6 +2434,7 @@ suspend fun consolidateAllFundsToFreshAddress(): String? = withContext(Dispatche
         android.util.Log.i("WalletManager", "consolid: already running")
         return@withContext null
     }
+    if (!ensureNoPendingSends(throwOnPending = false)) return@withContext null
     consolidationRunning = true
     val currentIndex = getCurrentAddressIndex()
     android.util.Log.i("WalletManager", "consolid: START - currentIndex=$currentIndex")
