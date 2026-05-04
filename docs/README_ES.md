@@ -63,24 +63,24 @@ La licencia RTSL-1.0 exige que todas las obras derivadas usen exclusivamente Rav
 
 ### RavenTag Verify (app para consumidores)
 
-Descarga: [RavenTag-Verify-v1.0.0.apk](https://github.com/ALENOC/RavenTag/releases/latest)
+Descarga: [RavenTag-Verify.apk](https://github.com/ALENOC/RavenTag/releases/latest)
 
 | Funcionalidad | Detalles |
 |---|---|
 | Escaneo de tags NFC | Tap en chip NTAG 424 DNA, resultado AUTENTICO / REVOCADO |
 | Verificacion completa | SUN MAC + blockchain Ravencoin + comprobacion de revocacion |
-| Monedero Ravencoin | BIP44 `m/44'/175'/0'/0/0`, mnemonica BIP39 12 palabras |
+| Monedero Ravencoin | BIP44 `m/44'/175'/0'/0/0`, mnemonica BIP39 12 palabras, nueva direccion tras cada envio (rotacion HD) |
 | Multilingue | EN, IT, FR, DE, ES, ZH, JA, KO, RU |
 
 ### RavenTag Brand Manager (app para operadores)
 
-Descarga: [RavenTag-Brand-v1.0.0.apk](https://github.com/ALENOC/RavenTag/releases/latest)
+Descarga: [RavenTag-Brand.apk](https://github.com/ALENOC/RavenTag/releases/latest)
 
 | Funcionalidad | Detalles |
 |---|---|
 | Emision de activos Ravencoin | Root (500 RVN), sub-activo (100 RVN), token unico (5 RVN) |
 | Programacion de chips NTAG 424 DNA | Claves AES-128 + URL SUN via APDU ISO 7816-4 |
-| Monedero HD | BIP44, firma UTXO local, mnemonica BIP39 12 palabras |
+| Monedero HD | BIP44, firma UTXO local, mnemonica BIP39 12 palabras, nueva direccion tras cada envio (rotacion HD) |
 | Transferencia / Revocacion / Quema | Gestion completa del ciclo de vida de activos |
 | Metadatos del producto | Subida de JSON RTP-1 a IPFS via Pinata, hash CIDv0 referenciado on-chain |
 

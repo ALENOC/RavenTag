@@ -93,24 +93,24 @@ RTSL-1.0 라이선스는 모든 파생 작품이 모든 블록체인 작업에 R
 
 ### RavenTag Verify (소비자용 앱)
 
-다운로드: [RavenTag-Verify-v1.0.0.apk](https://github.com/ALENOC/RavenTag/releases/latest)
+다운로드: [RavenTag-Verify.apk](https://github.com/ALENOC/RavenTag/releases/latest)
 
 | 기능 | 세부사항 |
 |---|---|
 | NFC 태그 스캔 | NTAG 424 DNA 칩 탭, 정품 / 취소됨 결과 표시 |
 | 완전한 검증 | SUN MAC + Ravencoin 블록체인 + 취소 확인 |
-| Ravencoin 지갑 | BIP44 `m/44'/175'/0'/0/0`, BIP39 12단어 니모닉 |
+| Ravencoin 지갑 | BIP44 `m/44'/175'/0'/0/0`, BIP39 12단어 니모닉, 전송 시 새 주소 생성 (HD 주소 순환) |
 | 다국어 | EN, IT, FR, DE, ES, ZH, JA, KO, RU |
 
 ### RavenTag Brand Manager (운영자용 앱)
 
-다운로드: [RavenTag-Brand-v1.0.0.apk](https://github.com/ALENOC/RavenTag/releases/latest)
+다운로드: [RavenTag-Brand.apk](https://github.com/ALENOC/RavenTag/releases/latest)
 
 | 기능 | 세부사항 |
 |---|---|
 | Ravencoin 자산 발행 | 루트(500 RVN), 하위 자산(100 RVN), 고유 토큰(5 RVN) |
 | NTAG 424 DNA 칩 프로그래밍 | ISO 7816-4 APDU를 통한 AES-128 키 + SUN URL |
-| HD 지갑 | BIP44, 로컬 UTXO 서명, BIP39 12단어 니모닉 |
+| HD 지갑 | BIP44, 로컬 UTXO 서명, BIP39 12단어 니모닉, 전송 시 새 주소 생성 (HD 주소 순환) |
 | 전송 / 취소 / 소각 | 완전한 자산 수명주기 관리 |
 | 제품 메타데이터 | Pinata를 통해 RTP-1 JSON을 IPFS에 업로드, CIDv0 해시를 온체인에서 참조 |
 

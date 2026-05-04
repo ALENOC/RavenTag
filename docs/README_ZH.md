@@ -93,24 +93,24 @@ RTSL-1.0 许可证要求所有衍生作品在所有区块链操作中专用 Rave
 
 ### RavenTag Verify（消费者应用）
 
-下载: [RavenTag-Verify-v1.0.0.apk](https://github.com/ALENOC/RavenTag/releases/latest)
+下载: [RavenTag-Verify.apk](https://github.com/ALENOC/RavenTag/releases/latest)
 
 | 功能 | 详情 |
 |---|---|
 | 扫描 NFC 标签 | 感应 NTAG 424 DNA 芯片，显示真实 / 已撤销结果 |
 | 完整验证 | SUN MAC + Ravencoin 区块链 + 撤销检查 |
-| Ravencoin 钱包 | BIP44 `m/44'/175'/0'/0/0`，BIP39 12 词助记词 |
+| Ravencoin 钱包 | BIP44 `m/44'/175'/0'/0/0`，BIP39 12 词助记词，每次发送后生成新地址（HD 地址轮换）|
 | 多语言 | EN, IT, FR, DE, ES, ZH, JA, KO, RU |
 
 ### RavenTag Brand Manager（运营者应用）
 
-下载: [RavenTag-Brand-v1.0.0.apk](https://github.com/ALENOC/RavenTag/releases/latest)
+下载: [RavenTag-Brand.apk](https://github.com/ALENOC/RavenTag/releases/latest)
 
 | 功能 | 详情 |
 |---|---|
 | 发行 Ravencoin 资产 | 根资产（500 RVN）、子资产（100 RVN）、唯一代币（5 RVN）|
 | 编程 NTAG 424 DNA 芯片 | AES-128 密钥 + SUN URL，通过 ISO 7816-4 APDU |
-| HD 钱包 | BIP44，本地 UTXO 签名，BIP39 12 词助记词 |
+| HD 钱包 | BIP44，本地 UTXO 签名，BIP39 12 词助记词，每次发送后生成新地址（HD 地址轮换）|
 | 转让 / 撤销 / 销毁 | 完整的资产生命周期管理 |
 | 产品元数据 | 通过 Pinata 将 RTP-1 JSON 上传至 IPFS，CIDv0 哈希在链上引用 |
 
