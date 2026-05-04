@@ -200,13 +200,13 @@ Both apps are open source, available in 9 languages (EN, IT, FR, DE, ES, ZH, JA,
 
 ### RavenTag Verify (consumer app for end users)
 
-Download: [RavenTag-Verify-v1.0.5.apk](https://github.com/ALENOC/RavenTag/releases/latest)
+Download: [RavenTag-Verify.apk](https://github.com/ALENOC/RavenTag/releases/latest)
 
 | Capability | Details |
 |---|---|
 | Scan NFC tags | Tap NTAG 424 DNA chips, view AUTHENTIC / REVOKED result |
 | Full verification | SUN MAC + Ravencoin blockchain + revocation check |
-| Ravencoin wallet | BIP44 `m/44'/175'/0'/0/0`, BIP39 12-word mnemonic, AES-256-GCM storage |
+| Ravencoin wallet | BIP44 `m/44'/175'/0'/0/0`, BIP39 12-word mnemonic, AES-256-GCM storage, new address after each send (HD address rotation) |
 | Multi-language | EN, IT, FR, DE, ES, ZH, JA, KO, RU |
 | Legal acceptance | Terms of Service + Privacy Policy acceptance on first launch |
 
@@ -214,7 +214,7 @@ Build: `./gradlew assembleConsumerRelease`
 
 ### RavenTag Brand Manager (operator and brand team app)
 
-Download: [RavenTag-Brand-v1.0.5.apk](https://github.com/ALENOC/RavenTag/releases/latest)
+Download: [RavenTag-Brand.apk](https://github.com/ALENOC/RavenTag/releases/latest)
 
 | Capability | Details |
 |---|---|
@@ -222,7 +222,7 @@ Download: [RavenTag-Brand-v1.0.5.apk](https://github.com/ALENOC/RavenTag/release
 | Derive chip keys | Calls backend `derive-chip-key`, keys never generated on-device |
 | Program NTAG 424 DNA chips | AES-128 keys + SUN URL via ISO 7816-4 APDUs |
 | Auto-register chip | Backend registration immediately after programming |
-| HD wallet | BIP44 `m/44'/175'/0'/0/0`, local UTXO signing, BIP39 12-word mnemonic |
+| HD wallet | BIP44 `m/44'/175'/0'/0/0`, local UTXO signing, BIP39 12-word mnemonic, new address after each send (HD address rotation) |
 | Transfer / Revoke | Full asset lifecycle management |
 | Product images | CID computed on-device, metadata uploaded to IPFS via Pinata |
 | Multi-language | EN, IT, FR, DE, ES, ZH, JA, KO, RU |
