@@ -117,6 +117,9 @@ data class TxHistoryEntry(
     // Full list of asset names cycled/received in this tx (toUs vouts).
     // Used by the UI to compact the row to "Ciclati N asset" with a tap-to-list dialog.
     val incomingAssetNames: List<String> = emptyList(),
+    // Full list of asset names sent to external addresses (toOthers vouts).
+    // Includes owner tokens bundled with the primary asset transfer.
+    val outgoingAssetNames: List<String> = emptyList(),
     // Issuance detection: true when tx burns to a canonical issuance address.
     val isIssuance: Boolean = false,
     val issuanceBurnSat: Long = 0L  // RVN burned for issuance (5/100/500 RVN)
@@ -1196,6 +1199,7 @@ class RavencoinPublicNode(private val context: Context) {
             var outgoingAssetName: String? = null
             var outgoingAssetAmount: Long = 0L
             val incomingAssetNamesSet = LinkedHashSet<String>()
+            val outgoingAssetNamesSet = LinkedHashSet<String>()
             // Issuance detection: track burn to canonical issuance addresses.
             val issuanceBurnAddresses = setOf(
                 RavencoinTxBuilder.BURN_ADDRESS_ROOT,
@@ -1242,6 +1246,7 @@ class RavencoinPublicNode(private val context: Context) {
                                     lastIssuedAssetAmount = amount
                                 }
                             } else {
+                                outgoingAssetNamesSet.add(name)
                                 if (outgoingAssetName == null) {
                                     outgoingAssetName = name; outgoingAssetAmount = amount
                                 }
@@ -1325,6 +1330,7 @@ class RavencoinPublicNode(private val context: Context) {
                 assetName = effectiveAssetName,
                 assetAmount = effectiveAssetAmount,
                 incomingAssetNames = incomingAssetNamesSet.toList(),
+                outgoingAssetNames = outgoingAssetNamesSet.toList(),
                 isIssuance = isIssuance,
                 issuanceBurnSat = issuanceBurnSat
             )
@@ -1751,7 +1757,7 @@ class RavencoinPublicNode(private val context: Context) {
                 hex.substring(nameStart + k * 2, nameStart + k * 2 + 2).toInt(16).toByte()
             }
             val name = String(nameBytes, Charsets.US_ASCII)
-            if (!name.all { it.isLetterOrDigit() || it in "/#_-." }) {
+            if (!name.all { it.isLetterOrDigit() || it in "/#_-.!" }) {
                 i = hex.indexOf("72766e", i + 1); continue
             }
             // Owner tokens (rvno) carry no amount — return amount 0.
