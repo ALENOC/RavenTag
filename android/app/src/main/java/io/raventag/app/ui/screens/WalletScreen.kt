@@ -1614,9 +1614,11 @@ private fun TxCard(s: AppStrings, tx: TxHistoryEntry) {
                             // Asset receive: split the hierarchical name across lines so
                             // long ROOT/SUB#UNIQUE chains stay readable inside the right column.
                             val raw = tx.assetAmount
-                            val display = if (raw % 100_000_000L == 0L) (raw / 100_000_000L).toString()
-                                          else String.format(java.util.Locale.US, "%.8f", raw / 1e8).trimEnd('0').trimEnd('.')
                             val name = tx.assetName
+                            val isOwner = name.endsWith("!")
+                            val display = if (isOwner && raw == 0L) "1"
+                                          else if (raw % 100_000_000L == 0L) (raw / 100_000_000L).toString()
+                                          else String.format(java.util.Locale.US, "%.8f", raw / 1e8).trimEnd('0').trimEnd('.')
                             val slashIdx = name.indexOf('/')
                             val hashIdx = name.indexOf('#')
                             val root = when {
@@ -1680,9 +1682,11 @@ private fun TxCard(s: AppStrings, tx: TxHistoryEntry) {
                         } else if (tx.assetName != null) {
                             Spacer(Modifier.height(2.dp))
                             val raw = tx.assetAmount
-                            val display = if (raw % 100_000_000L == 0L) (raw / 100_000_000L).toString()
-                                          else String.format(java.util.Locale.US, "%.8f", raw / 1e8).trimEnd('0').trimEnd('.')
                             val name = tx.assetName
+                            val isOwner = name.endsWith("!")
+                            val display = if (isOwner && raw == 0L) "1"
+                                          else if (raw % 100_000_000L == 0L) (raw / 100_000_000L).toString()
+                                          else String.format(java.util.Locale.US, "%.8f", raw / 1e8).trimEnd('0').trimEnd('.')
                             val slashIdx = name.indexOf('/')
                             val hashIdx = name.indexOf('#')
                             val root = when {
@@ -1718,9 +1722,11 @@ private fun TxCard(s: AppStrings, tx: TxHistoryEntry) {
                         if (tx.assetName != null) {
                             // Outgoing asset: show "-N ASSET" instead of plain RVN amount.
                             val raw = tx.assetAmount
-                            val display = if (raw % 100_000_000L == 0L) (raw / 100_000_000L).toString()
-                                          else String.format(java.util.Locale.US, "%.8f", raw / 1e8).trimEnd('0').trimEnd('.')
                             val name = tx.assetName
+                            val isOwner = name.endsWith("!")
+                            val display = if (isOwner && raw == 0L) "1"
+                                          else if (raw % 100_000_000L == 0L) (raw / 100_000_000L).toString()
+                                          else String.format(java.util.Locale.US, "%.8f", raw / 1e8).trimEnd('0').trimEnd('.')
                             val slashIdx = name.indexOf('/')
                             val hashIdx = name.indexOf('#')
                             val root = when {
@@ -1744,6 +1750,23 @@ private fun TxCard(s: AppStrings, tx: TxHistoryEntry) {
                             }
                             if (unique != null) {
                                 Text(unique, style = MaterialTheme.typography.labelSmall, color = NotAuthenticRed.copy(alpha = 0.7f))
+                            }
+                            // Additional outgoing assets (e.g. owner token bundled with transfer)
+                            val otherOutgoing = tx.outgoingAssetNames.filter { it != tx.assetName }
+                            if (otherOutgoing.size > 1) {
+                                Spacer(Modifier.height(2.dp))
+                                Text(
+                                    String.format(s.walletCycledMultiAsset, otherOutgoing.size).replace("ciclat", "inviat").replace("cycled", "sent"),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = NotAuthenticRed.copy(alpha = 0.7f)
+                                )
+                            } else if (otherOutgoing.size == 1) {
+                                Spacer(Modifier.height(2.dp))
+                                Text(
+                                    "+1 ${otherOutgoing.single()}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = NotAuthenticRed.copy(alpha = 0.7f)
+                                )
                             }
                         } else {
                             Text(
