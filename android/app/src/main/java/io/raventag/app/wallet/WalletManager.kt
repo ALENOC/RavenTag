@@ -1715,7 +1715,17 @@ class WalletManager(private val context: Context) {
                 initialDelayMinutes = 30L
             )
 
-            "$txid|fee:$feeSatActual"
+            val changeSat = when {
+                hasAssets || hasOldFunds -> {
+                    val totalIn = rvnUtxos.sumOf { it.satoshis } + oldFunds.flatMap { it.rvn }.sumOf { it.satoshis }
+                    (totalIn - amountSat - feeSatActual).coerceAtLeast(0L)
+                }
+                else -> {
+                    val totalIn = rvnUtxos.sumOf { it.satoshis }
+                    (totalIn - amountSat - feeSatActual).coerceAtLeast(0L)
+                }
+            }
+            "$txid|fee:$feeSatActual|change:$changeSat"
         } finally {
             privKey?.fill(0)
         }

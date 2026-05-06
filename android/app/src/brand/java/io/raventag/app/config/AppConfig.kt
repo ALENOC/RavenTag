@@ -57,7 +57,7 @@ object AppConfig {
     /**
      * Block explorer URL prefix for Ravencoin transactions (D-19).
      * Appending a txid yields a browsable transaction page, e.g. `${EXPLORER_URL}<txid>`.
-     * Verified 2026-04 against Ravencoin mainnet (community explorer).
+     * Verified 2026-05 against Ravencoin mainnet (Cryptoscope / Solus Explorer).
      */
-    const val EXPLORER_URL: String = "https://ravencoin.network/tx/"
+    const val EXPLORER_URL: String = "https://rvn.cryptoscope.io/tx/?txid="
 }
