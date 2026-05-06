@@ -2888,7 +2888,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
 
                 val txid = result.substringBefore("|fee:")
-                val feeRvn = result.substringAfter("|fee:", "0").toLongOrNull()?.let { it / 1e8 } ?: 0.0
+                val feeRvn = result.substringAfter("|fee:", "0").substringBefore("|").toLongOrNull()?.let { it / 1e8 } ?: 0.0
+                val cycledSat = result.substringAfter("|change:", "0").toLongOrNull() ?: 0L
 
                 // Show confirming notification (waiting for blocks)
                 TransactionNotificationHelper.showConfirming(getApplication(), 1, 1)
@@ -2935,7 +2936,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         isIncoming = false,
                         isSelfTransfer = false,
                         timestamp = nowSec,
-                        cycledSat = 0L,
+                        cycledSat = cycledSat,
                         feeSat = feeSatOpt
                     )
                     txHistory = listOf(optimistic) + txHistory
@@ -2950,7 +2951,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                     confirms = 0,
                                     amountSat = 0L,
                                     sentSat = sentSatOpt,
-                                    cycledSat = 0L,
+                                    cycledSat = cycledSat,
                                     feeSat = feeSatOpt,
                                     isIncoming = false,
                                     isSelf = false,
