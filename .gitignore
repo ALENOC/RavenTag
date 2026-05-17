@@ -12,6 +12,14 @@ out/
 # Docker secrets (never commit secret values)
 secrets/
 
+# SQLite database files (never commit real data)
+*.db
+*.db-shm
+*.db-wal
+
+# Setup info with local details
+SETUP_INFO.txt
+
 # Environment files
 .env
 .env.local
