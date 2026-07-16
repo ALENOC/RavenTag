@@ -441,6 +441,128 @@ server {
 
 Get a free SSL certificate: `certbot --nginx -d api.yourbrand.com`
 
+### Troubleshooting backend availability and Cloudflare 526
+
+If an app reports that the verification server is unavailable, test each layer
+separately. A healthy Docker container does not guarantee that the public HTTPS
+endpoint is reachable.
+
+```bash
+# 1. Container state
+docker compose ps backend
+
+# 2. Backend directly on the VPS
+curl -fsS http://127.0.0.1:3001/health
+
+# 3. Public path used by the apps
+curl -i https://api.yourbrand.com/health
+```
+
+The local and public checks should both return `200` with a response similar to
+`{"status":"ok","protocol":"RTP-1"}`.
+
+#### Container cannot start because a secret file is missing
+
+An error such as the following means Docker is running, but a host file required
+by the Compose secret mount no longer exists:
+
+```text
+failed to fulfil mount request: open .../secrets/admin_key: no such file or directory
+```
+
+Restore the original secret values from the password manager or backup, with one
+raw value per file and no quotes or `KEY=` prefix:
+
+```bash
+cd /path/to/RavenTag
+mkdir -p secrets
+chmod 700 secrets
+
+# Restore these files with a secure editor:
+# secrets/admin_key
+# secrets/operator_key
+# secrets/brand_master_key
+# secrets/brand_salt
+
+chmod 600 secrets/admin_key secrets/operator_key \
+  secrets/brand_master_key secrets/brand_salt
+docker compose up -d backend
+```
+
+Do **not** generate a new `brand_master_key` or `brand_salt` for an existing
+deployment. They must match the values used to program the NFC chips; replacing
+either value makes previously programmed chips unverifiable. Changing an admin
+or operator key also requires updating that credential in the Brand app.
+
+#### Local health succeeds but Cloudflare returns HTTP 526
+
+[Cloudflare error 526](https://developers.cloudflare.com/support/troubleshooting/http-status-codes/cloudflare-5xx-errors/error-526/)
+means Cloudflare cannot validate the TLS certificate presented by the origin
+while `Full (strict)` mode is enabled. Check the certificate and Nginx first:
+
+```bash
+sudo certbot certificates
+sudo nginx -t
+```
+
+If the certificate is expired and every hostname on it points to this Nginx
+server, renew it normally:
+
+```bash
+sudo certbot renew --cert-name yourbrand.com
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+If renewal instead fails with `unauthorized` and a `404` for a hostname such as
+the zone apex (`yourbrand.com`), that hostname may be served by another provider
+while only `api.yourbrand.com` points to the backend VPS. The HTTP-01 challenge
+must reach the server running Certbot for every hostname on the certificate.
+
+When this VPS only needs the API hostname, update the existing certificate to
+contain only that hostname. Replace `yourbrand.com` below with the
+`Certificate Name` shown by `certbot certificates`, even if that name is the
+zone apex:
+
+```bash
+sudo certbot certonly --nginx \
+  --cert-name yourbrand.com \
+  -d api.yourbrand.com
+```
+
+Choose `(U)pdate` if Certbot asks for confirmation, then reload Nginx and test
+the public endpoint:
+
+```bash
+sudo nginx -t
+sudo systemctl reload nginx
+curl -i https://api.yourbrand.com/health
+```
+
+This changes the certificate's hostname set while retaining its existing path,
+so an Nginx configuration that already references that certificate continues to
+work. See the Certbot guide to
+[changing a certificate's domains](https://eff-certbot.readthedocs.io/en/stable/using.html#changing-a-certificate-s-domains).
+Do not remove a hostname if it is genuinely served by this origin; fix its DNS or
+use an appropriate DNS-01 validation flow instead.
+
+Finally, test renewal before relying on it unattended:
+
+```bash
+sudo certbot renew --dry-run
+systemctl list-timers --all | grep -E 'certbot|snap.certbot'
+```
+
+Certbot may use a systemd timer or cron, depending on how it was installed. If
+no timer is listed, verify the scheduler provided by the installed Certbot
+package instead of assuming automatic renewal is active.
+
+TLS certificates always expire. Automatic renewal is preferred. If the origin
+will only ever receive proxied Cloudflare traffic, a
+[Cloudflare Origin CA certificate](https://developers.cloudflare.com/ssl/origin-configuration/origin-ca/)
+is a longer-lived alternative, but it is not trusted by browsers connecting
+directly to the origin.
+
 ---
 
 ## App Links setup
