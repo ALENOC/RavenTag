@@ -1,185 +1,207 @@
 # RavenTag Verify - Terms of Service
 
-**Version 1.1 - Effective Date: August 18, 2026**
+**Version 1.2 - Effective Date: August 18, 2026**  
 **Copyright 2026-present Alessandro Nocentini. All rights reserved.**
 
 ---
 
-> **OFFICIAL VERSION.** This document in the Italian language constitutes the legally binding version of the Terms of Service. In the event of any discrepancy, contradiction, or ambiguity between this version and any translation, the Italian version shall prevail.
+> **OFFICIAL VERSION.** The Italian-language document is the legally binding version of these Terms of Service. If this translation conflicts with or is ambiguous compared with the Italian version, the Italian version prevails, subject to any mandatory rights that may apply to the User.
 
 ---
 
 ## 1. Acceptance of Terms
 
-Upon initial launch, the App presents these Terms of Service and Privacy Policy. You must explicitly accept both documents by checking the corresponding boxes before proceeding. Checking those boxes constitutes your express and informed acceptance of these Terms. If you do not accept, you must not use the App.
+On first launch, the App presents these Terms of Service and the Privacy Policy. Use of the App is subject to the acceptance required by the interface. If you do not accept these Terms, you must not use the App.
 
-By downloading, installing, or continuing to use the App after acceptance, you ("User") confirm that you are legally bound by these Terms. If you do not agree with these Terms in their entirety, you must immediately uninstall and cease using the App.
+Any specific approval of clauses under Articles 1341 and 1342 of the Italian Civil Code, where required by applicable law and the actual contractual relationship, must refer to the clauses actually identified by the interface and does not waive mandatory consumer rights.
 
-These Terms constitute a legally binding agreement between you and Alessandro Nocentini ("Developer"), author of RavenTag Verify.
-
----
-
-## 2. Description of the App and License Nature
-
-RavenTag Verify is a mobile application providing:
-
-- **NFC Tag Verification**: Reading and cryptographic verification of NTAG 424 DNA NFC chips linked to Ravencoin blockchain assets using RavenTag Protocol v1 (RTP-1).
-- **Non-Custodial Ravencoin Wallet**: Generation, local storage, and autonomous management of a non-custodial BIP39/BIP44 HD wallet for the Ravencoin blockchain (RVN).
-- **Asset Management** (Brand version only): Issuance, transfer, and local management of Ravencoin assets linked to physical products.
-
-The App is a software tool for interacting in a self-custody manner with the Ravencoin blockchain and NFC hardware. It is not a financial service, an exchange, a bank, a custodial intermediary, or an investment or financial product.
-
-The App and its related source code are distributed under the **RavenTag Source License (RTSL-1.0)**, a source-available software license that restricts certain commercial uses and third-party entity distributions. RavenTag does not constitute open-source software under OSI definitions.
+These Terms govern the agreement between the User and Alessandro Nocentini (the "Developer") concerning use of RavenTag Verify, to the extent permitted by applicable law.
 
 ---
 
-## 3. Eligibility and Scope of Use
+## 2. App Description and License
 
-You must be at least 18 years old to use this App. By using the App, you represent and warrant that you are at least 18 years old and have the legal capacity to enter into these Terms in your jurisdiction.
+Depending on version and configuration, RavenTag Verify provides:
+- cryptographic verification of NFC tags linked to Ravencoin assets;
+- a non-custodial BIP39/BIP44 Ravencoin wallet;
+- local asset-management functions in the Brand version.
 
-### 3.1 Consumer Use of the Verify App
-The NFC tag verification functionality of the RavenTag Verify App is designed for any consumer wishing to verify the authenticity of a physical product equipped with an NFC chip. Use of this feature does not require professional capability.
+The App is a software tool for interacting in self-custody with the Ravencoin blockchain and NFC hardware. It is not an exchange, bank, custodial intermediary, investment service or financial product.
 
-### 3.2 Wallet Functionality and Self-Custody
-The Ravencoin wallet functionality involves self-custody, direct management, and transfer of digital assets on a public decentralized blockchain. By using these features, you acknowledge that you are acting independently, under your sole responsibility and financial risk, with full awareness of the risks described in Section 5.
-
-### 3.3 Source Code and RTSL-1.0 License
-The commercial use restriction contained in the source-available RavenTag Source License (RTSL-1.0) applies exclusively to developers, brands, and entities distributing, forking, or otherwise utilizing RavenTag source code. This restriction does not apply to end users of the App who use it solely to scan NFC tags or manage their wallet in self-custody.
+The App and related source code are distributed under the **RavenTag Source License (RTSL-1.0)**, a source-available license that may restrict certain commercial uses. RavenTag is not described as open-source software under OSI definitions.
 
 ---
 
-## 4. Non-Custodial Wallet and Transaction Architecture
+## 3. Eligibility and Scope
 
-### 4.1 No Custody by the Developer
-RavenTag Verify provides an exclusively non-custodial Ravencoin wallet. This means:
-- The Developer **does not** hold, store, manage, control, or have access to your private keys, mnemonic phrase, or funds at any time.
-- You are the sole and exclusive custodian (self-custodian) of your cryptographic keys, funds, and digital assets.
-- The Developer has no technical ability to authorize transactions, freeze your funds, or recover your mnemonic phrase or keys under any circumstances.
+The App is intended for users aged 18 or over. The User is responsible for determining whether use is lawful in their jurisdiction.
 
-### 4.2 Transaction Creation, Signing, and Relay Workflow
-For every transaction initiated through the App:
-1. The User initiates the transaction from the App interface;
-2. The App constructs the raw transaction locally on the device;
-3. The transaction is cryptographically signed locally on the device using private keys controlled by the User;
-4. The App transmits the **already signed** transaction to ElectrumX infrastructure (Developer-operated or third-party);
-5. ElectrumX relays/broadcasts the signed transaction to the Ravencoin Core network for inclusion in the distributed ledger.
+### 3.1 Consumer use
+The NFC verification feature may be used by consumers to verify tags and information associated with physical products.
 
-ElectrumX infrastructure does not possess the User's private key, cannot independently generate valid signatures, does not decide the transaction recipient or amount, does not take possession of User RVN, and maintains no custodial accounts or balances.
+### 3.2 Wallet and self-custody
+Wallet functionality involves self-custody, direct management of cryptographic credentials and autonomous interaction with a public blockchain. The User retains control of their keys and, to the extent permitted by law, assumes ordinary self-custody risks described in these Terms.
 
-### 4.3 Mnemonic Phrase (Seed Phrase) and User Responsibility
-When creating a wallet, the App generates a 12-word BIP39 mnemonic phrase ("seed phrase"). To the maximum extent permitted by applicable law, the User is solely responsible for:
-- Immediately writing down their seed phrase and storing it in a secure offline location;
-- Maintaining the confidentiality and security of seed phrase and private key backups;
-- Preventing unauthorized access, phishing, or social engineering attacks;
-- Verifying recovery information.
-
-**Loss of your seed phrase results in the permanent and unrecoverable loss of all funds and assets associated with your wallet. The Developer cannot restore access to your wallet under any circumstances.**
-
-### 4.4 User Device Security
-You are responsible for maintaining the security of your device. To the maximum extent permitted by law, the Developer is not liable for any loss of funds resulting from malware, device loss or theft, rooted/jailbroken devices, unauthorized access, or operating system compromises.
+### 3.3 RTSL-1.0
+Restrictions on use of the source code are governed by RTSL-1.0 and do not make the Developer a custodian or manager of end-user assets.
 
 ---
 
-## 5. Blockchain, Financial Risks, and Regulatory Framework
+## 4. Non-Custodial Wallet and Transactions
 
-### 5.1 Nature of Ravencoin and Network Infrastructure
-Ravencoin (RVN) is a decentralized blockchain network maintained by independent miners and nodes.
-- **Developer Infrastructure**: The Developer operates the public ElectrumX endpoint `electrumx.raventag.com` / `electrum.raventag.com` to support the App. For instances connected to it, this Developer-operated infrastructure does not constitute a third-party service.
-- **Independent Third-Party Infrastructure**: The App may also interact with independent ElectrumX or Ravencoin Core nodes operated by third parties. The Developer does not control third-party servers.
-- **Role of Ravencoin Core Nodes**: A public Ravencoin Core node performs synchronization, block and transaction validation, and P2P propagation functions. The Core node does not hold customer funds, manage user accounts, possess private keys, or exercise custody over RVN funds.
+### 4.1 No custody by the Developer
+RavenTag Verify is designed as a non-custodial wallet. During normal operation:
+- the Developer does not receive or control the User's private keys or seed phrase;
+- the Developer does not maintain custodial balances for the User;
+- the Developer cannot independently sign a transaction on the User's behalf, freeze the wallet or recover a lost seed phrase.
 
-### 5.2 Financial Risk Acknowledgment, Volatility, and Irreversibility
-By using the wallet features of this App, to the maximum extent permitted by applicable law, you acknowledge and accept that:
-- RVN and blockchain assets are digital assets subject to severe price volatility and may lose all value;
-- Blockchain transactions recorded on the Ravencoin network are **irreversible**. Once confirmed, a transaction cannot be cancelled, modified, or refunded by the Developer;
-- Network transaction fees (miner fees) are paid directly to the network and are non-refundable;
-- The User assumes all risks of chain reorganizations, forks, network congestion, node failure, or user input errors regarding addresses and amounts.
+### 4.2 Transaction creation, signing and relay
+For a normal wallet transaction:
+1. the User initiates the operation;
+2. the App constructs the transaction on the device;
+3. the transaction is signed with keys controlled by the User;
+4. the App may submit the already-signed transaction to an ElectrumX server;
+5. ElectrumX may relay the transaction to the Ravencoin network.
 
-### 5.3 No Financial, Investment, Legal, or Tax Advice
-Nothing in this App or in Developer communications constitutes financial, investment, legal, or tax advice. Displaying balances or asset metadata does not constitute an offer or solicitation to buy, sell, or hold crypto-assets.
+ElectrumX infrastructure is designed to perform technical blockchain-query functions and relay transactions already signed by the User. ElectrumX does not possess the User's private keys, independently determine recipient or amount, or maintain a custodial account for the User.
 
-### 5.4 Regulatory Framework (MiCA) and User Compliance
-RavenTag is provided as non-custodial source-available software. The Developer does not hold users' private keys and does not exercise control or custody over users' crypto-assets. Relay of signed transactions through ElectrumX servers constitutes a purely technical data routing activity on a distributed protocol. The User is solely responsible for compliance with applicable tax and regulatory requirements in their jurisdiction.
+### 4.3 Seed phrase, backup and recovery
+To the maximum extent permitted by law, the User is responsible for secure storage of their seed phrase, keys, backups and device credentials. Loss or compromise of credentials may cause permanent loss of access to assets. The Developer normally does not possess the information required to recover a seed phrase or reconstruct lost private keys.
 
----
-
-## 6. NFC Hardware, Third-Party Assets, and IPFS Metadata
-
-### 6.1 Third-Party NFC Hardware
-The App interacts with third-party NTAG 424 DNA NFC chips. The Developer provides no warranty regarding the physical longevity or integrity of third-party NFC hardware.
-
-### 6.2 Verification Results and Third-Party IPFS Metadata
-Verification results are processed based on cryptographic checks. A positive result indicates cryptographic validity at the time of scanning but does not constitute a legal certificate of title. External content and images hosted on third-party IPFS gateways are created by independent entities and are not endorsed or controlled by the Developer.
+### 4.4 Device security
+The User is responsible for reasonable device security. To the extent permitted by law, the Developer is not responsible for losses caused by malware, phishing, social engineering, clipboard malware, rooted/jailbroken devices, compromised operating systems, User-disclosed credentials or unofficial builds.
 
 ---
 
-## 7. Official Distribution and Security Warning
+## 5. Blockchain, Financial and Technical Risks
 
-### 7.1 Authorized Channels and Signature Verification
-The official distribution channels for RavenTag are:
-1. **GitHub Releases** (https://github.com/ALENOC/RavenTag/releases)
-2. **Google Play Store** (for the consumer Verify App)
+### 5.1 Ravencoin network
+Ravencoin is a decentralized network maintained by independent miners and nodes. The Developer does not control network consensus, block production, miners, third-party nodes, forks, reorganizations or future protocol changes.
 
-Official releases are signed by the Developer and can be verified using `apksigner`.
+The Developer may operate its own infrastructure, including a public ElectrumX endpoint. Such infrastructure is not a third-party service merely because it supports network access, but this does not create a guarantee of continuous availability or custody of funds.
 
-### 7.2 Disclaimer for Unofficial Builds
-To the maximum extent permitted by law, the Developer disclaims all liability for damages, malware, or financial losses resulting from the installation of App builds downloaded from unauthorized sources, forked, or modified by third parties.
+### 5.2 User and transaction risks
+Before authorizing a transaction, the User must verify recipient, amount, asset and other relevant parameters.
 
----
+To the maximum extent permitted by law, consequences of User-authorized operations or risks under the User's control remain with the User, including wrong recipient, wrong amount, phishing, scams, malicious QR codes, clipboard replacement, or compromise of seed/device.
 
-## 8. Infrastructure Availability and No Duty of Perpetual Maintenance
+Blockchain transactions may become practically irreversible after network acceptance or confirmation. The Developer cannot unilaterally cancel a transaction recorded on the Ravencoin network.
 
-The App depends on the Ravencoin network and network services. For Developer-operated infrastructure (`electrumx.raventag.com`), the Developer takes reasonable technical measures without offering uptime guarantees. The Developer reserves the right to maintain, suspend, modify, or discontinue Developer-operated infrastructure without generating a duty of perpetual maintenance, subject to mandatory law.
+### 5.3 Network and protocol risks
+The User acknowledges that blockchain and distributed infrastructure may be affected by congestion, delays, rejected transactions, forks, reorganizations, bugs, cryptographic vulnerabilities, attacks, unavailable nodes, DNS/Internet failures and protocol changes.
 
----
+### 5.4 Economic risks
+RVN and Ravencoin assets may lose some or all value. The Developer does not guarantee price, liquidity, convertibility, exchange support, continued existence of an asset, return or profit.
 
-## 9. General Limitation of Liability and Savings Clause
+### 5.5 No financial, investment, tax or legal advice
+Balances, blockchain data, metadata and other information displayed by the App are technical/informational and do not constitute financial, investment, tax or legal advice or a recommendation to buy, sell, hold or transfer crypto-assets.
 
-### 9.1 Exclusion of Indirect and Consequential Damages
-To the maximum extent permitted by applicable law, the Developer shall not be liable for indirect, consequential, incidental, special, or punitive damages, including loss of crypto funds, lost profits, lost opportunities, data loss, or business interruption.
+### 5.6 Technical description and MiCA
+RavenTag is designed as non-custodial source-available software. The Developer does not hold users' private keys or maintain custodial crypto-asset accounts.
 
-### 9.2 Maximum Liability Cap and Differentiation
-As the App is provided free of charge:
-- For professional / business users: the total aggregate liability of the Developer is limited to the maximum extent permitted by law, up to zero euros (EUR 0).
-- For consumer users: the Developer's liability for direct damages is limited to the minimum mandatory limit permitted by applicable mandatory law, taking into account that the App is provided free of charge.
+The descriptions of ElectrumX and Ravencoin Core in these Terms are technical descriptions of architecture and **are not a blanket statement of exemption, authorization or regulatory classification under Regulation (EU) 2023/1114 (MiCA)**.
 
-### 9.3 Mandatory Law Savings Clause (Art. 1229 Italian Civil Code & Consumer Protection)
-Nothing in these Terms excludes or limits the liability of the Developer for intent (dolo) or gross negligence (colpa grave) under Article 1229 of the Italian Civil Code, or any other liability that cannot be lawfully excluded or limited under applicable mandatory consumer protection law.
+The User remains responsible for their individual tax and regulatory obligations where applicable.
 
 ---
 
-## 10. No Fiduciary Relationship and No Duty to Monitor
+## 6. NFC, Third-Party Assets and External Content
 
-Use of the App does not create any fiduciary, agency, brokerage, or partnership relationship between the User and the Developer. The Developer has no duty to monitor User transactions or detect scams, malicious addresses, or fraudulent assets issued by third parties.
+NFC verification results derive from technical and cryptographic checks and do not, by themselves, constitute an absolute legal guarantee of authenticity, ownership, quality or economic value of a product or asset.
 
----
-
-## 11. Modifications to App and Terms
-
-The Developer reserves the right to update the App and these Terms for justified grounds (e.g., regulatory compliance, cybersecurity, technical evolution). Modifications will be published and continued use constitutes acceptance.
+IPFS content, metadata, Ravencoin assets and external resources may be created or operated by independent parties and are not necessarily reviewed, endorsed or controlled by the Developer.
 
 ---
 
-## 12. Governing Law, Jurisdiction, and Consumer Carve-Out
+## 7. Official Distribution and Modified Builds
 
-These Terms are governed by Italian law. Disputes with non-consumer users shall be subject to the exclusive jurisdiction of the competent courts in Italy. For consumer users in the European Union, mandatory rights and forum rules under Regulation (EC) 593/2008 (Rome I) and Regulation (EU) 1215/2012 (Brussels I bis) remain unaffected.
+To the extent permitted by law, the Developer does not assume responsibility for App versions modified, rebuilt, repackaged, forked or distributed by third parties outside official project channels.
 
----
-
-## 13. Severability and No Waiver
-
-If any provision of these Terms is held invalid or unenforceable, that provision shall be limited to the minimum extent necessary and the remaining provisions shall remain in full force and effect. Failure to enforce a right shall not constitute a waiver of future enforcement.
+This exclusion does not alter any mandatory liability relating to official builds actually distributed by the Developer.
 
 ---
 
-## 14. Entire Agreement and Document Priority
+## 8. Availability, Updates and Discontinuation
 
-These Terms, together with the Privacy Policy, constitute the entire agreement between the User and the Developer. In case of conflict with the RTSL-1.0 license regarding source code usage, the terms of the RTSL-1.0 license shall prevail.
+The App and infrastructure depend on software systems, the Internet, Ravencoin and third-party services. To the extent permitted by law they are provided **"AS IS"** and **"AS AVAILABLE"**, without voluntary guarantees of uninterrupted operation, absolute freedom from errors or vulnerabilities, perpetual compatibility or continuous uptime.
+
+For justified technical, security, legal, abuse-prevention, maintenance or project-evolution reasons, the Developer may modify, suspend, migrate or discontinue features or infrastructure, subject to mandatory obligations that may apply.
+
+Nothing creates a voluntary duty to maintain the App or infrastructure indefinitely.
 
 ---
 
-## 15. Contact Information
+## 9. Limitation of Liability and Risk Allocation
 
-**Alessandro Nocentini**
-GitHub: https://github.com/ALENOC/RavenTag
+### 9.1 General principle
+To the maximum extent permitted by applicable law, the Developer does not assume liability for risks attributable to the User, independent third parties, the Ravencoin network or circumstances outside the Developer's legally attributable responsibility.
+
+### 9.2 Loss of crypto-assets or access
+To the maximum extent permitted by law, the Developer is not responsible for loss of crypto-assets or loss of access to them where caused by risks allocated to the User or events outside the Developer's legally attributable responsibility, including loss/compromise of seed or keys, User-authorized transactions, incorrect recipient or amount, malware, phishing, scams, third-party infrastructure, network events or external content.
+
+This clause **does not automatically characterize every crypto-asset loss as indirect damage**.
+
+### 9.3 Indirect and consequential damages
+To the extent valid under applicable law and in the particular relationship, liability is excluded for indirect, consequential, incidental or special damages, and for loss of profit, revenue, opportunity, goodwill, data or business interruption.
+
+### 9.4 No artificial monetary cap
+These Terms **do not establish an artificial EUR 0 cap** and do not assume that a numerical "statutory minimum" exists. Liability and rights are excluded or limited only to the extent permitted by applicable law.
+
+### 9.5 Mandatory law
+Nothing in these Terms excludes or limits liability for intentional misconduct or gross negligence where Article 1229 of the Italian Civil Code or another mandatory rule prohibits such exclusion, nor mandatory consumer rights or other liability that applicable law makes non-waivable.
+
+The limitations are intended to operate **only to the maximum lawful extent**, so that the invalidity of a particular exclusion does not voluntarily expand the Developer's liability beyond what the law requires.
+
+---
+
+## 10. No Fiduciary Relationship and No General Duty to Monitor
+
+Use of the App does not by itself create a fiduciary, agency, mandate, brokerage, partnership or financial-advisory relationship. The Developer does not voluntarily assume a general duty to monitor all User blockchain activity, detect scams, classify addresses or verify every third-party asset, subject to mandatory obligations that may apply.
+
+---
+
+## 11. Changes to the App and Terms
+
+The Developer may change the App or these Terms for justified reasons including legal changes, security, abuse prevention, technical evolution, new functionality, architecture changes or service discontinuation.
+
+Material changes will be made available through reasonable means and do not retroactively remove accrued mandatory rights. Where law requires renewed acceptance, the App may require it before further use.
+
+---
+
+## 12. Governing Law and Jurisdiction
+
+To the extent permitted by private international law, these Terms are governed by Italian law.
+
+For consumer Users, mandatory protections under applicable law and mandatory jurisdiction rules remain unaffected, including where relevant Regulation (EC) No 593/2008 (Rome I) and Regulation (EU) No 1215/2012 (Brussels I bis).
+
+For non-consumer Users, any forum clause applies only to the extent valid and effective under applicable law and properly approved where necessary.
+
+---
+
+## 13. Articles 1341 and 1342 of the Italian Civil Code
+
+Where, under applicable law and the circumstances of the relationship, particular provisions require specific approval under Articles 1341 and 1342 of the Italian Civil Code, any separate approval mechanism must identify the provisions actually concerned.
+
+A generic statement that the User "accepts Articles 1341/1342" **is not what these Terms require and does not replace specific identification of clauses where the law requires it**.
+
+Specific approval does not make valid a term that is otherwise void or ineffective under mandatory law, particularly consumer law.
+
+---
+
+## 14. Severability and No Waiver
+
+If a provision is invalid or ineffective, the remaining provisions continue to apply to the extent permitted by law. Failure to exercise a right does not constitute a general waiver of that right.
+
+---
+
+## 15. Entire Agreement and License Relationship
+
+These Terms and the Privacy Policy govern use of the App, subject to RTSL-1.0 for source-code use, any mandatory app-store terms and applicable law.
+
+---
+
+## 16. Contact
+
+**Alessandro Nocentini**  
+GitHub: https://github.com/ALENOC/RavenTag  
 Email: legal@raventag.com

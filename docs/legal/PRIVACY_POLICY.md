@@ -1,213 +1,193 @@
 # RavenTag Verify - Privacy Policy
 
-**Version 1.1 - Effective Date: August 18, 2026**
+**Version 1.2 - Effective Date: August 18, 2026**  
 **Copyright 2026-present Alessandro Nocentini. All rights reserved.**
 
 ---
 
-> **OFFICIAL VERSION.** This document in the Italian language constitutes the legally binding version of the Privacy Policy. In the event of any discrepancy, contradiction, or ambiguity between this version and any translation, the Italian version shall prevail.
+> **OFFICIAL VERSION.** The Italian-language document is the legally binding version of this Privacy Policy. If this translation conflicts with or is ambiguous compared with the Italian version, the Italian version prevails, subject to any mandatory rights that may apply.
 
 ---
 
 ## 1. Introduction
 
-This Privacy Policy describes how RavenTag Verify ("App"), developed by Alessandro Nocentini ("Developer", "we", "us"), collects, uses, and protects information when you use the App.
+This Privacy Policy describes how RavenTag Verify (the "App"), developed by Alessandro Nocentini (the "Developer"), processes information when you use the App.
 
-The Developer is committed to data minimisation. The App is designed as non-custodial software under a source-available license and operates with the minimum amount of network and technical data strictly necessary for its functionality.
+The App is designed as non-custodial software whose source code is publicly available under the RavenTag Source License (RTSL-1.0). Its architecture is intended to minimize the network and technical data processed.
 
-This Privacy Policy complies with:
-- EU General Data Protection Regulation (GDPR - Regulation EU 2016/679)
-- Italian Personal Data Protection Code (Legislative Decree 196/2003 as amended by Legislative Decree 101/2018)
-- Google Play Developer Policy
+This Policy is drafted with reference to Regulation (EU) 2016/679 (GDPR), the Italian Personal Data Protection Code and other applicable rules. It is not a blanket certification of regulatory compliance.
 
 ---
 
-## 2. Data Controller and Infrastructure Categories
+## 2. Controller and Infrastructure Categories
 
-RavenTag is a protocol and software with publicly available source code (source-available software). The App may interact with infrastructure operated directly by the Developer, as well as independent third-party or brand-operated infrastructure.
+RavenTag may interact with infrastructure directly operated by the Developer and with independent infrastructure operated by brands or third parties.
 
 ### 2.1 Developer-operated demo backend
-The Developer operates a backend instance at `raventag.com` (e.g. `api.raventag.com`) for demonstration, infrastructure testing, and asset verification purposes. If you use an instance of the App connected to this demo backend, the data controller for server-side verification data and network logs (Section 3.2) is:
+The Developer may operate a backend at `raventag.com` (for example `api.raventag.com`) for demonstration, infrastructure testing and asset verification. For data processed by that backend, the controller is:
 
-**Alessandro Nocentini**
-Contact: https://github.com/ALENOC/RavenTag
+**Alessandro Nocentini**  
+GitHub: https://github.com/ALENOC/RavenTag  
 Email: legal@raventag.com
 
 ### 2.2 Developer-operated ElectrumX infrastructure
-The Developer operates a public ElectrumX endpoint (e.g. `electrumx.raventag.com` / `electrum.raventag.com`) deployed in front of a dedicated Ravencoin Core node. When the App connects to this specific endpoint for blockchain queries or transaction broadcasting, the processing of connection metadata is managed by the Developer under this Policy. This Developer-operated infrastructure does not constitute a third-party service.
+The Developer operates a public ElectrumX endpoint, currently identified in the project as `electrumx.raventag.com` / `electrum.raventag.com`, connected to a Ravencoin Core node. When the App uses that endpoint, processing of connection data by this infrastructure is attributable to the Developer rather than to an independent third-party operator.
 
-### 2.3 Brand-operated backend (production use)
-In production, brands and manufacturers deploy their own backend infrastructure. When you use an instance of the App configured to connect to a specific brand's backend, that brand is the independent data controller for data processed by its servers. The Developer has no access to and assumes no responsibility for data processed by third-party brand backends.
+### 2.3 Brand-operated backends
+Brands and manufacturers may deploy independent backend instances. When an App instance is configured to use a backend operated by a brand, that entity independently determines the purposes and means of processing carried out by its systems, subject to any different legal arrangement that may apply.
 
 ### 2.4 Independent third-party blockchain infrastructure
-The App may also connect to public ElectrumX nodes or independent Ravencoin Core nodes operated by third parties. These nodes are entirely outside the Developer's control and operate under their respective management policies.
+The App may connect to ElectrumX nodes, Ravencoin Core nodes, IPFS gateways or other services operated by independent parties. The Developer does not control their logging, retention, security or privacy practices.
 
 ---
 
 ## 3. Data Processed and Technical Architecture
 
-### 3.1 Data Stored Locally on Your Device (Never Transmitted to Developer or ElectrumX)
+### 3.1 Data stored locally on the device
+The following sensitive data is designed to be generated or stored locally on the device and is not required by ElectrumX servers for normal wallet operation:
 
-The following sensitive data is generated and stored exclusively on your device in encrypted form and is never transmitted to any server or infrastructure operated by the Developer or to ElectrumX servers:
-
-| Data | Purpose | Storage |
+| Data | Purpose | Intended storage |
 |---|---|---|
-| BIP39 Mnemonic Phrase (seed phrase) | Wallet generation and recovery | Android Keystore (AES-256-GCM) |
-| Private Keys (derived, encrypted) | Local transaction signing | Android Keystore (AES-256-GCM) |
-| Wallet Address (RVN) | Local display and calculation | Encrypted local storage |
-| Admin/Operator Keys (Brand version) | Local asset management | Android Keystore (AES-256-GCM) |
-| App Settings & Preferences | Local App configuration | Encrypted/protected local preferences |
+| BIP39 mnemonic / seed phrase | Wallet generation and recovery | Android Keystore / protected local storage |
+| Derived private keys | Local transaction signing | Android Keystore / protected local storage |
+| RVN wallet address | Wallet display and operations | Local storage |
+| Admin/operator keys, where present | Brand functions | Protected local storage |
+| Settings and preferences | App configuration | Local preferences |
 
-**Your mnemonic phrase and private keys never leave your device.**
+**Private keys and the seed phrase are not transmitted to an ElectrumX server during normal wallet operation.**
 
-### 3.2 Data Transmitted During NFC Tag Verification (API Backend)
-
-When you scan an NFC tag to verify product authenticity, the App sends the following parameters to the API backend for cryptographic verification:
+### 3.2 NFC verification and API backend
+When you verify an NFC tag, the App may transmit technical data required for verification, including:
 
 | Data | Purpose |
 |---|---|
-| Asset Name (e.g., BRAND/PRODUCT#001) | Asset identification on the Ravencoin blockchain |
-| Encrypted NFC Counter (parameter e) | SUN MAC cryptographic verification |
-| NFC MAC Value (parameter m) | SUN MAC cryptographic verification |
-| Device IP Address | Server-side rate limiting and network security |
+| Asset name | Identification of the Ravencoin asset |
+| Encrypted NFC counter / verification parameter | Cryptographic verification |
+| NFC MAC value | Cryptographic verification |
+| IP address | Security, abuse prevention, rate limiting and technical request handling |
 
-**Backend Log Retention (Developer-operated backend)**: IP addresses and API backend network logs are retained for a maximum period of 30 days (verified at code level in the backend log cleanup middleware), after which they are automatically deleted.
+The backend request logger records request metadata consisting of **HTTP method, path, status code, duration and IP address**. It does not log request or response bodies. These metadata may be used for security, abuse prevention, rate limiting, technical diagnostics and aggregated operational metrics.
 
-**Legal Basis (GDPR)**: Legitimate Interest (Art. 6(1)(f) GDPR) to ensure infrastructure security, prevent abuse, and mitigate cyber attacks.
+**Code-verified retention:** records persisted in the application tables `request_logs` and `rate_limit_events` are subject to an automated routine that removes records older than 30 days.
 
-### 3.3 Data Processed During Blockchain and ElectrumX Operations
+That routine **does not govern** possible console/stdout, container, operating-system, reverse-proxy, CDN, hosting-provider or ElectrumX-process logs. Retention of any such logs depends on the actual production configuration and this Policy does not invent a fixed retention period for them.
 
-When the App executes balance queries, transaction history lookups, or broadcasts transactions, it communicates with ElectrumX infrastructure (both Developer-operated and third-party).
+**Legal basis:** where applicable, processing of technical metadata by Developer-operated infrastructure relies on legitimate interests under Article 6(1)(f) GDPR for infrastructure security, abuse prevention, rate limiting, technical diagnostics and proportionate operational monitoring.
 
-**A. What an ElectrumX server may observe or receive:**
-A public or network ElectrumX server may observe connection data and metadata such as:
-- Source IP address of the device;
-- TLS connection metadata, timestamps, and request frequency;
-- JSON-RPC protocol queries and script-hash lookups;
-- Balance requests, transaction history, and UTXOs associated with specific addresses;
-- Transaction identifiers (TxID) and asset metadata;
-- Raw signed transactions submitted for broadcast.
+### 3.3 Blockchain and ElectrumX operations
+When the App queries balances, history or UTXOs, or submits a transaction, it communicates with an ElectrumX server.
 
-Depending on wallet query patterns, such information may technically permit correlations between network identifiers (such as the IP address) and public blockchain activity.
+Depending on the request, an ElectrumX server may technically observe or receive:
+- source IP address;
+- timestamps, request frequency and connection metadata;
+- JSON-RPC and script-hash queries;
+- balance, history and UTXO queries;
+- transaction identifiers and blockchain metadata;
+- already-signed raw transactions submitted for broadcast.
 
-> **Explicit Security Disclosure:**
-> Private keys and seed phrases are never required by the ElectrumX server and are not transmitted as part of normal wallet operation.
+Query patterns may permit correlation between network identifiers and activity visible on the public blockchain.
 
-**B. Transaction creation and signing workflow:**
-For every transaction executed by the wallet:
-1. The user initiates the transaction from the App interface;
-2. The App constructs the raw transaction locally on the device;
-3. The transaction is cryptographically signed on the device using private keys controlled exclusively by the user;
-4. The App sends the already signed transaction to the ElectrumX server;
-5. ElectrumX relays/broadcasts the signed transaction to Ravencoin Core nodes for inclusion in blockchain blocks.
+**Transaction creation and signing:** a transaction is initiated by the user, constructed by the App and signed on the device with keys controlled by the user. ElectrumX may receive the already-signed transaction and relay it to the Ravencoin network. ElectrumX does not possess the user's private key, independently choose the recipient or amount, or maintain a custodial account for the user.
 
-ElectrumX infrastructure does not possess the user's private key, cannot independently create a valid signature, does not decide the recipient or amount, does not take possession of user RVN, and maintains no custodial account or balance.
+### 3.4 Ravencoin Core node
+A Ravencoin Core node performs network infrastructure functions including synchronization, validation and peer-to-peer propagation. By performing those functions it does not possess RavenTag users' private keys or maintain custodial RavenTag wallet accounts.
 
-**C. Role of public Ravencoin Core nodes:**
-A public Ravencoin Core node performs exclusively infrastructure functions, including blockchain synchronization, block and transaction validation, peer-to-peer communication, and transaction propagation. The Core node does not hold customer funds, maintain user accounts, possess private keys, sign on behalf of users, or exercise custody over RVN tokens.
+### 3.5 IPFS gateways and external content
+The App may use IPFS gateways or other external resources to load images or metadata. Their operators may receive an IP address and other network metadata according to their own practices.
 
-### 3.4 Asset Image Loading (IPFS Gateways)
-To display asset images hosted on IPFS, the App may connect to public IPFS gateways (e.g. ipfs.io, cloudflare-ipfs.com). These third-party providers may log the device IP address in accordance with their own privacy policies.
+### 3.6 Camera and NFC
+- **Camera:** used on-device to read QR codes; this function does not require the App to send camera images to the backend.
+- **NFC:** reading occurs on the device; only verification parameters needed by the backend are transmitted as described above.
 
-### 3.5 Camera and NFC Data
-- **Camera**: Used exclusively on-device for real-time QR code reading; no image data is saved or transmitted.
-- **NFC**: Tag reading occurs locally; only derived verification parameters (asset, e, m) are transmitted to the backend as described in Section 3.2.
-
-### 3.6 Data We Do Not Collect
-The Developer does not collect:
-- Names, email addresses, or direct personal identifiers;
-- Unique hardware identifiers (IMEI, Android ID, Advertising ID);
-- Precise geolocation data;
-- Usage analytics or commercial tracking telemetry.
+### 3.7 Data the Developer does not intentionally request
+Normal App use does not require the Developer to request names, identity documents, postal addresses, IMEI, Android Advertising ID or precise geolocation. This does not change the fact that IP addresses and other network metadata may constitute personal data when processed by infrastructure.
 
 ---
 
-## 4. Third-Party Services and Nodes
+## 4. Third-Party Services and Infrastructure
 
-The App interacts with network services and nodes that may be operated by independent third parties:
+Independent infrastructure may include ElectrumX nodes, Ravencoin Core nodes, IPFS gateways, operating systems, app stores, network providers and hosting services not directly operated by the Developer.
 
-| Service / Node | Purpose | Privacy Notes |
-|---|---|---|
-| Independent Third-Party ElectrumX Nodes | Blockchain queries and fallback | Developer does not control third-party node logs. Third-party operators may observe IP address, balance queries, and raw transactions submitted for broadcast. |
-| Independent Ravencoin Core Network Nodes | P2P validation and propagation | Distributed decentralized network. |
-| Public IPFS Gateways | Asset media and metadata loading | Operated by third-party providers. |
-| Google Play Store | App distribution | Privacy policies of Google LLC. |
+When independent infrastructure is used, its operator may process network and blockchain data for its own purposes, legal bases and retention periods. The Developer cannot guarantee or control those practices.
 
 ---
 
-## 5. Data Security and Non-Custodial Architecture
+## 5. Security and Non-Custodial Architecture
 
-All sensitive data stored on the device (mnemonic phrase, private keys) is protected via AES-256-GCM encryption backed by the Android Keystore system with hardware isolation where available.
+RavenTag uses local protection mechanisms and encrypted network channels where provided by the implementation. No technical measure can guarantee absolute security against every vulnerability, device compromise or network attack.
 
-Network communication between the App and Developer-operated infrastructure occurs over HTTPS/TLS or TLS encrypted channels with certificate pinning/verification.
-
----
-
-## 6. Data Retention (Storage Limitation)
-
-- **Device Data**: Retained until wallet deletion or App uninstallation.
-- **Developer-operated Backend Logs**: Retained for a maximum of 30 days (in accordance with automated log cleanup routines in backend code) and subsequently permanently deleted.
-- **Developer-operated ElectrumX and Network Logs**: Retained for the minimum period strictly necessary for network diagnostics and security per operator deployment settings.
-- **Public Ravencoin Blockchain Data**: Transactions confirmed on the Ravencoin blockchain are permanently public and cannot be modified, erased, or removed by the Developer or third parties.
+The non-custodial architecture means the Developer normally does not possess the keys required to recover or transfer the user's funds.
 
 ---
 
-## 7. IP Address Processing and GDPR Principles
+## 6. Data Retention
 
-IP addresses and network metadata processed by Developer-operated infrastructure are handled in accordance with GDPR principles of:
-- **Data Minimisation**: Only indispensable technical metadata is recorded;
-- **Purpose Limitation**: Used exclusively for security, rate limiting, and DoS mitigation;
-- **Storage Limitation**: Automated deletion within 30 days for backend request logs;
-- **Integrity and Confidentiality**: Protection of infrastructure through appropriate technical measures.
-
-No blanket or absolute claims of "full GDPR compliance" are made; technical and legal safeguards under applicable law are strictly enforced.
+- **Local wallet data:** until wallet deletion, App data deletion or uninstall, according to device behavior.
+- **Developer backend `request_logs` and `rate_limit_events`:** automated deletion of records older than 30 days according to the backend cleanup routine.
+- **Runtime/console, reverse-proxy, system, CDN, hosting or ElectrumX logs:** retention depends on the actual deployment configuration and is not controlled by the application-database cleanup routine described above.
+- **Ravencoin blockchain:** data recorded on the public blockchain is replicated by a decentralized network and cannot be unilaterally erased or modified by the Developer.
 
 ---
 
-## 8. Your Rights Under GDPR
+## 7. Purposes and GDPR Principles
 
-Where applicable under the GDPR, you have the right to exercise against the Developer (limited to data processed by Developer-operated servers, such as network logs):
-- Right of Access (Art. 15 GDPR);
-- Right to Rectification (Art. 16 GDPR);
-- Right to Erasure / Right to be Forgotten (Art. 17 GDPR), subject to immutable data already recorded on the public blockchain;
-- Right to Restriction of Processing (Art. 18 GDPR);
-- Right to Object (Art. 21 GDPR) to processing based on legitimate interest.
+For Developer-operated infrastructure, technical metadata may be processed where necessary and proportionate for:
+- infrastructure security;
+- abuse and attack prevention;
+- rate limiting;
+- diagnosis of errors and operational problems;
+- technical statistics and aggregated operational metrics.
 
-To exercise these rights, contact the Developer at: legal@raventag.com
-
-You also have the right to lodge a complaint with the Garante per la protezione dei dati personali (https://www.garanteprivacy.it).
+Processing is subject to GDPR principles including data minimization, purpose limitation, storage limitation, integrity and confidentiality.
 
 ---
 
-## 9. Minors' Privacy
+## 8. Data Subject Rights
 
-The App is not intended for individuals under 18 years of age. The Developer does not knowingly collect data from minors.
+Where the GDPR applies to processing carried out by the Developer, a data subject may exercise, subject to the conditions and limitations laid down by law, rights of access, rectification, erasure, restriction and objection, together with any other applicable rights.
 
----
+Requests may be sent to: legal@raventag.com
 
-## 10. International Data Transfers
+The right to lodge a complaint with the competent supervisory authority remains unaffected, including the Italian Garante per la protezione dei dati personali where competent.
 
-Developer-operated infrastructure is hosted within secure data centers located in the European Union or the United States, providing adequate data protection levels under GDPR. When using an instance connected to third-party brand backends, server location is determined independently by each brand.
-
----
-
-## 11. Regulatory Framework and MiCA Terminology
-
-RavenTag is designed and distributed as non-custodial software under the source-available RavenTag Source License (RTSL-1.0). The Developer does not hold users' private keys, exercise control or custody over users' crypto-assets (RVN or tokens), or provide crypto-asset custody or administration services on behalf of third parties under Regulation (EU) 2023/1114 (MiCA). The activity of Developer-operated ElectrumX infrastructure consists of technical routing of network data and signed transactions over an open protocol.
+Rights exercisable against the Developer concern data under the Developer's control and do not give the Developer unilateral power to erase data already recorded and replicated on the public Ravencoin blockchain.
 
 ---
 
-## 12. Changes to This Privacy Policy
+## 9. Minors
 
-The Developer reserves the right to update this Privacy Policy. Changes become effective upon publication of the updated version.
+The App is not intended for persons under 18. The Developer does not intend to knowingly collect minors' data through normal App use.
 
 ---
 
-## 13. Contact Information
+## 10. International Transfers
 
-For privacy inquiries or requests:
+System and provider locations may vary with infrastructure configuration. Where personal data processed by the Developer is transferred to a country outside the European Economic Area, the transfer is subject to **Chapter V GDPR** and must rely on the applicable transfer mechanism, for example an adequacy decision where relevant or appropriate safeguards under Article 46 GDPR where required.
 
-**Alessandro Nocentini**
-GitHub: https://github.com/ALENOC/RavenTag
+The mere physical location of a server in the United States or another third country is not, by itself, treated as proof that a valid transfer mechanism exists. Information about the mechanism applicable to infrastructure actually used may be requested at legal@raventag.com.
+
+For backends or services operated independently, the relevant operator is responsible for its own location and transfer choices under applicable law.
+
+---
+
+## 11. Non-Custodial Nature and Technical Role of Infrastructure
+
+RavenTag is designed as non-custodial software. Private keys remain under the user's control and the Developer does not maintain custodial crypto-asset accounts for users.
+
+Developer-operated ElectrumX infrastructure is designed to perform technical blockchain-query functions and to relay to the network transactions already signed with user-controlled keys. ElectrumX does not independently choose the recipient or amount and does not sign on the user's behalf.
+
+This section describes the technical architecture and **is not a blanket statement of exemption, authorization or regulatory classification under Regulation (EU) 2023/1114 (MiCA) or other laws**.
+
+---
+
+## 12. Changes to this Policy
+
+The Developer may update this Policy when the App, infrastructure, processing practices or legal framework changes. The version and effective date appear at the beginning of the document.
+
+---
+
+## 13. Contact
+
+**Alessandro Nocentini**  
+GitHub: https://github.com/ALENOC/RavenTag  
 Email: legal@raventag.com
-Garante Privacy: https://www.garanteprivacy.it

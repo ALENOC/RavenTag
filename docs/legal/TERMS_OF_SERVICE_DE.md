@@ -1,167 +1,88 @@
 # RavenTag Verify - Nutzungsbedingungen
 
-**Version 1.1 - Inkrafttreten: 18. August 2026**
-**Copyright 2026-heute Alessandro Nocentini. Alle Rechte vorbehalten.**
+**Version 1.2 - Inkrafttreten: 18. August 2026**  
+**Copyright 2026-present Alessandro Nocentini. Alle Rechte vorbehalten.**
 
 ---
 
-> **OFFIZIELLE VERSION.** Dieses Dokument in italienischer Sprache stellt die rechtlich bindende Version der Nutzungsbedingungen dar. Im Falle von Abweichungen, Widersprüchen oder Unklarheiten zwischen dieser Version und einer Übersetzung hat die italienische Version Vorrang.
+> **OFFIZIELLE VERSION.** Die italienische Fassung ist die rechtlich maßgebliche Version dieser Nutzungsbedingungen. Bei Abweichungen oder Unklarheiten hat die italienische Fassung Vorrang, vorbehaltlich zwingender Nutzerrechte.
 
----
+## 1. Annahme
+Beim ersten Start werden Nutzungsbedingungen und Datenschutzrichtlinie angezeigt. Die Nutzung setzt die von der Oberfläche verlangte Zustimmung voraus. Eine etwa erforderliche besondere Zustimmung nach Art. 1341/1342 des italienischen Zivilgesetzbuchs muss die tatsächlich betroffenen Klauseln bezeichnen; eine pauschale „Annahme der Artikel 1341/1342“ genügt hierfür nicht und verzichtet nicht auf zwingende Verbraucherrechte.
 
-## 1. Annahme der Bedingungen
+## 2. App und Lizenz
+RavenTag Verify bietet je nach Version NFC-Verifizierung, ein nicht-verwahrendes BIP39/BIP44-Ravencoin-Wallet und lokale Asset-Funktionen. Die App ist ein Self-Custody-Softwarewerkzeug und kein Exchange, keine Bank, kein Verwahrintermediär, keine Anlageberatung und kein Finanzprodukt.
 
-Beim ersten Start präsentiert die App diese Nutzungsbedingungen und die Datenschutzrichtlinie. Sie müssen beide Dokumente durch Ankreuzen der entsprechenden Kontrollkästchen ausdrücklich akzeptieren, bevor Sie fortfahren können.
+Der Quellcode wird unter der **RavenTag Source License (RTSL-1.0)** bereitgestellt. RavenTag wird nicht als Open-Source-Software im Sinne der OSI bezeichnet.
 
-Durch das Herunterladen, Installieren oder die fortgesetzte Nutzung der App bestätigen Sie ("Nutzer"), an diese Bedingungen gebunden zu sein.
+## 3. Nutzung und Self-Custody
+Die App richtet sich an Nutzer ab 18 Jahren. Der Nutzer muss die Rechtmäßigkeit seiner Nutzung selbst prüfen. Wallet-Nutzer kontrollieren ihre kryptografischen Zugangsdaten selbst und tragen, soweit gesetzlich zulässig, die gewöhnlichen Self-Custody-Risiken.
 
-Diese Bedingungen stellen eine rechtsverbindliche Vereinbarung zwischen Ihnen und Alessandro Nocentini ("Entwickler"), dem Autor von RavenTag Verify, dar.
+## 4. Nicht-verwahrendes Wallet und Transaktionen
+Der Entwickler erhält oder kontrolliert im normalen Betrieb weder private Schlüssel noch Seed-Phrase, führt keine Verwahrkonten und kann nicht eigenständig im Namen des Nutzers signieren, Gelder einfrieren oder eine verlorene Seed-Phrase wiederherstellen.
 
----
+Eine normale Transaktion wird vom Nutzer initiiert, von der App auf dem Gerät erstellt, mit nutzerkontrollierten Schlüsseln signiert und kann anschließend als bereits signierte Transaktion an ElectrumX übermittelt und von dort an das Ravencoin-Netzwerk weitergeleitet werden. ElectrumX besitzt die privaten Schlüssel nicht und bestimmt Empfänger oder Betrag nicht eigenständig.
 
-## 2. Beschreibung der App und Lizenznatur
+Der Nutzer ist, soweit gesetzlich zulässig, für sichere Aufbewahrung von Seed, Schlüsseln, Backups und Gerätezugang verantwortlich. Verlust oder Kompromittierung kann zu dauerhaftem Vermögenszugriffsverlust führen. Der Nutzer trägt angemessene Verantwortung für Gerätesicherheit; hierzu zählen Risiken durch Malware, Phishing, Social Engineering, Clipboard-Manipulation, rooted/jailbroken Geräte, kompromittierte Betriebssysteme und inoffizielle Builds.
 
-RavenTag Verify ist eine mobile Anwendung, die Folgendes bietet:
+## 5. Blockchain-, Netzwerk- und Wirtschaftsrisiken
+Ravencoin ist dezentral. Der Entwickler kontrolliert nicht Konsens, Miner, Dritt-Knoten, Forks, Reorganisationen oder künftige Protokolländerungen. Vor einer Transaktion muss der Nutzer Empfänger, Betrag, Asset und relevante Parameter prüfen. Soweit gesetzlich zulässig, trägt er Folgen nutzerautorisierter Vorgänge und Risiken in seinem Kontrollbereich, etwa falscher Empfänger/Betrag, Phishing, Betrug, manipulierte QR-Codes oder kompromittierte Zugangsdaten.
 
-- **NFC-Tag-Verifizierung**: Auslesen und kryptografische Verifizierung von NTAG 424 DNA NFC-Chips, die mit Ravencoin-Blockchain-Assets verknüpft sind, unter Verwendung des RavenTag Protocols v1 (RTP-1).
-- **Nicht-verwahrendes Ravencoin-Wallet**: Generierung, lokale Speicherung und autonome Verwaltung eines nicht-verwahrenden (non-custodial) BIP39/BIP44 HD-Wallets für die Ravencoin-Blockchain (RVN).
-- **Asset-Verwaltung** (nur Marken-Version): Ausgabe, Übertragung und lokale Verwaltung von Ravencoin-Assets.
+Blockchain-Transaktionen können nach Annahme/Bestätigung praktisch unumkehrbar werden. Netzwerk und Infrastruktur können durch Verzögerungen, Ausfälle, Forks, Reorganisationen, Bugs, kryptografische Schwächen, Angriffe, DNS-/Internetprobleme oder Protokolländerungen beeinträchtigt werden.
 
-Die App ist ein Software-Tool zur Interaktion in Eigenverwahrung (Self-Custody) mit der Ravencoin-Blockchain und NFC-Hardware. Sie ist kein Finanzdienst, keine Börse, keine Bank und kein Finanzprodukt.
+RVN und Ravencoin-Assets können bis auf null an Wert verlieren. Der Entwickler garantiert weder Preis, Liquidität, Handelbarkeit, Exchange-Unterstützung noch Gewinn.
 
-Die App und der Quellcode stehen unter der **RavenTag Source License (RTSL-1.0)**, einer Lizenz für Software mit öffentlich zugänglichem Quellcode (source-available software), die bestimmte kommerzielle Nutzungen einschränkt. RavenTag stellt keine Open-Source-Software gemäß OSI-Definitionen dar.
+Angezeigte Salden, Blockchain-Daten oder Metadaten sind technische Informationen und keine Finanz-, Anlage-, Steuer- oder Rechtsberatung.
 
----
+### Technische Beschreibung und MiCA
+RavenTag ist nicht-verwahrende Source-Available-Software. Die Beschreibung von ElectrumX und Ravencoin Core ist eine technische Architekturbeschreibung und **keine pauschale Aussage über Ausnahme, Zulassung oder regulatorische Einordnung nach Verordnung (EU) 2023/1114 (MiCA)**.
 
-## 3. Anforderung und Nutzungsbereich
+## 6. NFC und Inhalte Dritter
+NFC-Prüfergebnisse sind technische/kryptografische Ergebnisse und keine absolute rechtliche Garantie für Echtheit, Eigentum, Qualität oder wirtschaftlichen Wert. IPFS-Inhalte, Ravencoin-Assets und sonstige externe Ressourcen können von unabhängigen Dritten stammen und werden nicht zwingend vom Entwickler geprüft oder gebilligt.
 
-Sie müssen mindestens 18 Jahre alt sein, um diese App zu nutzen.
+## 7. Inoffizielle Builds
+Soweit gesetzlich zulässig, übernimmt der Entwickler keine Verantwortung für von Dritten veränderte, neu kompilierte, repackagete, geforkte oder außerhalb offizieller Kanäle verbreitete App-Versionen. Zwingende Verantwortung für offizielle, tatsächlich vom Entwickler verbreitete Builds bleibt unberührt.
 
-### 3.1 Verbrauchernutzung der Verify-App
-Die NFC-Verifizierungsfunktion ist für jeden Verbraucher bestimmt, der die Echtheit eines mit NFC ausgestatteten Produkts prüfen möchte.
+## 8. Verfügbarkeit, Updates und Einstellung
+App und Infrastruktur hängen von Software, Internet, Ravencoin und Drittservices ab und werden, soweit gesetzlich zulässig, **„AS IS“** und **„AS AVAILABLE“** bereitgestellt, ohne freiwillige Garantie ununterbrochenen Betriebs, absoluter Fehler-/Schwachstellenfreiheit, dauerhafter Kompatibilität oder kontinuierlicher Verfügbarkeit.
 
-### 3.2 Wallet-Funktionalität und Eigenverwahrung (Self-Custody)
-Die Ravencoin-Wallet-Funktion beinhaltet Eigenverwahrung (Self-Custody), direkte Verwaltung und Übertragung digitaler Vermögenswerte auf einer öffentlichen Blockchain. Sie handeln in voller Eigenverantwortung auf eigenes finanzielles Risiko.
+Aus berechtigten technischen, Sicherheits-, Rechts-, Missbrauchs-, Wartungs- oder Projektgründen kann der Entwickler Funktionen oder Infrastruktur ändern, aussetzen, migrieren oder einstellen, vorbehaltlich zwingender Pflichten. Es besteht keine freiwillige Pflicht zu unbegrenzter Wartung.
 
-### 3.3 Quellcode und RTSL-1.0-Lizenz
-Die Beschränkung der kommerziellen Nutzung in der Source-Available-Lizenz RTSL-1.0 gilt ausschließlich für Entwickler und Unternehmen, die den Quellcode nutzen. Endnutzer der App sind davon nicht betroffen.
+## 9. Haftungsbegrenzung und Risikozuweisung
+### 9.1 Grundsatz
+Soweit gesetzlich zulässig, übernimmt der Entwickler keine Haftung für Risiken, die dem Nutzer, unabhängigen Dritten, dem Ravencoin-Netzwerk oder Umständen außerhalb seiner rechtlich zurechenbaren Verantwortung zuzuordnen sind.
 
----
+### 9.2 Verlust von Krypto-Assets
+Soweit gesetzlich zulässig, haftet der Entwickler nicht für Verlust von oder Zugriffverlust auf Krypto-Assets, soweit dieser auf nutzerzugewiesenen Risiken oder außerhalb seiner rechtlich zurechenbaren Verantwortung liegenden Ereignissen beruht, darunter Verlust/Kompromittierung von Seed/Schlüsseln, nutzerautorisierte Transaktionen, falscher Empfänger/Betrag, Malware, Phishing, Betrug, Drittinfrastruktur, Netzereignisse oder externe Inhalte. **Nicht jeder Krypto-Verlust wird dadurch automatisch als indirekter Schaden qualifiziert.**
 
-## 4. Nicht-verwahrendes Wallet und Transaktionsarchitektur
+### 9.3 Indirekte Schäden
+Soweit im konkreten Verhältnis rechtlich wirksam, sind indirekte, Folge-, Neben- und besondere Schäden sowie entgangener Gewinn, Umsatz, Chancen, Goodwill, Datenverlust oder Betriebsunterbrechung ausgeschlossen.
 
-### 4.1 Keine Verwahrung durch den Entwickler
-RavenTag Verify stellt ein ausschließlich nicht-verwahrendes Wallet bereit. Das bedeutet:
-- Der Entwickler hält, speichert, verwaltet oder kontrolliert **niemals** Ihre privaten Schlüssel, Mnemonic-Phrasen oder Gelder.
-- Sie sind der einzige Verwalter (Self-Custodian) Ihrer kryptografischen Schlüssel und digitalen Vermögenswerte.
-- Der Entwickler kann unter keinen Umständen Transaktionen autorisieren oder Ihr Wallet wiederherstellen.
+### 9.4 Kein künstliches EUR-0-Limit
+Diese Bedingungen enthalten **keine künstliche Haftungsobergrenze von EUR 0** und unterstellen kein zahlenmäßig bestimmtes „gesetzliches Minimum“. Haftung wird nur soweit ausgeschlossen oder begrenzt, wie das anwendbare Recht dies gestattet.
 
-### 4.2 Erstellung, Signierung und Übertragung von Transaktionen
-Für jede über die App ausgeführte Transaktion:
-1. Der Nutzer leitet die Transaktion in der App ein;
-2. Die App erstellt die Roh-Transaktion lokal auf dem Gerät;
-3. Die Transaktion wird lokal auf dem Gerät mit den Schlüsseln des Nutzers signiert;
-4. Die App überträgt die **bereits signierte** Transaktion an die ElectrumX-Infrastruktur;
-5. ElectrumX leitet die signierte Transaktion an das Ravencoin-Netzwerk weiter.
+### 9.5 Zwingendes Recht
+Nichts schließt Haftung für Vorsatz oder grobe Fahrlässigkeit aus, soweit Art. 1229 des italienischen Zivilgesetzbuchs oder anderes zwingendes Recht eine solche Ausschließung verbietet, und nichts beseitigt zwingende Verbraucherrechte. Die Begrenzungen sollen ausschließlich im maximal rechtlich zulässigen Umfang wirken.
 
-Die ElectrumX-Infrastruktur besitzt keine privaten Schlüssel der Nutzer, kann keine eigenen Signaturen erstellen, entscheidet nicht über Empfänger/Beträge und führt keine Verwahrkonten.
+## 10. Kein Treuhand-/Beratungsverhältnis
+Die Nutzung begründet für sich allein kein Treuhand-, Agentur-, Mandats-, Broker-, Partnerschafts- oder Finanzberatungsverhältnis. Vorbehaltlich zwingender Pflichten übernimmt der Entwickler keine allgemeine freiwillige Pflicht zur Überwachung sämtlicher Blockchain-Aktivitäten oder Dritt-Assets.
 
-### 4.3 Mnemonic-Phrase (Seed-Phrase) und Nutzerverantwortung
-Sie müssen Ihre 12-Wörter BIP39 Mnemonic-Phrase sofort handschriftlich notieren und sicher offline aufbewahren. **Der Verlust Ihrer Seed-Phrase führt zum dauerhaften und unwiederbringlichen Verlust aller Gelder.**
+## 11. Änderungen
+Änderungen können aus berechtigten Gründen wie Rechtsänderungen, Sicherheit, Missbrauchsprävention, technische Entwicklung, neue Funktionen, Architekturänderungen oder Einstellung von Diensten erfolgen. Wesentliche Änderungen werden angemessen zugänglich gemacht; zwingende bereits entstandene Rechte werden nicht rückwirkend entzogen. Eine erneute Zustimmung kann verlangt werden, wenn das Gesetz dies erfordert.
 
-### 4.4 Gerätesicherheit
-Sie sind für die Sicherheit Ihres Geräts selbst verantwortlich. Der Entwickler haftet nicht für Schäden durch Malware, Verlust des Geräts oder rooted/jailbroken Betriebssysteme.
+## 12. Recht und Gerichtsstand
+Soweit kollisionsrechtlich zulässig, gilt italienisches Recht. Zwingende Verbraucherrechte und zwingende Zuständigkeitsregeln bleiben unberührt, einschließlich gegebenenfalls Rom I und Brüssel I bis. Für Nichtverbraucher gilt eine Gerichtsstandsklausel nur soweit sie wirksam und erforderlichenfalls ordnungsgemäß genehmigt ist.
 
----
+## 13. Art. 1341/1342 italienisches Zivilgesetzbuch
+Soweit konkrete Klauseln nach anwendbarem Recht einer besonderen Genehmigung bedürfen, muss ein getrenntes Genehmigungsverfahren die tatsächlich betroffenen Klauseln identifizieren. Eine pauschale Erklärung „Ich akzeptiere Art. 1341/1342“ ersetzt dies nicht. Eine besondere Genehmigung macht keine nach zwingendem Recht unwirksame Klausel wirksam.
 
-## 5. Blockchain-, Finanzrisiken und regulatorischer Rahmen
+## 14. Teilunwirksamkeit und Nichtverzicht
+Die Unwirksamkeit einer Bestimmung lässt die übrigen Bestimmungen im gesetzlich zulässigen Umfang unberührt. Nichtausübung eines Rechts bedeutet keinen allgemeinen Verzicht.
 
-### 5.1 Natur von Ravencoin und Netzwerkinfrastruktur
-- **Vom Entwickler betriebene Infrastruktur**: Der Entwickler betreibt den öffentlichen ElectrumX-Endpunkt `electrumx.raventag.com` / `electrum.raventag.com`. Diese stellt keine Drittanbieter-Infrastruktur dar.
-- **Unabhängige Infrastruktur Dritter**: Die App kann mit unabhängigen Knoten Dritter interagieren.
-- **Rolle von Ravencoin Core-Knoten**: Ein öffentlicher Core-Knoten führt Validierungs- und Weiterleitungsfunktionen aus. Er verwahrt keine Gelder und besitzt keine privaten Schlüssel.
+## 15. Gesamte Vereinbarung und Lizenz
+Diese Bedingungen und die Datenschutzrichtlinie regeln die App-Nutzung, vorbehaltlich RTSL-1.0 für Quellcode-Nutzung, zwingender App-Store-Regeln und anwendbaren Rechts.
 
-### 5.2 Finanzrisiko, Volatilität und Unumkehrbarkeit
-Transaktionen auf der Ravencoin-Blockchain sind **unumkehrbar**. Netzwerkeinzahlungen und Transaktionsgebühren sind nicht erstattungsfähig.
-
-### 5.3 Keine Finanzberatung
-Kein Inhalt dieser App stellt eine Finanz-, Anlage-, Rechts- oder Steuerberatung dar.
-
-### 5.4 Regulatorischer Rahmen (MiCA)
-RavenTag wird als nicht-verwahrende Source-Available-Software bereitgestellt. Der Entwickler hält keine privaten Schlüssel der Nutzer und übt keine Kontrolle oder Verwahrung über Vermögenswerte aus.
-
----
-
-## 6. NFC-Hardware und IPFS-Metadaten Dritter
-
-Verifizierungsergebnisse basieren auf kryptografischen Prüfungen. Inhalte von IPFS-Gateways Dritter werden von unabhängigen Parteien erstellt.
-
----
-
-## 7. Offizielle Bereitstellung und Sicherheitswarnung
-
-### 7.1 Autorisierte Kanäle
-1. **GitHub Releases** (https://github.com/ALENOC/RavenTag/releases)
-2. **Google Play Store** (für die Verify-App)
-
-### 7.2 Haftungsausschluss für inoffizielle Builds
-Der Entwickler lehnt jede Haftung für Schäden ab, die durch die Nutzung inoffizieller oder veränderter Builds entstehen.
-
----
-
-## 8. Netzwerkabhängigkeit und Infrastrukturverfügbarkeit
-
-Für die vom Entwickler betriebene Infrastruktur (`electrumx.raventag.com`) werden angemessene Maßnahmen ergriffen, ohne Uptime-Garantien oder eine Pflicht zur ewigen Wartung einzugehen.
-
----
-
-## 9. Allgemeine Haftungsbeschränkung und Salvatorische Klausel
-
-### 9.1 Ausschluss indirekter Schäden
-Soweit gesetzlich zulässig, haftet der Entwickler nicht für indirekte Schäden, Folgeschäden oder entgangenen Gewinn.
-
-### 9.2 Haftungshöchstgrenze
-Da die App kostenlos bereitgestellt wird:
-- Für gewerbliche Nutzer ist die Haftung im gesetzlich maximal zulässigen Umfang auf null Euro (EUR 0) beschränkt.
-- Für Verbraucher ist die Haftung auf das gesetzlich zwingend vorgeschriebene Mindestmaß beschränkt.
-
-### 9.3 Zwingende gesetzliche Vorbehaltsklausel
-Nichts in diesen Bedingungen schließt die Haftung des Entwicklers für Vorsatz oder grobe Fahrlässigkeit (Art. 1229 ital. ZGB) oder nach zwingendem Verbraucherschutzrecht aus.
-
----
-
-## 10. Kein Treuhandverhältnis und keine Überwachungspflicht
-
-Die Nutzung begründet kein Treuhandverhältnis. Der Entwickler ist nicht verpflichtet, Nutzeraktivitäten zu überwachen.
-
----
-
-## 11. Änderungen der App und Bedingungen
-
-Der Entwickler behält sich das Recht vor, die App und diese Bedingungen aus berechtigten Gründen anzupassen.
-
----
-
-## 12. Anwendbares Recht und Gerichtsstand
-
-Es gilt italienisches Recht. Zwingende Verbraucherschutzrechte nach der Rom-I-Verordnung bleiben unberührt.
-
----
-
-## 13. Salvatorische Klausel und Keine Verwirkung
-
-Sollte eine Bestimmung unwirksam sein, bleiben die übrigen Bestimmungen wirksam.
-
----
-
-## 14. Gesamte Vereinbarung
-
-Diese Bedingungen und die Datenschutzrichtlinie bilden die gesamte Vereinbarung.
-
----
-
-## 15. Kontaktinformationen
-
-**Alessandro Nocentini**
-GitHub: https://github.com/ALENOC/RavenTag
+## 16. Kontakt
+**Alessandro Nocentini**  
+GitHub: https://github.com/ALENOC/RavenTag  
 E-Mail: legal@raventag.com
