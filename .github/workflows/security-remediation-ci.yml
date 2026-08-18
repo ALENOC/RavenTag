@@ -1,0 +1,60 @@
+name: Security remediation gate
+
+on:
+  pull_request:
+    branches: [master]
+    paths-ignore:
+      - 'docs/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  static-and-unit:
+    if: github.head_ref == 'security/full-audit-remediation-2026-08-18'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout PR head without third-party actions
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${HEAD_REPO}.git"
+          git fetch --depth=1 origin "${HEAD_REF}"
+          git checkout --detach FETCH_HEAD
+          git status --short
+
+      - name: Security source inventory
+        run: |
+          set -euo pipefail
+          echo '--- Wallet signing/broadcast sites ---'
+          grep -nE 'RavencoinTxBuilder\.|broadcastWithAllServers\(' android/app/src/main/java/io/raventag/app/wallet/WalletManager.kt || true
+          echo '--- Wallet financial entrypoints ---'
+          grep -nE '^    (suspend )?fun (send|transfer|issue|reissue|sweep|consolidate|heal)' android/app/src/main/java/io/raventag/app/wallet/WalletManager.kt || true
+          echo '--- Fee paths ---'
+          grep -nE 'relayfee|getMinRelayFeeRateSatPerByte|isMaxSend|feeSat' android/app/src/main/java/io/raventag/app/wallet/{WalletManager.kt,RavencoinPublicNode.kt,RavencoinTxBuilder.kt} | head -n 300 || true
+          echo '--- Authentication success paths ---'
+          grep -n 'authPassed = true' android/app/src/main/java/io/raventag/app/MainActivity.kt || true
+
+      - name: Backend install and type-check
+        working-directory: backend
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run build
+
+      - name: Android JVM tests
+        working-directory: android
+        run: |
+          set -euo pipefail
+          chmod +x gradlew
+          java -version
+          ./gradlew test --stacktrace
+
+      - name: Diff whitespace check
+        run: git diff --check origin/master...HEAD || true
