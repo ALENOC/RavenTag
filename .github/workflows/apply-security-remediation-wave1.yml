@@ -1,0 +1,79 @@
+name: Apply security remediation wave 1
+
+on:
+  push:
+    branches: [security/full-audit-remediation-2026-08-18]
+    paths:
+      - 'scripts/apply_security_remediation_wave1.py'
+      - '.github/workflows/apply-security-remediation-wave1.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.repository == 'ALENOC/RavenTag'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout exact remediation branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git fetch --depth=1 origin security/full-audit-remediation-2026-08-18
+          git checkout -B security/full-audit-remediation-2026-08-18 FETCH_HEAD
+
+      - name: Resolve immutable GitHub MCP image digest
+        id: mcp
+        run: |
+          set -euo pipefail
+          DIGEST="$(docker buildx imagetools inspect ghcr.io/github/github-mcp-server:v0.18.0 | awk '/^Digest:/ {print $2; exit}')"
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+          echo "Resolved github-mcp-server:v0.18.0 -> $DIGEST"
+
+      - name: Apply asserted source patches
+        env:
+          MCP_DIGEST: ${{ steps.mcp.outputs.digest }}
+        run: python3 scripts/apply_security_remediation_wave1.py
+
+      - name: Upgrade Axios using npm resolver
+        working-directory: backend
+        run: |
+          set -euo pipefail
+          npm install --save-exact --ignore-scripts axios@1.18.0
+          npm ci --ignore-scripts
+          npm run build
+
+      - name: Android JVM tests after patch
+        working-directory: android
+        run: |
+          set -euo pipefail
+          chmod +x gradlew
+          ./gradlew test --stacktrace
+
+      - name: Static patch checks
+        run: |
+          set -euo pipefail
+          git diff --check
+          ! grep -R '/home/ale/Android/Sdk' --exclude-dir=.git .
+          ! grep -R 'QwenLM/qwen-code-action@v1' .github/workflows
+          ! grep -R 'ghcr.io/github/github-mcp-server:v0.18.0' .github/workflows
+          ! grep -R 'usesCleartextTraffic="true"' android/app/src/main/AndroidManifest.xml
+          ! grep -R 'cleartextTrafficPermitted="true"' android/app/src/main/res/xml/network_security_config.xml
+
+      - name: Commit verified wave and remove one-shot patcher
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          rm -f scripts/apply_security_remediation_wave1.py .github/workflows/apply-security-remediation-wave1.yml
+          git config user.name 'RavenTag Security Remediation'
+          git config user.email '185200505+ALENOC@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'security: fail closed auth, network, secrets and fee inputs'
+          git push origin HEAD:security/full-audit-remediation-2026-08-18
