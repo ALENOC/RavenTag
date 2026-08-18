@@ -26,7 +26,7 @@ jobs:
           git checkout -B "${HEAD_REF}" FETCH_HEAD
 
       - name: Apply asserted financial/security patches
-        run: python3 scripts/run_security_remediation_wave2_v2.py
+        run: python3 scripts/run_security_remediation_wave2_v3.py
 
       - name: Backend type-check
         working-directory: backend
@@ -52,6 +52,7 @@ jobs:
           ! grep -n 'broadcastConsolidation(tx.hex)' android/app/src/main/java/io/raventag/app/wallet/WalletManager.kt
           grep -n 'CONFLICT_ABORT' android/app/src/main/java/io/raventag/app/wallet/cache/ReservedUtxoDao.kt
           grep -n 'signAndBroadcastReserved' android/app/src/main/java/io/raventag/app/wallet/WalletManager.kt
+          grep -n 'sentSatActual' android/app/src/main/java/io/raventag/app/MainActivity.kt
 
       - name: Commit tested financial remediation
         env:
@@ -59,7 +60,7 @@ jobs:
           HEAD_REF: ${{ github.head_ref }}
         run: |
           set -euo pipefail
-          rm -f scripts/run_security_remediation_wave2.py scripts/run_security_remediation_wave2_fixed.py scripts/run_security_remediation_wave2_v2.py
+          rm -f scripts/run_security_remediation_wave2.py scripts/run_security_remediation_wave2_fixed.py scripts/run_security_remediation_wave2_v2.py scripts/run_security_remediation_wave2_v3.py
           git config user.name 'RavenTag Security Remediation'
           git config user.email '185200505+ALENOC@users.noreply.github.com'
           git add -A
