@@ -31,7 +31,7 @@ GitHub: https://github.com/ALENOC/RavenTag
 Email: legal@raventag.com
 
 ### 2.2 Infrastruttura ElectrumX gestita dallo Sviluppatore
-Lo Sviluppatore gestisce un endpoint pubblico ElectrumX, attualmente identificato nel progetto come `electrumx.raventag.com` / `electrum.raventag.com`, collegato a un nodo Ravencoin Core. Quando l'App utilizza tale endpoint, il trattamento dei dati di connessione da parte di questa infrastruttura è riconducibile allo Sviluppatore e non a un operatore terzo.
+Lo Sviluppatore gestisce un endpoint pubblico ElectrumX, attualmente identificato nel progetto come `electrumx.raventag.com`, collegato a un nodo Ravencoin Core. Quando l'App utilizza tale endpoint, il trattamento dei dati di connessione da parte di questa infrastruttura è riconducibile allo Sviluppatore e non a un operatore terzo.
 
 ### 2.3 Backend gestiti da brand
 Brand e produttori possono distribuire istanze autonome del backend. Quando un'istanza dell'App è configurata per utilizzare un backend gestito da un brand, tale soggetto determina autonomamente finalità e modalità del trattamento effettuato dai propri sistemi, salvo diversi accordi giuridici applicabili.
