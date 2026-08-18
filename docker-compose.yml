@@ -12,7 +12,7 @@ services:
       RVN_RPC_HOST: ${RVN_RPC_HOST:-localhost}
       RVN_RPC_PORT: ${RVN_RPC_PORT:-8766}
       # Secrets loaded from mounted files (./secrets/ in standalone, Docker Swarm secrets in production).
-      ADMIN_KEY_FILE: /run/secrets/backup_encryption_key
+      ADMIN_KEY_FILE: /run/secrets/admin_key
       OPERATOR_KEY_FILE: /run/secrets/operator_key
       BRAND_MASTER_KEY_FILE: /run/secrets/brand_master_key
       BRAND_SALT_FILE: /run/secrets/brand_salt
@@ -28,7 +28,6 @@ services:
       ANDROID_APP_FINGERPRINT: ${ANDROID_APP_FINGERPRINT:-3EA5B9F375631A4E1DE95DE1DA9C2245141E4AD8FA7A63787D6AB98196B4A3BE}
     secrets:
       - admin_key
-      - backup_encryption_key
       - operator_key
       - brand_master_key
       - brand_salt
@@ -42,9 +41,9 @@ services:
       timeout: 10s
       retries: 3
 
-  # SQLite backup: runs daily, keeps last 7 backups (MED-1: AES-256-CBC encrypted)
+  # SQLite backup: runs every 24 hours, keeps the 7 newest successful encrypted backups.
   # To decrypt: openssl enc -d -aes-256-cbc -pbkdf2 -iter 100000 \
-  #   -pass file:/path/to/admin_key -in raventag_TIMESTAMP.db.enc -out raventag.db
+  #   -pass file:/path/to/backup_encryption_key -in raventag_TIMESTAMP.db.enc -out raventag.db
   backup:
     image: alpine:3.19
     container_name: raventag-backup
@@ -53,7 +52,6 @@ services:
       - raventag_data:/data:ro
       - raventag_backups:/backups
     secrets:
-      - admin_key
       - backup_encryption_key
     command: >
       sh -c "apk add --no-cache openssl sqlite > /dev/null 2>&1;
