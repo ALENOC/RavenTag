@@ -21,7 +21,6 @@ jobs:
     runs-on: 'ubuntu-latest'
     permissions:
       contents: 'read'
-      id-token: 'write'
       issues: 'write'
       pull-requests: 'write'
     steps:
@@ -29,7 +28,7 @@ jobs:
         id: 'mint_identity_token'
         if: |-
           ${{ vars.APP_ID }}
-        uses: 'actions/create-github-app-token@a8d616148505b5069dccd32f177bb87d7f39123b' # ratchet:actions/create-github-app-token@v2
+        uses: 'actions/create-github-app-token@a8d616148505b5069dccd32f177bb87d7f39123b' # immutable upstream commit
         with:
           app-id: '${{ vars.APP_ID }}'
           private-key: '${{ secrets.APP_PRIVATE_KEY }}'
@@ -39,7 +38,7 @@ jobs:
 
       - name: 'Run Qwen Code CLI'
         id: 'run_qwen'
-        uses: 'QwenLM/qwen-code-action@v1' # ratchet:exclude
+        uses: 'QwenLM/qwen-code-action@05f81718976f3b7da657422e6e8e4d372b8621d7'
         env:
           TITLE: '${{ github.event.pull_request.title || github.event.issue.title }}'
           DESCRIPTION: '${{ github.event.pull_request.body || github.event.issue.body }}'
@@ -76,7 +75,7 @@ jobs:
                     "--rm",
                     "-e",
                     "GITHUB_PERSONAL_ACCESS_TOKEN",
-                    "ghcr.io/github/github-mcp-server:v0.18.0"
+                    "ghcr.io/github/github-mcp-server@sha256:6aa543f565bc98d96106fdd80a0abdc0c7147c8ca7f4663a814ceecef1ccc6d3"
                   ],
                   "includeTools": [
                     "add_issue_comment",
