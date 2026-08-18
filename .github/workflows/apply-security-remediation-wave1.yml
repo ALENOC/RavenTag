@@ -25,8 +25,8 @@ jobs:
           git fetch --depth=1 origin "${HEAD_REF}"
           git checkout -B "${HEAD_REF}" FETCH_HEAD
 
-      - name: Apply RT-SEC-004 005 019 020 final source transformations
-        run: python3 scripts/run_security_remediation_final.py
+      - name: Apply RT-SEC-004 005 014 019 020 final source transformations
+        run: python3 scripts/run_security_remediation_final_v2.py
 
       - name: Refresh vulnerable backend dependencies without major upgrades
         working-directory: backend
@@ -34,8 +34,6 @@ jobs:
           set -euo pipefail
           npm install --save-exact axios@1.19.0 express@4.22.2 express-rate-limit@8.6.2 form-data@4.0.6 multer@2.2.0
           npm install --save-dev --save-exact tsx@4.23.12
-          # Express 4.22.2 accepts the patched 0.1.x path-to-regexp; refresh the
-          # transitive lock entry explicitly instead of taking a breaking Express 5 upgrade.
           npm update path-to-regexp --package-lock-only
           rm -rf node_modules
           npm ci --ignore-scripts
@@ -109,8 +107,8 @@ jobs:
           assert 'isMaxSend' not in wallet
           assert 'effectiveAmount = if' not in txb
           assert '0x3C' in txb or '0x3c' in txb
-          assert 'payload[0]' not in nfc
-          assert 'ALLOWED_VERIFY_HOSTS' in nfc
+          assert 'payload[0]' not in nfc and 'firstOrNull()' in nfc
+          assert 'VERIFY_HOST' in nfc
           assert '24 * 60 * 60 * 1000' in backup and 'MAX_BACKUPS = 7' in backup
           assert 'ADMIN_KEY_FILE: /run/secrets/admin_key' in compose
           assert '/run/secrets/backup_encryption_key' in compose
@@ -138,6 +136,7 @@ jobs:
           rm -f scripts/run_security_remediation_wave3.py \
                 scripts/run_security_remediation_wave3_full.py \
                 scripts/run_security_remediation_final.py \
+                scripts/run_security_remediation_final_v2.py \
                 scripts/write_security_final_docs.py
           git config user.name 'RavenTag Security Remediation'
           git config user.email '185200505+ALENOC@users.noreply.github.com'
