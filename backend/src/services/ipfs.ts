@@ -171,7 +171,8 @@ export async function fetchIpfsMetadata(ipfsUri: string): Promise<unknown> {
   const response = await axios.get(url, {
     timeout: 15000,                      // 15-second read timeout
     headers: { Accept: 'application/json' },
-    maxContentLength: 1024 * 1024        // reject responses larger than 1 MB
+    maxContentLength: 1024 * 1024,       // reject responses larger than 1 MB
+    maxRedirects: 0                          // do not allow redirect SSRF escapes
   })
   return response.data
 }

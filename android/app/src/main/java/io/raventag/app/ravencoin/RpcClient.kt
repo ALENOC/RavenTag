@@ -107,7 +107,7 @@ class RpcClient(
             val file = java.io.File(dir, hash)
             if (file.exists()) return "file://${file.absolutePath}"
             val req = Request.Builder().url(url).get().build()
-            http.newCall(req).execute().use { resp ->
+            noRedirectHttp.newCall(req).execute().use { resp ->
                 if (!resp.isSuccessful) return null
                 resp.body?.byteStream()?.use { input ->
                     java.io.FileOutputStream(file).use { output ->
@@ -140,6 +140,15 @@ class RpcClient(
                             .readTimeout(30, TimeUnit.SECONDS)
                             .build()
 
+    // IPFS/backend fetches in this component must never transparently follow a
+    // redirect to a host that was not selected/validated by the caller. A 3xx is
+    // handled as a non-successful response and the next explicit candidate may be
+    // tried instead.
+    private val noRedirectHttp = http.newBuilder()
+        .followRedirects(false)
+        .followSslRedirects(false)
+        .build()
+
     data class RpcPayload(
         val jsonrpc: String = "1.0",
         val id: String = "raventag-android",
@@ -155,7 +164,7 @@ class RpcClient(
             .post(body)
             .build()
 
-        val response = http.newCall(request).executeSuspend()
+        val response = noRedirectHttp.newCall(request).executeSuspend()
         if (!response.isSuccessful) {
             throw IOException("RPC HTTP error: ${response.code}")
         }
@@ -193,7 +202,7 @@ class RpcClient(
             val request = Request.Builder()
                 .url("$rpcUrl/api/assets/${assetName.uppercase()}")
                 .get().build()
-            val response = http.newCall(request).executeSuspend()
+            val response = noRedirectHttp.newCall(request).executeSuspend()
             if (!response.isSuccessful) return null
             val obj = gson.fromJson(response.body?.string(), JsonObject::class.java)
             AssetData(
@@ -221,7 +230,7 @@ class RpcClient(
         urls.forEach { url ->
             runCatching {
                 val request = Request.Builder().url(url).get().build()
-                val response = http.newCall(request).executeSuspend()
+                val response = noRedirectHttp.newCall(request).executeSuspend()
                 if (!response.isSuccessful) {
                     Log.w(TAG, "fetchIpfsMetadata $ipfsUri via $url http=${response.code}")
                     return@runCatching null
@@ -243,7 +252,7 @@ class RpcClient(
             val request = Request.Builder()
                 .url("$rpcUrl/api/assets?search=${query.uppercase()}")
                 .get().build()
-            val response = http.newCall(request).executeSuspend()
+            val response = noRedirectHttp.newCall(request).executeSuspend()
             if (!response.isSuccessful) return emptyList()
             val obj = gson.fromJson(response.body?.string(), JsonObject::class.java)
             val arr = obj["assets"]?.asJsonArray ?: return emptyList()
@@ -332,7 +341,7 @@ class RpcClient(
             data class Result(val imageUrl: String?, val description: String?)
             val found: Result? = try {
                 val req = Request.Builder().url(url).get().build()
-                http.newCall(req).executeSuspend().use { resp ->
+                noRedirectHttp.newCall(req).executeSuspend().use { resp ->
                     if (!resp.isSuccessful) {
                         Log.w(TAG, "enrichWithIpfsData ${asset.name} HTTP ${resp.code} via $url")
                         return@use null

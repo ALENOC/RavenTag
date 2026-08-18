@@ -62,6 +62,7 @@ class SubscriptionManager(
 
     companion object {
         private const val TAG = "SubscriptionManager"
+        private const val MAX_RESPONSE_LINE_CHARS = 1_048_576
 
         /**
          * Kept for binary/call-site compatibility; the runtime pool is now
@@ -180,7 +181,7 @@ class SubscriptionManager(
     private suspend fun readLoop(s: Session) {
         try {
             while (coroutineContext.isActive) {
-                val line = withContext(Dispatchers.IO) { s.reader.readLine() }
+                val line = withContext(Dispatchers.IO) { readBoundedLine(s.reader, s.host) }
                 if (line == null) {
                     io.raventag.app.wallet.health.NodeHealthMonitor.reportFailure(
                         sessionKey(s),
@@ -209,6 +210,19 @@ class SubscriptionManager(
                 )
             }
             events.emit(ScripthashEvent.ConnectionLost)
+        }
+    }
+
+    private fun readBoundedLine(reader: BufferedReader, host: String): String? {
+        val out = StringBuilder()
+        while (true) {
+            val ch = reader.read()
+            if (ch == -1) return if (out.isEmpty()) null else out.toString()
+            if (ch == '\n'.code) return out.toString()
+            if (ch != '\r'.code) {
+                require(out.length < MAX_RESPONSE_LINE_CHARS) { "Oversized ElectrumX response from $host" }
+                out.append(ch.toChar())
+            }
         }
     }
 

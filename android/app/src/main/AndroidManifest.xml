@@ -16,7 +16,7 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.RavenTag"
-        android:usesCleartextTraffic="true"
+        android:usesCleartextTraffic="false"
         android:networkSecurityConfig="@xml/network_security_config">
 
         <!-- Runs before MainActivity and invalidates stale local legal acceptance. -->
@@ -38,13 +38,16 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
-            <!-- Handle NDEF URL tags: intercept any https://*//verify?* URL so the
-                 app opens for verification instead of the browser, regardless of
-                 which backend/frontend domain the user configured. -->
+            <!-- Only the canonical RavenTag verification origin may invoke the
+                 exported NDEF verification route. MainActivity/NfcReader also
+                 re-validates scheme/host/path before accepting SUN parameters. -->
             <intent-filter android:autoVerify="true">
                 <action android:name="android.nfc.action.NDEF_DISCOVERED" />
                 <category android:name="android.intent.category.DEFAULT" />
-                <data android:scheme="https" android:pathPrefix="/verify" />
+                <data
+                    android:scheme="https"
+                    android:host="verify.raventag.com"
+                    android:pathPrefix="/verify" />
             </intent-filter>
 
             <!-- TAG_DISCOVERED catch-all removed: foreground dispatch handles all NFC cases -->

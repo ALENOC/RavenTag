@@ -107,15 +107,16 @@ export function unrevokeAsset(assetName: string): boolean {
  * @returns true if the counter is fresh and has been stored; false if replayed.
  */
 export function checkAndUpdateCounter(nfcPubId: string, counter: number): boolean {
-  const database = getDb()
-  const row = database
-    .prepare('SELECT last_counter FROM nfc_counters WHERE nfc_pub_id = ?')
-    .get(nfcPubId) as { last_counter: number } | undefined
-  if (row && counter <= row.last_counter) return false // replay detected
-  database.prepare(
-    'INSERT OR REPLACE INTO nfc_counters (nfc_pub_id, last_counter) VALUES (?, ?)'
-  ).run(nfcPubId, counter)
-  return true
+  if (!Number.isSafeInteger(counter) || counter < 0) return false
+  const result = db.prepare(`
+    INSERT INTO nfc_counters (nfc_pub_id, last_counter)
+    VALUES (?, ?)
+    ON CONFLICT(nfc_pub_id) DO UPDATE SET last_counter = excluded.last_counter
+    WHERE excluded.last_counter > nfc_counters.last_counter
+  `).run(nfcPubId, counter)
+  // SQLite serializes the conditional write: exactly one concurrent request can
+  // advance a given counter value. changes===0 means replay/stale counter.
+  return result.changes === 1
 }
 
 /**

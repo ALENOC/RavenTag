@@ -1,0 +1,127 @@
+name: Security remediation gate
+
+on:
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  final-security-gate:
+    if: github.head_ref == 'security/full-audit-remediation-2026-08-18'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact PR head without third-party actions
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          HEAD_REF: ${{ github.head_ref }}
+          EVENT_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${HEAD_REPO}.git"
+          git fetch --depth=1 origin "${HEAD_REF}"
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$EVENT_SHA"
+          git status --short
+
+      - name: Backend exact install build tests and audit
+        working-directory: backend
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts
+          npm run build
+          npm test
+          npm audit --audit-level=low
+
+      - name: Android compile and JVM tests
+        working-directory: android
+        run: |
+          set -euo pipefail
+          chmod +x gradlew
+          ./gradlew compileBrandDebugKotlin compileConsumerDebugKotlin --console=plain
+          ./gradlew test --console=plain
+
+      - name: Whole-tree security invariants
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          root=Path('.')
+          wallet=(root/'android/app/src/main/java/io/raventag/app/wallet/WalletManager.kt').read_text()
+          txb=(root/'android/app/src/main/java/io/raventag/app/wallet/RavencoinTxBuilder.kt').read_text()
+          main=(root/'android/app/src/main/java/io/raventag/app/MainActivity.kt').read_text()
+          nfc=(root/'android/app/src/main/java/io/raventag/app/nfc/NfcReader.kt').read_text()
+          backup=(root/'android/app/src/main/java/io/raventag/app/ui/screens/MnemonicBackupScreen.kt').read_text()
+          exporter=(root/'android/app/src/main/java/io/raventag/app/security/MnemonicExporter.kt').read_text()
+          manifest=(root/'android/app/src/main/AndroidManifest.xml').read_text()
+          netcfg=(root/'android/app/src/main/res/xml/network_security_config.xml').read_text()
+          rpc=(root/'android/app/src/main/java/io/raventag/app/ravencoin/RpcClient.kt').read_text()
+          compose=(root/'docker-compose.yml').read_text()
+          backup_ts=(root/'backend/src/services/backup.ts').read_text()
+          index=(root/'backend/src/index.ts').read_text()
+
+          assert 'isMaxSend' not in wallet
+          assert 'effectiveAmount = if' not in txb
+          assert 'explicitMax: Boolean' in wallet and 'explicitMax: Boolean' in main
+          assert 'node.broadcastWithAllServers(tx.hex)' not in wallet
+          assert 'broadcastConsolidation(tx.hex)' not in wallet
+          assert 'signAndBroadcastReserved' in wallet
+          assert wallet.index('ReservedUtxoDao.tryReserve') < wallet.index('signed = build()')
+          assert 'CONFLICT_ABORT' in (root/'android/app/src/main/java/io/raventag/app/wallet/cache/ReservedUtxoDao.kt').read_text()
+          assert '0x3C' in txb or '0x3c' in txb
+          assert 'isValidRavencoinMainnetP2pkh' in txb
+
+          lines=[x.strip() for x in main.splitlines() if 'authPassed = true' in x]
+          assert len(lines)==2, lines
+          assert any('onSuccess' in x for x in lines)
+          assert any('no wallet' in x.lower() for x in lines)
+
+          assert '.setUserAuthenticationRequired(true)' in wallet
+          assert 'MNEMONIC_REVEAL_KEYSTORE_ALIAS' in wallet
+          assert 'raventag_mnemonic_reveal_key_v1' in wallet
+          assert 'persisted mnemonic migration verification failed' in wallet
+          assert 'fun getMnemonic()' not in wallet and 'getMnemonicForTestOnly' not in wallet
+          assert 'raventag_secure_v2' in main
+          assert 'LegacySecretMigration.migrate' in main
+          assert 'securePrefs.edit().putString("admin_key"' not in main
+          assert 'securePrefs.edit().putString("kubo_node_url"' not in main
+
+          combined=backup+'\n'+exporter
+          assert 'ClipboardManager' not in combined
+          assert 'setPrimaryClip' not in combined
+          assert 'android:usesCleartextTraffic="false"' in manifest
+          assert 'cleartextTrafficPermitted="true"' not in netcfg
+          assert 'payload[0]' not in nfc and 'firstOrNull()' in nfc
+          assert 'VERIFY_HOST' in nfc
+          assert '.followRedirects(false)' in rpc and '.followSslRedirects(false)' in rpc
+          assert 'http.newCall(' not in rpc and 'noRedirectHttp.newCall(' in rpc
+
+          assert '24 * 60 * 60 * 1000' in backup_ts
+          assert 'MAX_BACKUPS = 7' in backup_ts
+          assert 'ADMIN_KEY_FILE: /run/secrets/admin_key' in compose
+          assert '- backup_encryption_key' in compose
+          assert '/run/secrets/backup_encryption_key' in compose
+          assert 'INTERNAL_BACKUP_ENCRYPTION_KEY_FILE' in index
+          assert 'startBackupScheduler(backupKeyPath)' in index
+
+          for p in (root/'.github/workflows').glob('qwen-*.yml'):
+              for line in p.read_text().splitlines():
+                  if 'qwen-code-action@' in line:
+                      assert re.search(r'qwen-code-action@[0-9a-f]{40}(?![0-9a-f])', line), (p,line)
+                  if 'docker://' in line and ('qwen' in line.lower() or 'mcp' in line.lower()):
+                      assert '@sha256:' in line, (p,line)
+          PY
+
+      - name: Secret and dangerous-pattern scan
+        run: |
+          set -euo pipefail
+          ! git ls-files | grep -E '(^|/)(local\.properties|signing\.properties|\.env)$'
+          ! git grep -nE -- '-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----' -- . ':!docs/**'
+          ! git grep -nE -- '(API_TOKEN|PRIVATE_KEY|BACKUP_ENCRYPTION_KEY|ADMIN_KEY)=[A-Za-z0-9+/=_-]{16,}' -- . ':!docs/**' ':!.env.example'
+          git diff --check

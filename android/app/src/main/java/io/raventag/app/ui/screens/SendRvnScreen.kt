@@ -58,7 +58,7 @@ fun SendRvnScreen(
     donateMode: Boolean = false,
     walletBalance: Double = 0.0,
     onBack: () -> Unit,
-    onSend: (toAddress: String, amount: Double) -> Unit
+    onSend: (toAddress: String, amount: Double, explicitMax: Boolean) -> Unit
 ) {
     val s = LocalStrings.current
 
@@ -68,6 +68,7 @@ fun SendRvnScreen(
 
     // Amount entered by the user as a raw string; parsed to Double before sending.
     var amount by remember { mutableStateOf("") }
+    var explicitMax by remember { mutableStateOf(false) }
 
     // Controls whether the pre-send confirmation AlertDialog is visible.
     var showConfirm by remember { mutableStateOf(false) }
@@ -171,7 +172,7 @@ fun SendRvnScreen(
                 Button(
                     onClick = {
                         showConfirm = false
-                        onSend(toAddress, parsedAmount)
+                        onSend(toAddress, parsedAmount, explicitMax)
                         feeSatPerKb = null
                         feeUsedFallback = false
                         feeOverrideText = ""
@@ -285,7 +286,7 @@ fun SendRvnScreen(
             OutlinedTextField(
                 value = amount,
                 // Normalize comma to dot on input for locales that use commas as decimal separator.
-                onValueChange = { amount = it.replace(',', '.') },
+                onValueChange = { amount = it.replace(',', '.'); explicitMax = false },
                 placeholder = { Text("0.00000000", color = RavenMuted, style = MaterialTheme.typography.bodySmall) },
                 modifier = Modifier.weight(1f),
                 colors = sndFieldColors(),
@@ -301,10 +302,10 @@ fun SendRvnScreen(
             // Estimate uses ~300 bytes for a typical 1-in / 2-out P2PKH transaction.
             OutlinedButton(
                 onClick = {
-                    // MAX = full balance. WalletManager.sendRvnLocal detects sweep mode
-                    // (amountSat + fee > totalIn) and lets the tx builder subtract the
-                    // exact fee from the recipient amount, so the wallet ends at 0 RVN.
+                    // MAX is an explicit transaction intent. WalletManager computes
+                    // the exact recipient amount only after applying the safe fee/dust policy.
                     amount = "%.8f".format(walletBalance)
+                    explicitMax = true
                 },
                 enabled = walletBalance > 0.0,
                 modifier = Modifier.height(56.dp),

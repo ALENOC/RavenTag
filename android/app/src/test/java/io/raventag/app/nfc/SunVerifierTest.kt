@@ -74,7 +74,7 @@ class SunVerifierTest {
         // CMAC over empty input, then take odd-indexed bytes [1,3,5,...,15]
         val fullCmac = computeCmac(sessionKey, ByteArray(0))
         val truncated = ByteArray(8) { i -> fullCmac[i * 2 + 1] }
-        val mHex = truncated.copyOf(4).joinToString("") { "%02x".format(it) }
+        val mHex = truncated.joinToString("") { "%02x".format(it) }
 
         return eHex to mHex
     }

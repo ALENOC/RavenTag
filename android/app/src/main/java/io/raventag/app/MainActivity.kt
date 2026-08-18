@@ -101,6 +101,7 @@ import io.raventag.app.wallet.RavencoinTxBuilder
 import io.raventag.app.wallet.SubAssetIssueParams
 import io.raventag.app.wallet.WalletManager
 import io.raventag.app.security.AdminKeyStorage
+import io.raventag.app.security.LegacySecretMigration
 import io.raventag.app.config.AppConfig
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
@@ -2864,7 +2865,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * showing a generic error.
      *
      */
-    fun sendRvn(toAddress: String, amount: Double) {
+    fun sendRvn(toAddress: String, amount: Double, explicitMax: Boolean) {
         val s = getStrings()
         val wm = walletManager ?: run {
             sendSuccess = false; sendResult = s.walletNoWallet; return
@@ -2881,7 +2882,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 // Execute send with retry (D-06)
                 val result = RetryUtils.retryWithBackoff {
                     withContext(Dispatchers.IO) {
-                        wm.sendRvnLocal(toAddress, amount) { msg ->
+                        wm.sendRvnLocal(toAddress, amount, explicitMax) { msg ->
                             sendProgressLog = sendProgressLog + msg
                         }
                     }
@@ -2890,6 +2891,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val txid = result.substringBefore("|fee:")
                 val feeRvn = result.substringAfter("|fee:", "0").substringBefore("|").toLongOrNull()?.let { it / 1e8 } ?: 0.0
                 val cycledSat = result.substringAfter("|change:", "0").toLongOrNull() ?: 0L
+                val sentSatActual = result.substringAfter("|sent:", "0").toLongOrNull() ?: (amount * 1e8).toLong()
+                val sentRvnActual = sentSatActual / 1e8
 
                 // Show confirming notification (waiting for blocks)
                 TransactionNotificationHelper.showConfirming(getApplication(), 1, 1)
@@ -2904,7 +2907,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 sendLoading = false
                 sendSuccess = true
                 sendProgressLog = emptyList()
-                sendResult = s.walletSendResult.replace("%1", amount.toString())
+                sendResult = s.walletSendResult.replace("%1", sentRvnActual.toString())
                     .replace("%2", "%.5f".format(feeRvn))
                     .replace("%3", "${txid.take(20)}...")
 
@@ -2916,7 +2919,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val currentBalance = walletInfo?.balanceRvn
                 if (currentBalance != null) {
                     walletInfo = walletInfo?.copy(
-                        balanceRvn = (currentBalance - amount - feeRvn).coerceAtLeast(0.0)
+                        balanceRvn = (currentBalance - sentRvnActual - feeRvn).coerceAtLeast(0.0)
                     )
                 }
 
@@ -2924,7 +2927,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 // user sees it immediately instead of waiting for the next ElectrumX poll.
                 val nowMs = System.currentTimeMillis()
                 val nowSec = nowMs / 1000L
-                val sentSatOpt = (amount * 1e8).toLong()
+                val sentSatOpt = sentSatActual
                 val feeSatOpt = (feeRvn * 1e8).toLong()
                 if (txHistory.none { it.txid == txid }) {
                     val optimistic = io.raventag.app.wallet.TxHistoryEntry(
@@ -3851,6 +3854,9 @@ class MainActivity : FragmentActivity() {
      */
     private var securePrefsReady by mutableStateOf(false)
 
+    /** Non-null when encrypted secret storage cannot be initialized. */
+    private var secureStorageError by mutableStateOf<String?>(null)
+
     /**
      * Show a biometric (or device-credential) authentication prompt.
      *
@@ -3876,19 +3882,18 @@ class MainActivity : FragmentActivity() {
         onSuccess: () -> Unit,
         onError: () -> Unit
     ) {
-        // BIOMETRIC_STRONG | DEVICE_CREDENTIAL is only supported on API 30+.
-        // On older APIs use BIOMETRIC_WEAK (biometric only, requires negative button).
         val authenticators = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
             BiometricManager.Authenticators.BIOMETRIC_STRONG or
-            BiometricManager.Authenticators.DEVICE_CREDENTIAL
+                BiometricManager.Authenticators.DEVICE_CREDENTIAL
         } else {
-            BiometricManager.Authenticators.BIOMETRIC_WEAK
+            // DEVICE_CREDENTIAL combinations are not consistently supported by
+            // BiometricPrompt on API 26-29; require a strong biometric instead.
+            BiometricManager.Authenticators.BIOMETRIC_STRONG
         }
 
-        // If no credentials are enrolled or hardware unavailable, skip auth silently.
-        val canAuth = BiometricManager.from(this).canAuthenticate(authenticators)
-        if (canAuth != BiometricManager.BIOMETRIC_SUCCESS) {
-            onSuccess()
+        // Authentication unavailable is a failure, never evidence of identity.
+        if (BiometricManager.from(this).canAuthenticate(authenticators) != BiometricManager.BIOMETRIC_SUCCESS) {
+            onError()
             return
         }
 
@@ -3898,29 +3903,28 @@ class MainActivity : FragmentActivity() {
                 override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
                     onSuccess()
                 }
+
                 override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
-                    // Distinguish between "user cancelled" (close app) and
-                    // "hardware/enrollment error" (allow access to avoid locking out).
-                    val userCancelled = errorCode == BiometricPrompt.ERROR_USER_CANCELED ||
-                        errorCode == BiometricPrompt.ERROR_NEGATIVE_BUTTON
-                    if (userCancelled) onError() else onSuccess()
+                    // Every error path (cancel, lockout, unavailable hardware,
+                    // enrollment problem, negative button, platform failure) stays locked.
+                    onError()
                 }
+
                 override fun onAuthenticationFailed() {
-                    // A single biometric attempt failed; more attempts allowed, do nothing.
+                    // A failed attempt does not unlock. BiometricPrompt may allow another attempt.
                 }
             }
             val builder = BiometricPrompt.PromptInfo.Builder()
                 .setTitle(title)
                 .setSubtitle(subtitle)
                 .setAllowedAuthenticators(authenticators)
-            // On API < 30 with BIOMETRIC_WEAK, a negative button text is required.
             if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.R) {
                 builder.setNegativeButtonText("Annulla")
             }
             BiometricPrompt(this, executor, callback).authenticate(builder.build())
         } catch (_: Exception) {
-            // If the prompt cannot be shown for any reason, grant access.
-            onSuccess()
+            // Prompt initialization/platform errors fail closed.
+            onError()
         }
     }
 
@@ -3951,21 +3955,61 @@ class MainActivity : FragmentActivity() {
         // starts with managers ready but without blocking the main thread.
         lifecycleScope.launch(Dispatchers.IO) {
             val securePrefsDeferred = async {
-                try {
-                    val masterKey = MasterKey.Builder(this@MainActivity)
-                        .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-                        .build()
-                    EncryptedSharedPreferences.create(
-                        this@MainActivity,
-                        "raventag_secure",
-                        masterKey,
-                        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-                        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+                val masterKey = MasterKey.Builder(this@MainActivity)
+                    .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                    .build()
+                val encryptedV2 = EncryptedSharedPreferences.create(
+                    this@MainActivity,
+                    "raventag_secure_v2",
+                    masterKey,
+                    EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                    EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+                )
+
+                fun migrateFrom(source: android.content.SharedPreferences) {
+                    LegacySecretMigration.migrate(
+                        readLegacy = { source.getString(it, null) },
+                        writeSecure = { key, value ->
+                            check(encryptedV2.edit().putString(key, value).commit()) {
+                                "secure preference write failed for $key"
+                            }
+                        },
+                        readSecure = { encryptedV2.getString(it, null) },
+                        removeLegacy = { key ->
+                            check(source.edit().remove(key).commit()) {
+                                "legacy preference cleanup failed for $key"
+                            }
+                        }
                     )
-                } catch (_: Throwable) {
-                    // Fallback to plain prefs if Keystore unavailable (e.g. work profile restrictions)
-                    getSharedPreferences("raventag_secure", MODE_PRIVATE)
                 }
+
+                // Historical fail-open releases could write the literal key names
+                // into an ordinary SharedPreferences file of this name.
+                val rawLegacy = getSharedPreferences("raventag_secure", MODE_PRIVATE)
+                migrateFrom(rawLegacy)
+
+                // Later releases used EncryptedSharedPreferences under the same v1
+                // file name. Migrate those values too; if the old encrypted store
+                // cannot be opened, fail closed and leave it untouched.
+                val encryptedV1 = EncryptedSharedPreferences.create(
+                    this@MainActivity,
+                    "raventag_secure",
+                    masterKey,
+                    EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                    EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+                )
+                migrateFrom(encryptedV1)
+
+                // Kubo URL is configuration, not a credential. Preserve it outside
+                // the secret migration whitelist.
+                if (!prefs.contains("kubo_node_url")) {
+                    val oldKubo = rawLegacy.getString("kubo_node_url", null)
+                        ?: encryptedV1.getString("kubo_node_url", null)
+                    if (!oldKubo.isNullOrBlank()) {
+                        check(prefs.edit().putString("kubo_node_url", oldKubo).commit())
+                    }
+                }
+                encryptedV2
             }
             val adminKeyStorageDeferred = async {
                 val storage = AdminKeyStorage(applicationContext)
@@ -3982,14 +4026,36 @@ class MainActivity : FragmentActivity() {
                 )
             }
 
-            val initializedSecurePrefs = securePrefsDeferred.await()
+            val initializedSecurePrefs = try {
+                securePrefsDeferred.await()
+            } catch (t: Throwable) {
+                Log.e("MainActivity", "Encrypted secret storage unavailable", t)
+                withContext(Dispatchers.Main) {
+                    secureStorageError = "Secure storage is unavailable. RavenTag will not load secret-bearing functionality until Android Keystore access is restored."
+                    securePrefsReady = true
+                }
+                return@launch
+            }
             val initializedAdmin = adminKeyStorageDeferred.await()
             val initializedAdminKeyStorage = initializedAdmin.first
-            val initializedAdminKey = initializedAdmin.second
+            var initializedAdminKey = initializedAdmin.second
+            // Legacy admin_key is migrated through v2 only as a crash-safe bridge,
+            // then moved into its dedicated encrypted AdminKeyStorage.
+            val migratedAdminKey = initializedSecurePrefs.getString("admin_key", "").orEmpty()
+            if (initializedAdminKey.isBlank() && migratedAdminKey.isNotBlank()) {
+                initializedAdminKeyStorage.setAdminKey(migratedAdminKey)
+                check(initializedAdminKeyStorage.getAdminKey() == migratedAdminKey) {
+                    "admin key migration verification failed"
+                }
+                initializedAdminKey = migratedAdminKey
+            }
+            if (migratedAdminKey.isNotBlank()) {
+                check(initializedSecurePrefs.edit().remove("admin_key").commit())
+            }
             val initializedMasterKey = initializedSecurePrefs.getString("initial_master_key", "") ?: ""
             val initializedOperatorKey = initializedSecurePrefs.getString("operator_key", "") ?: ""
             val initializedPinataJwt = initializedSecurePrefs.getString("pinata_jwt", "") ?: ""
-            val initializedKuboNodeUrl = initializedSecurePrefs.getString("kubo_node_url", "") ?: ""
+            val initializedKuboNodeUrl = prefs.getString("kubo_node_url", "") ?: ""
             val initializedWalletManager = walletManagerDeferred.await()
             dbDeferred.await()
             val initializedAssetManager = AssetManager(
@@ -4020,8 +4086,18 @@ class MainActivity : FragmentActivity() {
         viewModel.currentVerifyUrl = savedVerifyUrl
 
         setContent {
-            // Hold content until EncryptedSharedPreferences is ready (avoids reading null keys)
+            // Hold content until EncryptedSharedPreferences is ready (avoids reading null keys).
             if (!securePrefsReady) return@setContent
+            secureStorageError?.let { message ->
+                MaterialTheme {
+                    Surface(modifier = Modifier.fillMaxSize(), color = Color.Black) {
+                        Box(modifier = Modifier.fillMaxSize().padding(24.dp)) {
+                            Text(message, color = Color.White, style = MaterialTheme.typography.bodyLarge)
+                        }
+                    }
+                }
+                return@setContent
+            }
 
             // Persisted user preferences (read from SharedPreferences, updated on save)
             var langCode by remember { mutableStateOf(prefs.getString("language", "en") ?: "en") }
@@ -4173,13 +4249,15 @@ class MainActivity : FragmentActivity() {
                                         onWalletRoleSave = { role, key ->
                                             // Persist role and key; clear the unused key slot
                                             if (role == "admin") {
-                                                securePrefs.edit().putString("admin_key", key).putString("operator_key", "").apply()
+                                                check(securePrefs.edit().remove("operator_key").commit())
+                                                viewModel.adminKeyStorage?.setAdminKey(key)
+                                                check(viewModel.adminKeyStorage?.getAdminKey() == key)
                                                 savedAdminKey = key; savedOperatorKey = ""
                                                 viewModel.adminKeyStatus = MainViewModel.AdminKeyStatus.VALID
                                                 viewModel.operatorKeyStatus = MainViewModel.AdminKeyStatus.UNKNOWN
-                                                try { viewModel.adminKeyStorage?.setAdminKey(key) } catch (_: Throwable) {}
                                             } else {
-                                                securePrefs.edit().putString("operator_key", key).putString("admin_key", "").apply()
+                                                check(securePrefs.edit().putString("operator_key", key).commit())
+                                                viewModel.adminKeyStorage?.clearAdminKey()
                                                 savedOperatorKey = key; savedAdminKey = ""
                                                 viewModel.operatorKeyStatus = MainViewModel.AdminKeyStatus.VALID
                                                 viewModel.adminKeyStatus = MainViewModel.AdminKeyStatus.UNKNOWN
@@ -4209,7 +4287,7 @@ class MainActivity : FragmentActivity() {
                                         },
                                         savedKuboNodeUrl = savedKuboNodeUrl,
                                         onKuboNodeUrlSave = { url ->
-                                            securePrefs.edit().putString("kubo_node_url", url).apply()
+                                            prefs.edit().putString("kubo_node_url", url).apply()
                                             savedKuboNodeUrl = url
                                             viewModel.kuboNodeUrl = url
                                             viewModel.kuboNodeStatus = MainViewModel.AdminKeyStatus.UNKNOWN
@@ -4671,7 +4749,7 @@ fun RavenTagApp(
                 viewModel.sendFeeUnavailable = false
                 viewModel.estimatedFee = 0.0
             },
-            onSend = viewModel::sendRvn
+            onSend = { address, amount, explicitMax -> viewModel.sendRvn(address, amount, explicitMax) }
         )
         return
     }
