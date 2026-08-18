@@ -37,7 +37,7 @@ jobs:
       - name: Apply asserted source patches
         env:
           MCP_DIGEST: ${{ steps.mcp.outputs.digest }}
-        run: python3 scripts/apply_security_remediation_wave1.py
+        run: python3 scripts/run_security_remediation_wave1.py
 
       - name: Upgrade Axios using npm resolver and type-check backend
         working-directory: backend
@@ -70,7 +70,7 @@ jobs:
           HEAD_REF: ${{ github.head_ref }}
         run: |
           set -euo pipefail
-          rm -f scripts/apply_security_remediation_wave1.py .github/workflows/apply-security-remediation-wave1.yml
+          rm -f scripts/apply_security_remediation_wave1.py scripts/run_security_remediation_wave1.py .github/workflows/apply-security-remediation-wave1.yml
           git config user.name 'RavenTag Security Remediation'
           git config user.email '185200505+ALENOC@users.noreply.github.com'
           git add -A
