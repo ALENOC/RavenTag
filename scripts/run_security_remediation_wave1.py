@@ -29,5 +29,15 @@ if text.count(old_block) != 1:
     raise SystemExit('wave1 IPFS patch block did not match exactly once')
 text = text.replace(old_block, new_block, 1)
 
+# Workflow files require GitHub "workflows" permission that the Actions token
+# intentionally does not have. Those immutable Qwen/MCP pins are applied later
+# through the authorized GitHub connector instead. Keep this runner source-only.
+marker = "# ---------------------------------------------------------------------------\n# RT-SEC-010: Qwen action references use the reviewed immutable upstream SHA."
+start = text.find(marker)
+end = text.find("print('wave1 remediation patch applied successfully')", start)
+if start < 0 or end < 0:
+    raise SystemExit('wave1 workflow-pinning block not found')
+text = text[:start] + "# RT-SEC-010 workflow pinning is applied separately via GitHub connector.\n\n" + text[end:]
+
 path.write_text(text, encoding='utf-8')
 runpy.run_path(str(path), run_name='__main__')
