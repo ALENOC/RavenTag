@@ -31,7 +31,7 @@ GitHub: https://github.com/ALENOC/RavenTag
 Email: legal@raventag.com
 
 ### 2.2 Developer-operated ElectrumX infrastructure
-The Developer operates a public ElectrumX endpoint, currently identified in the project as `electrumx.raventag.com` / `electrum.raventag.com`, connected to a Ravencoin Core node. When the App uses that endpoint, processing of connection data by this infrastructure is attributable to the Developer rather than to an independent third-party operator.
+The Developer operates a public ElectrumX endpoint, currently identified in the project as `electrumx.raventag.com`, connected to a Ravencoin Core node. When the App uses that endpoint, processing of connection data by this infrastructure is attributable to the Developer rather than to an independent third-party operator.
 
 ### 2.3 Brand-operated backends
 Brands and manufacturers may deploy independent backend instances. When an App instance is configured to use a backend operated by a brand, that entity independently determines the purposes and means of processing carried out by its systems, subject to any different legal arrangement that may apply.
