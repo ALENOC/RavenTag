@@ -19,7 +19,7 @@
 GitHub: https://github.com/ALENOC/RavenTag  
 Email: legal@raventag.com
 
-開発者は `raventag.com` / `api.raventag.com` のデモ用バックエンド、および `electrumx.raventag.com` / `electrum.raventag.com` の公開 ElectrumX エンドポイントを運営する場合があります。これら開発者運営のインフラは第三者サービスではありません。
+開発者は `raventag.com` / `api.raventag.com` のデモ用バックエンド、および `electrumx.raventag.com` の公開 ElectrumX エンドポイントを運営する場合があります。これら開発者運営のインフラは第三者サービスではありません。
 
 ブランドやメーカーは独自バックエンドを運営でき、本アプリは独立した ElectrumX/Ravencoin Core ノード、IPFS ゲートウェイその他第三者サービスを利用する場合があります。開発者は第三者のログ、保存期間、セキュリティまたはプライバシー慣行を管理しません。
 
