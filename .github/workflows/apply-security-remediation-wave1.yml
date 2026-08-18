@@ -1,19 +1,19 @@
-name: Diagnose security remediation wave 2 Android failures
+name: Apply security remediation wave 2 final gate
 
 on:
   pull_request:
     branches: [master]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  diagnose:
+  apply:
     if: github.repository == 'ALENOC/RavenTag' && github.head_ref == 'security/full-audit-remediation-2026-08-18'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
-      - name: Checkout remediation branch
+      - name: Checkout exact remediation branch
         env:
           GH_TOKEN: ${{ github.token }}
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
@@ -23,25 +23,73 @@ jobs:
           git init .
           git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${HEAD_REPO}.git"
           git fetch --depth=1 origin "${HEAD_REF}"
-          git checkout --detach FETCH_HEAD
-      - name: Apply exact wave2 transform
+          git checkout -B "${HEAD_REF}" FETCH_HEAD
+
+      - name: Apply asserted financial/security patches
+        run: python3 scripts/run_security_remediation_wave2_v7.py
+
+      - name: Make internal backup opt-in and fail closed
         run: |
-          python3 scripts/run_security_remediation_wave2_v6.py
           python3 - <<'PY'
           from pathlib import Path
-          p=Path('backend/src/index.ts'); s=p.read_text(); old='  startBackupScheduler()\n'; new='''  if (process.env.ENABLE_INTERNAL_BACKUP === 'true') {\n    const backupKeyPath = process.env.INTERNAL_BACKUP_ENCRYPTION_KEY_FILE\n    if (!backupKeyPath) throw new Error('ENABLE_INTERNAL_BACKUP requires INTERNAL_BACKUP_ENCRYPTION_KEY_FILE')\n    startBackupScheduler(backupKeyPath)\n  }\n''';
-          if s.count(old)!=1: raise SystemExit('backup scheduler anchor mismatch')
-          p.write_text(s.replace(old,new,1))
+          p = Path('backend/src/index.ts')
+          s = p.read_text()
+          old = '  startBackupScheduler()\n'
+          new = '''  if (process.env.ENABLE_INTERNAL_BACKUP === 'true') {
+            const backupKeyPath = process.env.INTERNAL_BACKUP_ENCRYPTION_KEY_FILE
+            if (!backupKeyPath) throw new Error('ENABLE_INTERNAL_BACKUP requires INTERNAL_BACKUP_ENCRYPTION_KEY_FILE')
+            startBackupScheduler(backupKeyPath)
+          }
+          '''
+          if s.count(old) != 1: raise SystemExit(f'backup scheduler anchor count={s.count(old)}')
+          p.write_text(s.replace(old, new, 1))
           PY
-      - name: Run Android tests with concise diagnostics
+
+      - name: Backend build and unit tests
+        working-directory: backend
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts
+          npm run build
+          npm test
+
+      - name: Compile Android first
         working-directory: android
         run: |
-          set +e
+          set -euo pipefail
           chmod +x gradlew
-          ./gradlew test --console=plain > /tmp/android-test.log 2>&1
-          rc=$?
-          echo "GRADLE_EXIT=$rc"
-          grep -E -n "(^e: |FAILED|FAILURE:|There were failing tests|Compilation error|> Task .* FAILED|Tests run:|tests completed|AssertionError|expected:|but was:)" /tmp/android-test.log | tail -n 250 || true
-          echo '--- final 120 lines ---'
-          tail -n 120 /tmp/android-test.log
-          exit $rc
+          ./gradlew compileBrandDebugKotlin compileConsumerDebugKotlin --console=plain
+
+      - name: Full Android JVM regression suite
+        working-directory: android
+        run: |
+          set -euo pipefail
+          ./gradlew test --console=plain
+
+      - name: Static financial self-audit
+        run: |
+          set -euo pipefail
+          git diff --check
+          ! grep -n 'isMaxSend' android/app/src/main/java/io/raventag/app/wallet/WalletManager.kt
+          ! grep -n 'effectiveAmount = if' android/app/src/main/java/io/raventag/app/wallet/RavencoinTxBuilder.kt
+          ! grep -n 'node.broadcastWithAllServers(tx.hex)' android/app/src/main/java/io/raventag/app/wallet/WalletManager.kt
+          ! grep -n 'broadcastConsolidation(tx.hex)' android/app/src/main/java/io/raventag/app/wallet/WalletManager.kt
+          ! grep -n 'fun sendRvn(toAddress: String, amount: Double) {' android/app/src/main/java/io/raventag/app/MainActivity.kt
+          grep -n 'CONFLICT_ABORT' android/app/src/main/java/io/raventag/app/wallet/cache/ReservedUtxoDao.kt
+          grep -n 'signAndBroadcastReserved' android/app/src/main/java/io/raventag/app/wallet/WalletManager.kt
+          grep -n 'explicitMax: Boolean' android/app/src/main/java/io/raventag/app/MainActivity.kt
+
+      - name: Commit tested financial remediation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          set -euo pipefail
+          rm -f scripts/run_security_remediation_wave2.py scripts/run_security_remediation_wave2_fixed.py scripts/run_security_remediation_wave2_v2.py scripts/run_security_remediation_wave2_v3.py scripts/run_security_remediation_wave2_v4.py scripts/run_security_remediation_wave2_v5.py scripts/run_security_remediation_wave2_v6.py scripts/run_security_remediation_wave2_v7.py scripts/run_security_remediation_wave2_diag.py
+          git config user.name 'RavenTag Security Remediation'
+          git config user.email '185200505+ALENOC@users.noreply.github.com'
+          git add -A
+          git reset -- .github/workflows/
+          git diff --cached --check
+          git commit -m 'security: serialize wallet spends and remove implicit max-send'
+          git push origin HEAD:"${HEAD_REF}"
