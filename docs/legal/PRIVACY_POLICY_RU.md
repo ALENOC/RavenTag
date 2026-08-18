@@ -14,7 +14,7 @@
 GitHub: https://github.com/ALENOC/RavenTag  
 Email: legal@raventag.com
 
-Разработчик может управлять backend на `raventag.com` / `api.raventag.com` и публичным ElectrumX (`electrumx.raventag.com` / `electrum.raventag.com`). Эти системы не являются сторонними сервисами. Приложение также может использовать независимые backend брендов, ElectrumX/Ravencoin Core, IPFS и иные сервисы, практики которых Разработчик не контролирует.
+Разработчик может управлять backend на `raventag.com` / `api.raventag.com` и публичным ElectrumX (`electrumx.raventag.com`). Эти системы не являются сторонними сервисами. Приложение также может использовать независимые backend брендов, ElectrumX/Ravencoin Core, IPFS и иные сервисы, практики которых Разработчик не контролирует.
 
 ## 3. Обрабатываемые данные
 ### 3.1 Локальные данные кошелька
