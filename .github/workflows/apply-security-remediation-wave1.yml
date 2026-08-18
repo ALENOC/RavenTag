@@ -25,18 +25,11 @@ jobs:
           git fetch --depth=1 origin "${HEAD_REF}"
           git checkout -B "${HEAD_REF}" FETCH_HEAD
 
-      - name: Resolve immutable GitHub MCP image digest
-        id: mcp
-        run: |
-          set -euo pipefail
-          DIGEST="$(docker buildx imagetools inspect ghcr.io/github/github-mcp-server:v0.18.0 | awk '/^Digest:/ {print $2; exit}')"
-          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
-          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
-          echo "Resolved github-mcp-server:v0.18.0 -> $DIGEST"
-
       - name: Apply asserted source patches
         env:
-          MCP_DIGEST: ${{ steps.mcp.outputs.digest }}
+          # Resolved from ghcr.io/github/github-mcp-server:v0.18.0 by the previous
+          # successful GitHub runner lookup; immutable digest, not a mutable tag.
+          MCP_DIGEST: sha256:6aa543f565bc98d96106fdd80a0abdc0c7147c8ca7f4663a814ceecef1ccc6d3
         run: python3 scripts/run_security_remediation_wave1.py
 
       - name: Upgrade Axios using npm resolver and type-check backend
