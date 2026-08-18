@@ -81,6 +81,9 @@ openssl rand -hex 16 > secrets/brand_master_key
 
 # Brand salt (for nfc_pub_id computation)
 openssl rand -hex 16 > secrets/brand_salt
+
+# Backup encryption key — MUST be independent from admin/operator/brand keys
+openssl rand -hex 32 > secrets/backup_encryption_key.txt
 ```
 
 **Important:** Each file should contain ONLY the hex string, no newline. The commands above handle this correctly.
@@ -156,9 +159,14 @@ EOF
 ## Step 7: Start the backend
 
 ```bash
-docker compose up -d backend
+docker compose up -d
 docker compose logs backend
+docker compose logs backup
 ```
+
+The `backup` sidecar snapshots SQLite every **24 hours**, encrypts each snapshot with
+`secrets/backup_encryption_key.txt`, and retains the **7 newest** encrypted backups.
+Never reuse `secrets/admin_key` (or any authentication credential) as the backup key.
 
 Verify it is running:
 

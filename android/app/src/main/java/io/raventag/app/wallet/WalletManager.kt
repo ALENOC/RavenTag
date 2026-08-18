@@ -126,6 +126,9 @@ class WalletManager(private val context: Context) {
         private const val KEY_MNEMONIC_IV = "mnemonic_iv"
         private const val KEY_ADDRESS_INDEX = "address_index"
         private const val KEYSTORE_ALIAS = "raventag_wallet_key"
+        private const val MNEMONIC_REVEAL_KEYSTORE_ALIAS = "raventag_mnemonic_reveal_key_v1"
+        private const val KEY_MNEMONIC_AUTH_ENC = "mnemonic_auth_enc_v1"
+        private const val KEY_MNEMONIC_AUTH_IV = "mnemonic_auth_iv_v1"
         // D-15 mnemonic-safety additions (plan 30-06)
         private const val KEY_SEED_HMAC = "seed_hmac"
         private const val KEY_MNEMONIC_HMAC = "mnemonic_hmac"
@@ -497,6 +500,53 @@ class WalletManager(private val context: Context) {
         return key
     }
 
+    /**
+     * Dedicated key for recovery-phrase reveal. Its use is cryptographically
+     * conditioned on recent OS user authentication; the normal wallet seed key is
+     * intentionally separate so background balance/address work is not disrupted.
+     */
+    private fun getOrCreateMnemonicRevealKey(): SecretKey {
+        val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        if (keyStore.containsAlias(MNEMONIC_REVEAL_KEYSTORE_ALIAS)) {
+            return (keyStore.getEntry(MNEMONIC_REVEAL_KEYSTORE_ALIAS, null) as KeyStore.SecretKeyEntry).secretKey
+        }
+
+        fun spec(strongBox: Boolean): KeyGenParameterSpec {
+            val builder = KeyGenParameterSpec.Builder(
+                MNEMONIC_REVEAL_KEYSTORE_ALIAS,
+                KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
+            )
+                .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                .setKeySize(256)
+                .setRandomizedEncryptionRequired(true)
+                .setUserAuthenticationRequired(true)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                builder.setUserAuthenticationParameters(
+                    60,
+                    KeyProperties.AUTH_BIOMETRIC_STRONG or KeyProperties.AUTH_DEVICE_CREDENTIAL
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                builder.setUserAuthenticationValidityDurationSeconds(60)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                builder.setUnlockedDeviceRequired(true)
+                if (strongBox) builder.setIsStrongBoxBacked(true)
+            }
+            return builder.build()
+        }
+
+        val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
+        return try {
+            generator.init(spec(strongBox = true))
+            generator.generateKey()
+        } catch (_: Throwable) {
+            generator.init(spec(strongBox = false))
+            generator.generateKey()
+        }
+    }
+
     fun isKeyHardwareBacked(): Boolean {
         return try {
             val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
@@ -552,6 +602,7 @@ class WalletManager(private val context: Context) {
         prefs().edit()
             .remove(KEY_SEED_ENC).remove(KEY_SEED_IV)
             .remove(KEY_MNEMONIC_ENC).remove(KEY_MNEMONIC_IV)
+            .remove(KEY_MNEMONIC_AUTH_ENC).remove(KEY_MNEMONIC_AUTH_IV)
             .remove(KEY_ADDRESS_INDEX)
             .remove(KEY_BACKUP_COMPLETED)
             .remove(KEY_HMAC_MATERIAL_CT).remove(KEY_HMAC_MATERIAL_IV)
@@ -566,6 +617,7 @@ class WalletManager(private val context: Context) {
             val ks = KeyStore.getInstance("AndroidKeyStore")
             ks.load(null)
             if (ks.containsAlias(KEYSTORE_ALIAS)) ks.deleteEntry(KEYSTORE_ALIAS)
+            if (ks.containsAlias(MNEMONIC_REVEAL_KEYSTORE_ALIAS)) ks.deleteEntry(MNEMONIC_REVEAL_KEYSTORE_ALIAS)
         } catch (_: Exception) {}
     }
 
@@ -1293,25 +1345,6 @@ class WalletManager(private val context: Context) {
         java.util.Arrays.fill(mnemonicBytes, 0)
     }
 
-    fun getMnemonic(): String? {
-        return try {
-            val encStr = prefs().getString(KEY_MNEMONIC_ENC, null) ?: return null
-            val ivStr = prefs().getString(KEY_MNEMONIC_IV, null) ?: return null
-            val enc = android.util.Base64.decode(encStr, android.util.Base64.DEFAULT)
-            val iv = android.util.Base64.decode(ivStr, android.util.Base64.DEFAULT)
-            val plaintext = decrypt(enc, iv)
-            val tagB64 = prefs().getString(KEY_MNEMONIC_HMAC, null)
-            if (tagB64 != null) {
-                val tag = android.util.Base64.decode(tagB64, android.util.Base64.NO_WRAP)
-                verifySeedHmacInstance(plaintext, tag)
-            }
-            String(plaintext, Charsets.UTF_8)
-        } catch (e: KeystoreInvalidatedException) {
-            throw e
-        } catch (e: IntegrityException) {
-            throw e
-        } catch (e: Exception) { null }
-    }
 
     private fun getSeed(): ByteArray? {
         return try {
@@ -1334,45 +1367,137 @@ class WalletManager(private val context: Context) {
     }
 
     /**
-     * D-15 + D-16: reveal the stored mnemonic as a CharArray, gated by a
-     * BiometricPrompt authentication bound to the Keystore decrypt operation.
+     * Reveal a persisted recovery phrase. Authentication is established by the
+     * OS first; the plaintext can then be produced only by an AES key whose
+     * Android Keystore policy itself requires recent user authentication.
      *
-     * Caller is responsible for zero-filling the returned CharArray after display.
+     * Existing wallets are migrated lazily. The legacy ciphertext is retained
+     * until the NEW persisted ciphertext has been read back and successfully
+     * decrypted with the auth-bound key. Any interruption is safe to retry.
      */
     suspend fun revealMnemonicCharsWithBiometric(
         gate: io.raventag.app.security.BiometricGate
-    ): CharArray = withContext(Dispatchers.IO) {
-        val p = prefs()
-        val ctB64 = p.getString(KEY_MNEMONIC_ENC, null)
-            ?: throw IllegalStateException("no mnemonic stored")
-        val ivB64 = p.getString(KEY_MNEMONIC_IV, null)
-            ?: throw IllegalStateException("no mnemonic iv stored")
-        val ct = android.util.Base64.decode(ctB64, android.util.Base64.DEFAULT)
-        val iv = android.util.Base64.decode(ivB64, android.util.Base64.DEFAULT)
-        val cipher = wrapKeystoreException {
-            Cipher.getInstance("AES/GCM/NoPadding").apply {
-                init(
-                    Cipher.DECRYPT_MODE,
-                    getOrCreateAndroidKey(),
-                    GCMParameterSpec(128, iv)
-                )
-            }
-        }
-        val plaintext = gate.decryptWithBiometric(
-            cipher,
-            ct,
+    ): CharArray {
+        // Keep BiometricPrompt on the caller/main context; all failures/cancel
+        // paths throw and therefore fail closed before legacy decryption starts.
+        gate.authenticate(
             io.raventag.app.R.string.biometricRevealTitle,
             io.raventag.app.R.string.biometricRevealSubtitle
         )
-        try {
-            val tagB64 = p.getString(KEY_MNEMONIC_HMAC, null)
-            if (tagB64 != null) {
-                val tag = android.util.Base64.decode(tagB64, android.util.Base64.NO_WRAP)
-                verifySeedHmacInstance(plaintext, tag)
+
+        return withContext(Dispatchers.IO) {
+            val p = prefs()
+            val revealKey = wrapKeystoreException { getOrCreateMnemonicRevealKey() }
+            var plaintext: ByteArray? = null
+            try {
+                val authCtB64 = p.getString(KEY_MNEMONIC_AUTH_ENC, null)
+                val authIvB64 = p.getString(KEY_MNEMONIC_AUTH_IV, null)
+                check((authCtB64 == null) == (authIvB64 == null)) {
+                    "incomplete auth-bound mnemonic state"
+                }
+
+                if (authCtB64 != null && authIvB64 != null) {
+                    val ct = android.util.Base64.decode(authCtB64, android.util.Base64.NO_WRAP)
+                    val iv = android.util.Base64.decode(authIvB64, android.util.Base64.NO_WRAP)
+                    plaintext = wrapKeystoreException {
+                        Cipher.getInstance("AES/GCM/NoPadding").run {
+                            init(Cipher.DECRYPT_MODE, revealKey, GCMParameterSpec(128, iv))
+                            doFinal(ct)
+                        }
+                    }
+
+                    // Crash/interruption recovery: if a previous migration wrote a
+                    // verified new copy but stopped before legacy cleanup, this
+                    // successful auth-bound decrypt proves cleanup is now safe.
+                    if (p.contains(KEY_MNEMONIC_ENC) || p.contains(KEY_MNEMONIC_IV)) {
+                        check(p.edit()
+                            .remove(KEY_MNEMONIC_ENC)
+                            .remove(KEY_MNEMONIC_IV)
+                            .remove(KEY_MNEMONIC_HMAC)
+                            .commit()) { "could not remove verified legacy mnemonic copy" }
+                    }
+                } else {
+                    val legacyCtB64 = p.getString(KEY_MNEMONIC_ENC, null)
+                        ?: throw IllegalStateException("no mnemonic stored")
+                    val legacyIvB64 = p.getString(KEY_MNEMONIC_IV, null)
+                        ?: throw IllegalStateException("no mnemonic iv stored")
+                    val legacy = decrypt(
+                        android.util.Base64.decode(legacyCtB64, android.util.Base64.DEFAULT),
+                        android.util.Base64.decode(legacyIvB64, android.util.Base64.DEFAULT)
+                    )
+                    try {
+                        // Authenticate the legacy value before migrating it.
+                        p.getString(KEY_MNEMONIC_HMAC, null)?.let { tagB64 ->
+                            verifySeedHmacInstance(
+                                legacy,
+                                android.util.Base64.decode(tagB64, android.util.Base64.NO_WRAP)
+                            )
+                        }
+
+                        val encCipher = Cipher.getInstance("AES/GCM/NoPadding")
+                        encCipher.init(Cipher.ENCRYPT_MODE, revealKey)
+                        val newCt = encCipher.doFinal(legacy)
+                        val newIv = encCipher.iv
+
+                        // Verify before persistence.
+                        val localVerified = Cipher.getInstance("AES/GCM/NoPadding").run {
+                            init(Cipher.DECRYPT_MODE, revealKey, GCMParameterSpec(128, newIv))
+                            doFinal(newCt)
+                        }
+                        try {
+                            check(MessageDigest.isEqual(legacy, localVerified)) {
+                                "mnemonic auth-bound migration verification failed"
+                            }
+                        } finally {
+                            localVerified.fill(0)
+                        }
+
+                        check(p.edit()
+                            .putString(KEY_MNEMONIC_AUTH_ENC, android.util.Base64.encodeToString(newCt, android.util.Base64.NO_WRAP))
+                            .putString(KEY_MNEMONIC_AUTH_IV, android.util.Base64.encodeToString(newIv, android.util.Base64.NO_WRAP))
+                            .commit()) { "could not persist authenticated mnemonic representation" }
+
+                        // Mandatory persisted read-back verification. Only after
+                        // this succeeds may the legacy representation be deleted.
+                        val persistedCt = android.util.Base64.decode(
+                            p.getString(KEY_MNEMONIC_AUTH_ENC, null)
+                                ?: error("persisted authenticated mnemonic missing"),
+                            android.util.Base64.NO_WRAP
+                        )
+                        val persistedIv = android.util.Base64.decode(
+                            p.getString(KEY_MNEMONIC_AUTH_IV, null)
+                                ?: error("persisted authenticated mnemonic IV missing"),
+                            android.util.Base64.NO_WRAP
+                        )
+                        val persistedVerified = Cipher.getInstance("AES/GCM/NoPadding").run {
+                            init(Cipher.DECRYPT_MODE, revealKey, GCMParameterSpec(128, persistedIv))
+                            doFinal(persistedCt)
+                        }
+                        try {
+                            check(MessageDigest.isEqual(legacy, persistedVerified)) {
+                                "persisted mnemonic migration verification failed"
+                            }
+                        } finally {
+                            persistedVerified.fill(0)
+                        }
+
+                        check(p.edit()
+                            .remove(KEY_MNEMONIC_ENC)
+                            .remove(KEY_MNEMONIC_IV)
+                            .remove(KEY_MNEMONIC_HMAC)
+                            .commit()) { "could not remove verified legacy mnemonic copy" }
+                        plaintext = legacy.copyOf()
+                    } finally {
+                        legacy.fill(0)
+                    }
+                }
+
+                val bytes = checkNotNull(plaintext) { "mnemonic decrypt produced no plaintext" }
+                val chars = Charsets.UTF_8.decode(java.nio.ByteBuffer.wrap(bytes))
+                CharArray(chars.remaining()).also { chars.get(it) }
+            } finally {
+                plaintext?.fill(0)
             }
-            String(plaintext, Charsets.UTF_8).toCharArray()
-        } finally {
-            java.util.Arrays.fill(plaintext, 0)
         }
     }
 
@@ -2454,22 +2579,8 @@ class WalletManager(private val context: Context) {
         return words.joinToString(" ")
     }
 
-    private fun mnemonicToSeed(mnemonic: String, passphrase: String): ByteArray {
-        // BIP39 requires UTF-8 NFKD normalization of both mnemonic and passphrase.
-        val normalizedMnemonic = java.text.Normalizer.normalize(mnemonic, java.text.Normalizer.Form.NFKD)
-        val normalizedPassphrase = java.text.Normalizer.normalize(passphrase, java.text.Normalizer.Form.NFKD)
-        val saltBytes = ("mnemonic" + normalizedPassphrase).toByteArray(Charsets.UTF_8)
-        val password = normalizedMnemonic.toCharArray()
-        val spec = javax.crypto.spec.PBEKeySpec(password, saltBytes, 2048, 512)
-        return try {
-            javax.crypto.SecretKeyFactory.getInstance("PBKDF2WithHmacSHA512")
-                .generateSecret(spec).encoded
-        } finally {
-            spec.clearPassword()
-            java.util.Arrays.fill(password, '\u0000')
-            saltBytes.fill(0)
-        }
-    }
+    private fun mnemonicToSeed(mnemonic: String, passphrase: String): ByteArray =
+        Bip39Kdf.deriveSeed(mnemonic, passphrase)
 
     suspend fun healAndSweepTarget(index: Int) = withContext(Dispatchers.IO) {
         if (!ensureNoPendingSends(throwOnPending = false)) return@withContext

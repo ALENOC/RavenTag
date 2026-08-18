@@ -133,12 +133,6 @@ class WalletManagerTest {
 
     // ── Mnemonic storage ─────────────────────────────────────────────────────
 
-    @Test
-    fun getMnemonic_afterRestore_returnsOriginalMnemonic() {
-        val mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
-        walletManager.restoreWallet(mnemonic)
-        assertEquals(mnemonic, walletManager.getMnemonic())
-    }
 
     @Test
     fun hasWallet_afterRestore_returnsTrue() {

@@ -81,7 +81,8 @@ object NfcReader {
                 Log.w(TAG, "Rejecting malformed/oversized NDEF URI payload (${payload.size} bytes)")
                 continue
             }
-            val prefix = uriPrefix(payload[0]) ?: continue
+            val prefixCode = payload.firstOrNull() ?: continue
+            val prefix = uriPrefix(prefixCode) ?: continue
             val suffix = if (payload.size > 1) String(payload, 1, payload.size - 1, Charsets.UTF_8) else ""
             val urlStr = prefix + suffix
             parseSunUrl(urlStr)?.let { return it }

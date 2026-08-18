@@ -101,6 +101,7 @@ import io.raventag.app.wallet.RavencoinTxBuilder
 import io.raventag.app.wallet.SubAssetIssueParams
 import io.raventag.app.wallet.WalletManager
 import io.raventag.app.security.AdminKeyStorage
+import io.raventag.app.security.LegacySecretMigration
 import io.raventag.app.config.AppConfig
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
@@ -3957,13 +3958,58 @@ class MainActivity : FragmentActivity() {
                 val masterKey = MasterKey.Builder(this@MainActivity)
                     .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
                     .build()
-                EncryptedSharedPreferences.create(
+                val encryptedV2 = EncryptedSharedPreferences.create(
+                    this@MainActivity,
+                    "raventag_secure_v2",
+                    masterKey,
+                    EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                    EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+                )
+
+                fun migrateFrom(source: android.content.SharedPreferences) {
+                    LegacySecretMigration.migrate(
+                        readLegacy = { source.getString(it, null) },
+                        writeSecure = { key, value ->
+                            check(encryptedV2.edit().putString(key, value).commit()) {
+                                "secure preference write failed for $key"
+                            }
+                        },
+                        readSecure = { encryptedV2.getString(it, null) },
+                        removeLegacy = { key ->
+                            check(source.edit().remove(key).commit()) {
+                                "legacy preference cleanup failed for $key"
+                            }
+                        }
+                    )
+                }
+
+                // Historical fail-open releases could write the literal key names
+                // into an ordinary SharedPreferences file of this name.
+                val rawLegacy = getSharedPreferences("raventag_secure", MODE_PRIVATE)
+                migrateFrom(rawLegacy)
+
+                // Later releases used EncryptedSharedPreferences under the same v1
+                // file name. Migrate those values too; if the old encrypted store
+                // cannot be opened, fail closed and leave it untouched.
+                val encryptedV1 = EncryptedSharedPreferences.create(
                     this@MainActivity,
                     "raventag_secure",
                     masterKey,
                     EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
                     EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
                 )
+                migrateFrom(encryptedV1)
+
+                // Kubo URL is configuration, not a credential. Preserve it outside
+                // the secret migration whitelist.
+                if (!prefs.contains("kubo_node_url")) {
+                    val oldKubo = rawLegacy.getString("kubo_node_url", null)
+                        ?: encryptedV1.getString("kubo_node_url", null)
+                    if (!oldKubo.isNullOrBlank()) {
+                        check(prefs.edit().putString("kubo_node_url", oldKubo).commit())
+                    }
+                }
+                encryptedV2
             }
             val adminKeyStorageDeferred = async {
                 val storage = AdminKeyStorage(applicationContext)
@@ -3992,11 +4038,24 @@ class MainActivity : FragmentActivity() {
             }
             val initializedAdmin = adminKeyStorageDeferred.await()
             val initializedAdminKeyStorage = initializedAdmin.first
-            val initializedAdminKey = initializedAdmin.second
+            var initializedAdminKey = initializedAdmin.second
+            // Legacy admin_key is migrated through v2 only as a crash-safe bridge,
+            // then moved into its dedicated encrypted AdminKeyStorage.
+            val migratedAdminKey = initializedSecurePrefs.getString("admin_key", "").orEmpty()
+            if (initializedAdminKey.isBlank() && migratedAdminKey.isNotBlank()) {
+                initializedAdminKeyStorage.setAdminKey(migratedAdminKey)
+                check(initializedAdminKeyStorage.getAdminKey() == migratedAdminKey) {
+                    "admin key migration verification failed"
+                }
+                initializedAdminKey = migratedAdminKey
+            }
+            if (migratedAdminKey.isNotBlank()) {
+                check(initializedSecurePrefs.edit().remove("admin_key").commit())
+            }
             val initializedMasterKey = initializedSecurePrefs.getString("initial_master_key", "") ?: ""
             val initializedOperatorKey = initializedSecurePrefs.getString("operator_key", "") ?: ""
             val initializedPinataJwt = initializedSecurePrefs.getString("pinata_jwt", "") ?: ""
-            val initializedKuboNodeUrl = initializedSecurePrefs.getString("kubo_node_url", "") ?: ""
+            val initializedKuboNodeUrl = prefs.getString("kubo_node_url", "") ?: ""
             val initializedWalletManager = walletManagerDeferred.await()
             dbDeferred.await()
             val initializedAssetManager = AssetManager(
@@ -4190,13 +4249,15 @@ class MainActivity : FragmentActivity() {
                                         onWalletRoleSave = { role, key ->
                                             // Persist role and key; clear the unused key slot
                                             if (role == "admin") {
-                                                securePrefs.edit().putString("admin_key", key).putString("operator_key", "").apply()
+                                                check(securePrefs.edit().remove("operator_key").commit())
+                                                viewModel.adminKeyStorage?.setAdminKey(key)
+                                                check(viewModel.adminKeyStorage?.getAdminKey() == key)
                                                 savedAdminKey = key; savedOperatorKey = ""
                                                 viewModel.adminKeyStatus = MainViewModel.AdminKeyStatus.VALID
                                                 viewModel.operatorKeyStatus = MainViewModel.AdminKeyStatus.UNKNOWN
-                                                try { viewModel.adminKeyStorage?.setAdminKey(key) } catch (_: Throwable) {}
                                             } else {
-                                                securePrefs.edit().putString("operator_key", key).putString("admin_key", "").apply()
+                                                check(securePrefs.edit().putString("operator_key", key).commit())
+                                                viewModel.adminKeyStorage?.clearAdminKey()
                                                 savedOperatorKey = key; savedAdminKey = ""
                                                 viewModel.operatorKeyStatus = MainViewModel.AdminKeyStatus.VALID
                                                 viewModel.adminKeyStatus = MainViewModel.AdminKeyStatus.UNKNOWN
@@ -4226,7 +4287,7 @@ class MainActivity : FragmentActivity() {
                                         },
                                         savedKuboNodeUrl = savedKuboNodeUrl,
                                         onKuboNodeUrlSave = { url ->
-                                            securePrefs.edit().putString("kubo_node_url", url).apply()
+                                            prefs.edit().putString("kubo_node_url", url).apply()
                                             savedKuboNodeUrl = url
                                             viewModel.kuboNodeUrl = url
                                             viewModel.kuboNodeStatus = MainViewModel.AdminKeyStatus.UNKNOWN

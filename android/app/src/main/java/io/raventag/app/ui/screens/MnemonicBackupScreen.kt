@@ -346,8 +346,9 @@ fun MnemonicBackupScreen(
 
 /**
  * Runs the biometric reveal flow. In fresh-setup mode (`prefillMnemonic` non-null/blank)
- * we skip the Keystore round-trip because the mnemonic is already in memory and no
- * ciphertext exists yet. In later-reveal mode we delegate to [MnemonicExporter].
+ * the phrase is not yet encrypted, but a genuine OS authentication is still required
+ * before display. Persisted later-reveal mode delegates to [MnemonicExporter] and the
+ * auth-required Keystore key.
  */
 private suspend fun revealWithBiometric(
     context: Context,
@@ -359,10 +360,22 @@ private suspend fun revealWithBiometric(
     onRevealed: (CharArray) -> Unit
 ) {
     if (!prefillMnemonic.isNullOrBlank()) {
-        // Setup flow: the wallet has been generated but not yet persisted; the biometric
-        // cover card acts as a tap-through confirmation (D-15 CryptoObject cannot bind
-        // to a ciphertext that does not yet exist).
-        onRevealed(prefillMnemonic.toCharArray())
+        val activity = context as? FragmentActivity
+        if (activity == null) {
+            snackbarHostState.showSnackbar(strings.mnemonicRevealFailed)
+            return
+        }
+        try {
+            BiometricGate(activity).authenticate(
+                io.raventag.app.R.string.biometricRevealTitle,
+                io.raventag.app.R.string.biometricRevealSubtitle
+            )
+            onRevealed(prefillMnemonic.toCharArray())
+        } catch (_: BiometricCancelledException) {
+            snackbarHostState.showSnackbar(strings.authCanceledSnackbar)
+        } catch (_: Throwable) {
+            snackbarHostState.showSnackbar(strings.mnemonicRevealFailed)
+        }
         return
     }
     if (wm == null) {
