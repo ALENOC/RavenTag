@@ -6,7 +6,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.database.Cursor
 import android.net.Uri
-import io.raventag.app.config.AppConfig
+import io.raventag.app.BuildConfig
 
 /**
  * Lightweight process-start initializer for legal-document versioning.
@@ -29,7 +29,7 @@ class LegalAcceptanceInitProvider : ContentProvider() {
 
         val termsCurrent = prefs.getString(KEY_TERMS_VERSION, null) == CURRENT_TERMS_VERSION
         val privacyCurrent = prefs.getString(KEY_PRIVACY_VERSION, null) == CURRENT_PRIVACY_VERSION
-        val specificCurrent = !AppConfig.IS_BRAND_APP ||
+        val specificCurrent = !BuildConfig.IS_BRAND ||
             prefs.getString(KEY_SPECIFIC_APPROVAL_VERSION, null) == CURRENT_TERMS_VERSION
 
         if (termsCurrent && privacyCurrent && specificCurrent) {
@@ -62,7 +62,7 @@ class LegalAcceptanceInitProvider : ContentProvider() {
                 .putString(KEY_PRIVACY_VERSION, CURRENT_PRIVACY_VERSION)
                 .remove(KEY_PENDING_LEGAL_VERSION)
 
-            if (AppConfig.IS_BRAND_APP) {
+            if (BuildConfig.IS_BRAND) {
                 editor.putString(KEY_SPECIFIC_APPROVAL_VERSION, CURRENT_TERMS_VERSION)
             } else {
                 editor.remove(KEY_SPECIFIC_APPROVAL_VERSION)
