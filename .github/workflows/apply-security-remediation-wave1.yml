@@ -1,19 +1,19 @@
-name: Resolve compatible backend dependency versions
+name: Apply final security remediation
 
 on:
   pull_request:
     branches: [master]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  versions:
+  apply-final:
     if: github.repository == 'ALENOC/RavenTag' && github.head_ref == 'security/full-audit-remediation-2026-08-18'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 55
     steps:
-      - name: Checkout remediation branch
+      - name: Checkout exact remediation branch
         env:
           GH_TOKEN: ${{ github.token }}
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
@@ -23,21 +23,114 @@ jobs:
           git init .
           git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${HEAD_REPO}.git"
           git fetch --depth=1 origin "${HEAD_REF}"
-          git checkout --detach FETCH_HEAD
-      - name: Resolve latest versions within current major lines
+          git checkout -B "${HEAD_REF}" FETCH_HEAD
+
+      - name: Apply RT-SEC-004 005 019 020 final source transformations
+        run: python3 scripts/run_security_remediation_final.py
+
+      - name: Refresh vulnerable backend dependencies without major upgrades
         working-directory: backend
         run: |
           set -euo pipefail
-          for spec in 'axios@1' 'express@4' 'express-rate-limit@8' 'form-data@4' 'multer@2' 'tsx@4'; do
-            printf '%s = ' "$spec"
-            npm view "$spec" version --json | tail -n 3
-          done
-          npm ci --ignore-scripts >/dev/null
-          set +e
-          npm audit fix --dry-run --json > /tmp/dry.json
-          rc=$?
+          npm install --save-exact axios@1.19.0 express@4.22.2 express-rate-limit@8.6.2 form-data@4.0.6 multer@2.2.0
+          npm install --save-dev --save-exact tsx@4.23.12
+          rm -rf node_modules
+          npm ci --ignore-scripts
+
+      - name: Backend build tests and final dependency audit
+        working-directory: backend
+        run: |
+          set -euo pipefail
+          npm run build
+          npm test
+          npm audit --audit-level=low
+          npm audit --json > /tmp/final-audit.json
           node - <<'NODE'
-          const a=require('/tmp/dry.json');
-          console.log('DRYRUN', JSON.stringify(a, null, 2).slice(0,30000));
+          const a=require('/tmp/final-audit.json');
+          const v=a.metadata?.vulnerabilities || {};
+          console.log('FINAL_AUDIT', JSON.stringify(v));
+          if ((v.total || 0) !== 0) process.exit(1);
           NODE
-          exit 0
+
+      - name: Android compile and complete JVM regression suite
+        working-directory: android
+        run: |
+          set -euo pipefail
+          chmod +x gradlew
+          ./gradlew compileBrandDebugKotlin compileConsumerDebugKotlin --console=plain
+          ./gradlew test --console=plain
+
+      - name: Generate final remediation and Codex documents
+        run: python3 scripts/write_security_final_docs.py
+
+      - name: Final transformation self-audit
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          root=Path('.')
+          wallet=(root/'android/app/src/main/java/io/raventag/app/wallet/WalletManager.kt').read_text()
+          main=(root/'android/app/src/main/java/io/raventag/app/MainActivity.kt').read_text()
+          screen=(root/'android/app/src/main/java/io/raventag/app/ui/screens/MnemonicBackupScreen.kt').read_text()
+          reserve=(root/'android/app/src/main/java/io/raventag/app/wallet/cache/ReservedUtxoDao.kt').read_text()
+          txb=(root/'android/app/src/main/java/io/raventag/app/wallet/RavencoinTxBuilder.kt').read_text()
+          nfc=(root/'android/app/src/main/java/io/raventag/app/nfc/NfcReader.kt').read_text()
+          compose=(root/'docker-compose.yml').read_text()
+          backup=(root/'backend/src/services/backup.ts').read_text()
+          index=(root/'backend/src/index.ts').read_text()
+          assert '.setUserAuthenticationRequired(true)' in wallet
+          assert 'raventag_mnemonic_reveal_key_v1' in wallet
+          assert 'persisted mnemonic migration verification failed' in wallet
+          assert 'fun getMnemonic()' not in wallet and 'getMnemonicForTestOnly' not in wallet
+          assert 'raventag_secure_v2' in main and 'LegacySecretMigration.migrate' in main
+          assert 'securePrefs.edit().putString("admin_key"' not in main
+          assert 'securePrefs.edit().putString("kubo_node_url"' not in main
+          assert 'ClipboardManager' not in screen and 'setPrimaryClip' not in screen
+          assert 'CONFLICT_ABORT' in reserve
+          assert 'signAndBroadcastReserved' in wallet
+          assert 'node.broadcastWithAllServers(tx.hex)' not in wallet
+          assert 'broadcastConsolidation(tx.hex)' not in wallet
+          assert 'isMaxSend' not in wallet
+          assert 'effectiveAmount = if' not in txb
+          assert '0x3C' in txb or '0x3c' in txb
+          assert 'payload[0]' not in nfc
+          assert 'ALLOWED_VERIFY_HOSTS' in nfc
+          assert '24 * 60 * 60 * 1000' in backup and 'MAX_BACKUPS = 7' in backup
+          assert 'ADMIN_KEY_FILE: /run/secrets/admin_key' in compose
+          assert '/run/secrets/backup_encryption_key' in compose
+          assert 'INTERNAL_BACKUP_ENCRYPTION_KEY_FILE' in index
+          assert (root/'SECURITY_REMEDIATION_REPORT.md').exists()
+          assert (root/'CODEX_DYNAMIC_SECURITY_TEST_PLAN.md').exists()
+          # All high-risk Qwen action refs must be immutable SHAs and containers digests.
+          for p in (root/'.github/workflows').glob('qwen-*.yml'):
+              for line in p.read_text().splitlines():
+                  if 'qwen-code-action@' in line:
+                      ref=line.split('@',1)[1].strip().split()[0]
+                      assert re.fullmatch(r'[0-9a-f]{40}',ref), (p,line)
+                  if 'docker://' in line and ('qwen' in line.lower() or 'mcp' in line.lower()):
+                      assert '@sha256:' in line, (p,line)
+          PY
+          git diff --check
+          ! git ls-files | grep -E '(^|/)(local\.properties|signing\.properties|\.env)$'
+          ! git grep -nE -- '-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----' -- . ':!docs/**'
+
+      - name: Commit tested final remediation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          set -euo pipefail
+          # Remove one-shot patchers/helpers; regression tests and permanent CI remain.
+          rm -f scripts/run_security_remediation_wave3.py \
+                scripts/run_security_remediation_wave3_full.py \
+                scripts/run_security_remediation_final.py \
+                scripts/write_security_final_docs.py
+          git config user.name 'RavenTag Security Remediation'
+          git config user.email '185200505+ALENOC@users.noreply.github.com'
+          git add -A
+          # Workflow files are managed separately by the authorized GitHub connector.
+          git reset -- .github/workflows/
+          git diff --cached --check
+          git commit -m 'security: complete auth-bound storage and dependency remediation'
+          git push origin HEAD:"${HEAD_REF}"
