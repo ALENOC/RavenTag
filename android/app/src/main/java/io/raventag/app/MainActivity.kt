@@ -3851,6 +3851,9 @@ class MainActivity : FragmentActivity() {
      */
     private var securePrefsReady by mutableStateOf(false)
 
+    /** Non-null when encrypted secret storage cannot be initialized. */
+    private var secureStorageError by mutableStateOf<String?>(null)
+
     /**
      * Show a biometric (or device-credential) authentication prompt.
      *
@@ -3876,19 +3879,18 @@ class MainActivity : FragmentActivity() {
         onSuccess: () -> Unit,
         onError: () -> Unit
     ) {
-        // BIOMETRIC_STRONG | DEVICE_CREDENTIAL is only supported on API 30+.
-        // On older APIs use BIOMETRIC_WEAK (biometric only, requires negative button).
         val authenticators = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
             BiometricManager.Authenticators.BIOMETRIC_STRONG or
-            BiometricManager.Authenticators.DEVICE_CREDENTIAL
+                BiometricManager.Authenticators.DEVICE_CREDENTIAL
         } else {
-            BiometricManager.Authenticators.BIOMETRIC_WEAK
+            // DEVICE_CREDENTIAL combinations are not consistently supported by
+            // BiometricPrompt on API 26-29; require a strong biometric instead.
+            BiometricManager.Authenticators.BIOMETRIC_STRONG
         }
 
-        // If no credentials are enrolled or hardware unavailable, skip auth silently.
-        val canAuth = BiometricManager.from(this).canAuthenticate(authenticators)
-        if (canAuth != BiometricManager.BIOMETRIC_SUCCESS) {
-            onSuccess()
+        // Authentication unavailable is a failure, never evidence of identity.
+        if (BiometricManager.from(this).canAuthenticate(authenticators) != BiometricManager.BIOMETRIC_SUCCESS) {
+            onError()
             return
         }
 
@@ -3898,29 +3900,28 @@ class MainActivity : FragmentActivity() {
                 override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
                     onSuccess()
                 }
+
                 override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
-                    // Distinguish between "user cancelled" (close app) and
-                    // "hardware/enrollment error" (allow access to avoid locking out).
-                    val userCancelled = errorCode == BiometricPrompt.ERROR_USER_CANCELED ||
-                        errorCode == BiometricPrompt.ERROR_NEGATIVE_BUTTON
-                    if (userCancelled) onError() else onSuccess()
+                    // Every error path (cancel, lockout, unavailable hardware,
+                    // enrollment problem, negative button, platform failure) stays locked.
+                    onError()
                 }
+
                 override fun onAuthenticationFailed() {
-                    // A single biometric attempt failed; more attempts allowed, do nothing.
+                    // A failed attempt does not unlock. BiometricPrompt may allow another attempt.
                 }
             }
             val builder = BiometricPrompt.PromptInfo.Builder()
                 .setTitle(title)
                 .setSubtitle(subtitle)
                 .setAllowedAuthenticators(authenticators)
-            // On API < 30 with BIOMETRIC_WEAK, a negative button text is required.
             if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.R) {
                 builder.setNegativeButtonText("Annulla")
             }
             BiometricPrompt(this, executor, callback).authenticate(builder.build())
         } catch (_: Exception) {
-            // If the prompt cannot be shown for any reason, grant access.
-            onSuccess()
+            // Prompt initialization/platform errors fail closed.
+            onError()
         }
     }
 
@@ -3951,21 +3952,16 @@ class MainActivity : FragmentActivity() {
         // starts with managers ready but without blocking the main thread.
         lifecycleScope.launch(Dispatchers.IO) {
             val securePrefsDeferred = async {
-                try {
-                    val masterKey = MasterKey.Builder(this@MainActivity)
-                        .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-                        .build()
-                    EncryptedSharedPreferences.create(
-                        this@MainActivity,
-                        "raventag_secure",
-                        masterKey,
-                        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-                        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-                    )
-                } catch (_: Throwable) {
-                    // Fallback to plain prefs if Keystore unavailable (e.g. work profile restrictions)
-                    getSharedPreferences("raventag_secure", MODE_PRIVATE)
-                }
+                val masterKey = MasterKey.Builder(this@MainActivity)
+                    .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                    .build()
+                EncryptedSharedPreferences.create(
+                    this@MainActivity,
+                    "raventag_secure",
+                    masterKey,
+                    EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                    EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+                )
             }
             val adminKeyStorageDeferred = async {
                 val storage = AdminKeyStorage(applicationContext)
@@ -3982,7 +3978,16 @@ class MainActivity : FragmentActivity() {
                 )
             }
 
-            val initializedSecurePrefs = securePrefsDeferred.await()
+            val initializedSecurePrefs = try {
+                securePrefsDeferred.await()
+            } catch (t: Throwable) {
+                Log.e("MainActivity", "Encrypted secret storage unavailable", t)
+                withContext(Dispatchers.Main) {
+                    secureStorageError = "Secure storage is unavailable. RavenTag will not load secret-bearing functionality until Android Keystore access is restored."
+                    securePrefsReady = true
+                }
+                return@launch
+            }
             val initializedAdmin = adminKeyStorageDeferred.await()
             val initializedAdminKeyStorage = initializedAdmin.first
             val initializedAdminKey = initializedAdmin.second
@@ -4020,8 +4025,18 @@ class MainActivity : FragmentActivity() {
         viewModel.currentVerifyUrl = savedVerifyUrl
 
         setContent {
-            // Hold content until EncryptedSharedPreferences is ready (avoids reading null keys)
+            // Hold content until EncryptedSharedPreferences is ready (avoids reading null keys).
             if (!securePrefsReady) return@setContent
+            secureStorageError?.let { message ->
+                MaterialTheme {
+                    Surface(modifier = Modifier.fillMaxSize(), color = Color.Black) {
+                        Box(modifier = Modifier.fillMaxSize().padding(24.dp)) {
+                            Text(message, color = Color.White, style = MaterialTheme.typography.bodyLarge)
+                        }
+                    }
+                }
+                return@setContent
+            }
 
             // Persisted user preferences (read from SharedPreferences, updated on save)
             var langCode by remember { mutableStateOf(prefs.getString("language", "en") ?: "en") }

@@ -88,8 +88,14 @@ function addressToScripthash(address: string): string {
 
   // A valid P2PKH address decodes to: 1 byte version + 20 bytes hash160 + 4 bytes checksum = 25 bytes
   if (decoded.length !== 25) throw new Error(`Invalid address length: ${decoded.length}`)
+  if (decoded[0] !== 0x3c) throw new Error('Address is not Ravencoin mainnet P2PKH')
+  const payload = decoded.subarray(0, 21)
+  const expectedChecksum = createHash('sha256').update(
+    createHash('sha256').update(payload).digest()
+  ).digest().subarray(0, 4)
+  if (!decoded.subarray(21).equals(expectedChecksum)) throw new Error('Invalid Ravencoin address checksum')
 
-  // Extract the 20-byte RIPEMD-160 hash (skip version byte, ignore 4-byte checksum at end)
+  // Extract the 20-byte RIPEMD-160 hash
   const hash160 = decoded.slice(1, 21)
 
   // Build the P2PKH locking script: OP_DUP OP_HASH160 <push20> <hash160> OP_EQUALVERIFY OP_CHECKSIG
@@ -129,6 +135,7 @@ const certCache = new Map<string, string>()
  * correlated to their originating request on the same socket.
  */
 let idCounter = 1
+const MAX_ELECTRUM_RESPONSE_BYTES = 1_048_576
 
 /**
  * Compute the SHA-256 hex digest of a Buffer.
@@ -212,6 +219,10 @@ async function callServer(server: ElectrumServer, method: string, params: unknow
       // ElectrumX sends newline-delimited JSON. Accumulate chunks and process
       // complete lines, keeping any partial final line in the buffer.
       buffer += chunk.toString()
+      if (Buffer.byteLength(buffer, 'utf8') > MAX_ELECTRUM_RESPONSE_BYTES) {
+        done(new Error(`Oversized ElectrumX response from ${server.host}`))
+        return
+      }
       const lines = buffer.split('\n')
       buffer = lines.pop() ?? ''
       for (const line of lines) {

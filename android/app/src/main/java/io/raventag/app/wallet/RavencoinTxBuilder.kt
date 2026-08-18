@@ -1263,8 +1263,7 @@ object RavencoinTxBuilder {
         reissuable: Boolean,
         newIpfsHash: String?
     ): ByteArray {
-        val decoded = base58Decode(address)
-        val hash160 = decoded.copyOfRange(1, 21)
+        val hash160 = requireRavencoinMainnetP2pkh(address)
         val nameBytes = assetName.toByteArray(Charsets.US_ASCII)
         val ipfsBytes = newIpfsHash?.let { decodeIpfsCidV0(it) }
 
@@ -1443,8 +1442,7 @@ object RavencoinTxBuilder {
      *   name_bytes              ASCII owner token name (includes trailing "!")
      */
     private fun buildOwnerTokenScript(address: String, assetName: String): ByteArray {
-        val decoded = base58Decode(address)
-        val hash160 = decoded.copyOfRange(1, 21)
+        val hash160 = requireRavencoinMainnetP2pkh(address)
         // Owner token name always ends with "!" (e.g. "BRAND!" or "BRAND/ITEM!")
         val ownerName = "$assetName!"
         val nameBytes = ownerName.toByteArray(Charsets.US_ASCII)
@@ -1513,8 +1511,7 @@ object RavencoinTxBuilder {
      *   LE64(assetAmount)       8 bytes: raw asset amount
      */
     private fun buildAssetTransferScript(address: String, assetName: String, assetAmount: Long): ByteArray {
-        val decoded = base58Decode(address)
-        val hash160 = decoded.copyOfRange(1, 21)
+        val hash160 = requireRavencoinMainnetP2pkh(address)
         val nameBytes = assetName.toByteArray(Charsets.US_ASCII)
         // Payload: "rvnt" + compact_size(len) + name + LE64(amount)
         val payload = ByteArrayOutputStream()
@@ -1656,9 +1653,23 @@ object RavencoinTxBuilder {
      * The address is Base58Check decoded; bytes 1..20 are the HASH160 of the
      * public key (byte 0 is the Ravencoin version byte 0x3C and is skipped).
      */
-    private fun p2pkhScript(address: String): ByteArray {
+    internal fun requireRavencoinMainnetP2pkh(address: String): ByteArray {
+        require(address.length in 26..50) { "Invalid Ravencoin address length" }
         val decoded = base58Decode(address)
-        val pubKeyHash = decoded.copyOfRange(1, 21) // skip version byte 0x3C
+        require(decoded.size == 25) { "Invalid Ravencoin address structure" }
+        require(decoded[0] == 0x3c.toByte()) { "Address is not Ravencoin mainnet P2PKH" }
+        require(base58Encode(decoded) == address) { "Non-canonical Ravencoin address" }
+        return decoded.copyOfRange(1, 21)
+    }
+
+    internal fun isValidRavencoinMainnetP2pkh(address: String): Boolean =
+        runCatching { requireRavencoinMainnetP2pkh(address); true }.getOrDefault(false)
+
+    internal fun p2pkhScriptHexForAddress(address: String): String =
+        "76a914" + requireRavencoinMainnetP2pkh(address).joinToString("") { "%02x".format(it) } + "88ac"
+
+    private fun p2pkhScript(address: String): ByteArray {
+        val pubKeyHash = requireRavencoinMainnetP2pkh(address)
         return byteArrayOf(
             0x76.toByte(), // OP_DUP
             0xa9.toByte(), // OP_HASH160
@@ -1769,6 +1780,21 @@ object RavencoinTxBuilder {
      *
      * @throws IllegalArgumentException on invalid characters or checksum mismatch
      */
+    private fun base58Encode(data: ByteArray): String {
+        var num = BigInteger(1, data)
+        val base = BigInteger.valueOf(58)
+        val out = StringBuilder()
+        while (num > BigInteger.ZERO) {
+            val qr = num.divideAndRemainder(base)
+            out.append(B58[qr[1].toInt()])
+            num = qr[0]
+        }
+        for (b in data) {
+            if (b == 0.toByte()) out.append(B58[0]) else break
+        }
+        return out.reverse().toString()
+    }
+
     private fun base58Decode(input: String): ByteArray {
         var num = BigInteger.ZERO
         for (char in input) {

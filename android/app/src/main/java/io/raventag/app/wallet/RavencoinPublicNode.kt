@@ -177,6 +177,7 @@ class RavencoinPublicNode(private val context: Context) {
 
         /** Maximum number of pipelined requests per [callBatch] TLS connection. */
         private const val BATCH_CHUNK_SIZE = 20
+        private const val MAX_RESPONSE_LINE_CHARS = 1_048_576
 
         /**
          * List of public Ravencoin ElectrumX servers, tried in order.
@@ -545,21 +546,17 @@ class RavencoinPublicNode(private val context: Context) {
     fun getMinRelayFeeRateSatPerByte(): Long {
         val results = SERVERS.mapNotNull { server ->
             try {
-                // relayfee is returned as RVN per kilobyte (e.g. 0.01)
                 val rvnPerKb = call(server, "blockchain.relayfee", emptyList()).asDouble
-                // Convert: RVN/kB * 1e8 (sat/RVN) / 1000 (bytes/kB) = sat/byte
-                val satPerByte = (rvnPerKb * 1e8 / 1000).toLong()
-                Log.d(TAG, "relayfee ${server.host}: $rvnPerKb RVN/kB = $satPerByte sat/byte")
-                satPerByte
+                val safe = FeeSafetyPolicy.sanitizeRelayFeeRvnPerKb(rvnPerKb)
+                Log.d(TAG, "relayfee ${server.host}: $rvnPerKb RVN/kB -> $safe sat/byte after local policy")
+                safe
             } catch (e: Exception) {
-                Log.w(TAG, "relayfee failed for ${server.host}: ${e.message}")
+                Log.w(TAG, "relayfee rejected/failed for ${server.host}: ${e.message}")
                 null
             }
         }
         if (results.isEmpty()) throw FeeUnavailableException()
-        val minSatPerByte = results.min()
-        // Apply 2x safety margin; enforce a minimum floor of 200 sat/byte
-        return maxOf(minSatPerByte * 2, 200L)
+        return results.min()
     }
 
     /**
@@ -1548,6 +1545,19 @@ class RavencoinPublicNode(private val context: Context) {
                else AddressStatus.RECEIVE_ONLY
     }
 
+    private fun readBoundedLine(reader: BufferedReader, host: String): String? {
+        val out = StringBuilder()
+        while (true) {
+            val ch = reader.read()
+            if (ch == -1) return if (out.isEmpty()) null else out.toString()
+            if (ch == '\n'.code) return out.toString()
+            if (ch != '\r'.code) {
+                require(out.length < MAX_RESPONSE_LINE_CHARS) { "Oversized ElectrumX response from $host" }
+                out.append(ch.toChar())
+            }
+        }
+    }
+
     // Internal helpers ────────────────────────────────────────────────────────
 
     /**
@@ -1680,9 +1690,7 @@ class RavencoinPublicNode(private val context: Context) {
      * @return Lowercase hex-encoded reversed SHA-256 of the scriptPubKey.
      */
     internal fun addressToScripthash(address: String): String {
-        val decoded = base58Decode(address)
-        require(decoded.size == 25) { "Invalid Ravencoin address (decoded=${decoded.size} bytes)" }
-        val hash160 = decoded.copyOfRange(1, 21)
+        val hash160 = RavencoinTxBuilder.requireRavencoinMainnetP2pkh(address)
         // Assemble minimal P2PKH script: 76 a9 14 <hash160> 88 ac
         val script = byteArrayOf(0x76.toByte(), 0xa9.toByte(), 0x14.toByte()) +
                 hash160 + byteArrayOf(0x88.toByte(), 0xac.toByte())
@@ -1702,9 +1710,7 @@ class RavencoinPublicNode(private val context: Context) {
      * @return Lowercase hex string of the P2PKH scriptPubKey.
      */
     private fun p2pkhScriptHex(address: String): String {
-        val decoded = base58Decode(address)
-        val hash160 = decoded.copyOfRange(1, 21)
-        return "76a914" + hash160.joinToString("") { "%02x".format(it) } + "88ac"
+        return RavencoinTxBuilder.p2pkhScriptHexForAddress(address)
     }
 
     /** Base58 alphabet as used by Bitcoin and Ravencoin (no 0, O, I, l). */
@@ -1916,7 +1922,7 @@ class RavencoinPublicNode(private val context: Context) {
             // Handshake
             val hsId = idCounter.getAndIncrement()
             writer.println("""{"id":$hsId,"method":"server.version","params":["RavenTag/1.0","1.4"]}""")
-            reader.readLine()
+            readBoundedLine(reader, server.host)
             // Send all requests and remember id -> index mapping
             val idToIndex = mutableMapOf<Int, Int>()
             for ((index, req) in requests.withIndex()) {
@@ -1929,7 +1935,7 @@ class RavencoinPublicNode(private val context: Context) {
             val results = arrayOfNulls<JsonElement>(requests.size)
             var received = 0
             while (received < requests.size) {
-                val line = reader.readLine() ?: break
+                val line = readBoundedLine(reader, server.host) ?: break
                 received++
                 try {
                     val json = JsonParser.parseString(line).asJsonObject
@@ -2051,14 +2057,14 @@ class RavencoinPublicNode(private val context: Context) {
             if (method != "server.version") {
                 val hsId = idCounter.getAndIncrement()
                 writer.println("""{"id":$hsId,"method":"server.version","params":["RavenTag/1.0","1.4"]}""")
-                reader.readLine() // consume and discard the handshake response
+                readBoundedLine(reader, server.host) // consume and discard the handshake response
             }
 
             // Send the actual request
             val id = idCounter.getAndIncrement()
             writer.println(gson.toJson(mapOf("id" to id, "method" to method, "params" to params)))
 
-            val response = reader.readLine() ?: throw Exception("Empty response from ${server.host}")
+            val response = readBoundedLine(reader, server.host) ?: throw Exception("Empty response from ${server.host}")
             val json = JsonParser.parseString(response).asJsonObject
             // Check for an ElectrumX-level error response
             val err = json.get("error")

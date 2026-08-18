@@ -17,12 +17,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -35,7 +33,6 @@ import io.raventag.app.security.MnemonicExporter
 import io.raventag.app.ui.theme.*
 import io.raventag.app.wallet.KeystoreInvalidatedException
 import io.raventag.app.wallet.WalletManager
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
@@ -63,7 +60,6 @@ fun MnemonicBackupScreen(
     onKeystoreInvalidated: () -> Unit = {}
 ) {
     val s = LocalStrings.current
-    val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
     val view = LocalView.current
     val scope = rememberCoroutineScope()
@@ -91,7 +87,6 @@ fun MnemonicBackupScreen(
         onDispose { captured?.let { java.util.Arrays.fill(it, ' ') } }
     }
 
-    var copied by remember { mutableStateOf(false) }
     var confirmed by remember { mutableStateOf(false) }
 
     Scaffold(
@@ -256,33 +251,7 @@ fun MnemonicBackupScreen(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Copy All: briefly copies to clipboard; cleared after 60s.
-            OutlinedButton(
-                onClick = {
-                    val asString = String(revealed!!)
-                    clipboard.setText(AnnotatedString(asString))
-                    copied = true
-                    scope.launch {
-                        delay(60_000)
-                        clipboard.setText(AnnotatedString(""))
-                        copied = false
-                    }
-                },
-                modifier = Modifier.padding(horizontal = 20.dp).fillMaxWidth(),
-                border = androidx.compose.foundation.BorderStroke(1.dp, if (copied) AuthenticGreen else RavenBorder),
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = if (copied) AuthenticGreen else RavenMuted)
-            ) {
-                Icon(
-                    if (copied) Icons.Default.CheckCircle else Icons.Default.ContentCopy,
-                    contentDescription = null,
-                    modifier = Modifier.size(16.dp)
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    if (copied) s.backupCopied else s.mnemonicCopyAll,
-                    style = MaterialTheme.typography.bodySmall
-                )
-            }
+            // Deliberately no clipboard/export action: the full BIP39 phrase remains inside RavenTag.
 
             Spacer(modifier = Modifier.height(24.dp))
 

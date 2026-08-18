@@ -298,7 +298,8 @@ class WalletManager(private val context: Context) {
          */
         @JvmStatic
         fun validateMnemonic(input: String): List<String> {
-            val words = input.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+            val normalized = java.text.Normalizer.normalize(input, java.text.Normalizer.Form.NFKD)
+            val words = normalized.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
             require(words.size in VALID_WORD_COUNTS) {
                 "invalid word count: ${words.size}"
             }
@@ -863,11 +864,8 @@ class WalletManager(private val context: Context) {
         }
     }
 
-    private fun addressToP2pkhScript(address: String): String {
-        val decoded = base58Decode(address)
-        val hash160 = decoded.copyOfRange(1, 21)
-        return "76a914" + hash160.joinToString("") { "%02x".format(it) } + "88ac"
-    }
+    private fun addressToP2pkhScript(address: String): String =
+        RavencoinTxBuilder.p2pkhScriptHexForAddress(address)
 
     private suspend fun sweepOldAddressesInternal(): List<String> {
         val currentIndex = getCurrentAddressIndex()
@@ -2360,15 +2358,19 @@ class WalletManager(private val context: Context) {
     }
 
     private fun mnemonicToSeed(mnemonic: String, passphrase: String): ByteArray {
-        val mnemonicBytes = mnemonic.toByteArray(Charsets.UTF_8)
-        val saltBytes = ("mnemonic$passphrase").toByteArray(Charsets.UTF_8)
-        val spec = javax.crypto.spec.PBEKeySpec(
-            mnemonic.toCharArray(), saltBytes, 2048, 512
-        )
-        val factory = javax.crypto.SecretKeyFactory.getInstance("PBKDF2WithHmacSHA512")
-        return factory.generateSecret(spec).encoded.also {
+        // BIP39 requires UTF-8 NFKD normalization of both mnemonic and passphrase.
+        val normalizedMnemonic = java.text.Normalizer.normalize(mnemonic, java.text.Normalizer.Form.NFKD)
+        val normalizedPassphrase = java.text.Normalizer.normalize(passphrase, java.text.Normalizer.Form.NFKD)
+        val saltBytes = ("mnemonic" + normalizedPassphrase).toByteArray(Charsets.UTF_8)
+        val password = normalizedMnemonic.toCharArray()
+        val spec = javax.crypto.spec.PBEKeySpec(password, saltBytes, 2048, 512)
+        return try {
+            javax.crypto.SecretKeyFactory.getInstance("PBKDF2WithHmacSHA512")
+                .generateSecret(spec).encoded
+        } finally {
             spec.clearPassword()
-            mnemonicBytes.fill(0)
+            java.util.Arrays.fill(password, '\u0000')
+            saltBytes.fill(0)
         }
     }
 
