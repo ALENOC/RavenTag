@@ -58,10 +58,10 @@ object NodeHealthMonitor {
     private const val QUARANTINE_DURATION_MS: Long = 3_600_000L       // D-11: 1 hour
 
     /**
-     * Failed fallback nodes are skipped briefly so one failover loop can advance
-     * through the pool instead of immediately selecting the same failed host again.
+     * A failed node is skipped long enough for the current failover pass to advance
+     * through the remaining pool instead of selecting the same failed host again.
      */
-    private const val TRANSIENT_COOLDOWN_MS: Long = 2_000L
+    private const val TRANSIENT_COOLDOWN_MS: Long = 30_000L
 
     /**
      * After the primary fails, use a working fallback for this interval before
@@ -149,28 +149,9 @@ object NodeHealthMonitor {
             val failedAt = lastFailureAt[key]
             failedAt == null || (now - failedAt) > TRANSIENT_COOLDOWN_MS
         }?.let { (h, p) -> "$h:$p" }
-        if (candidate != null) {
-            recomputeState()
-            return candidate
-        }
 
-        // All fallbacks are in transient cooldown. Pick the least-recently-failed
-        // non-quarantined fallback so the app does not enter a dead state. If no
-        // fallback is available, return the primary only after its transient retry
-        // window; a quarantined primary remains excluded.
-        val fallback = configured.drop(1)
-            .map { (h, p) -> "$h:$p" }
-            .filter { it !in quarantinedHosts }
-            .minByOrNull { lastFailureAt[it] ?: 0L }
-
-        if (fallback != null) {
-            recomputeState()
-            return fallback
-        }
-
-        val primaryRetry = if (primary !in quarantinedHosts && !primaryCoolingDown) primary else null
         recomputeState()
-        return primaryRetry
+        return candidate
     }
 
     fun reportSuccess(host: String) {
