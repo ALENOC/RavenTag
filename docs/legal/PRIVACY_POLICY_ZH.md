@@ -14,7 +14,7 @@
 GitHub: https://github.com/ALENOC/RavenTag  
 Email: legal@raventag.com
 
-开发者可运营 `raventag.com` / `api.raventag.com` 后端，以及公共 ElectrumX 端点 `electrumx.raventag.com` / `electrum.raventag.com`。这些由开发者运营的系统不属于第三方服务。本应用也可能使用品牌运营的独立后端、第三方 ElectrumX/Ravencoin Core 节点、IPFS 网关和其他服务；开发者无法控制其日志、保留、安全或隐私做法。
+开发者可运营 `raventag.com` / `api.raventag.com` 后端，以及公共 ElectrumX 端点 `electrumx.raventag.com`。这些由开发者运营的系统不属于第三方服务。本应用也可能使用品牌运营的独立后端、第三方 ElectrumX/Ravencoin Core 节点、IPFS 网关和其他服务；开发者无法控制其日志、保留、安全或隐私做法。
 
 ## 3. 处理的数据
 ### 3.1 本地钱包数据
