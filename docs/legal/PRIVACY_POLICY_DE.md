@@ -1,207 +1,189 @@
-# RavenTag Verify - Datenschutzerklarung
+# RavenTag Verify - Datenschutzrichtlinie
 
-**Version 1.0 - Datum des Inkrafttretens: 2026-03-21**
-**Copyright 2026-present Alessandro Nocentini. Alle Rechte vorbehalten.**
-
----
-
-> **UBERSETZUNGSHINWEIS.** Dieses Dokument ist eine unverbindliche Ubersetzung zur Information. Die italienische Version ([PRIVACY_POLICY_IT.md](PRIVACY_POLICY_IT.md)) ist die einzig rechtsverbindliche Fassung. Im Falle einer Abweichung, eines Widerspruchs oder einer Unklarheit zwischen dieser Ubersetzung und dem italienischen Text gilt der italienische Text.
+**Version 1.1 - Inkrafttreten: 18. August 2026**
+**Copyright 2026-heute Alessandro Nocentini. Alle Rechte vorbehalten.**
 
 ---
 
-## 1. Einfuhrung
-
-Diese Datenschutzerklarung beschreibt, wie RavenTag Verify ("App"), entwickelt von Alessandro Nocentini ("Entwickler", "wir", "uns"), Informationen bei der Nutzung der App erhebt, verwendet und schutzt.
-
-Der Entwickler ist bestrebt, die Datenerhebung zu minimieren. Die App ist darauf ausgelegt, mit der minimal notwendigen Datenmenge zu funktionieren.
-
-Diese Datenschutzerklarung entspricht:
-- EU-Datenschutz-Grundverordnung (DSGVO - Verordnung 2016/679)
-- Italienisches Datenschutzgesetz (D.Lgs. 196/2003 in der durch D.Lgs. 101/2018 geanderten Fassung)
-- Google Play Entwicklerrichtlinie
+> **OFFIZIELLE VERSION.** Dieses Dokument in italienischer Sprache stellt die rechtlich bindende Version der Datenschutzrichtlinie dar. Im Falle von Abweichungen, Widersprüchen oder Unklarheiten zwischen dieser Version und einer Übersetzung hat die italienische Version Vorrang.
 
 ---
 
-## 2. Verantwortlicher
+## 1. Einleitung
 
-RavenTag ist ein quelloffenes Protokoll. Jede Bereitstellung der App verbindet sich mit einem Backend-Server, der von der Einheit gewahlt wird, die die App kompiliert oder konfiguriert hat (eine Marke, ein Hersteller oder der Entwickler fur Demonstrationszwecke).
+Diese Datenschutzrichtlinie beschreibt, wie RavenTag Verify („App“), entwickelt von Alessandro Nocentini („Entwickler“, „wir“, „uns“), Informationen sammelt, verwendet und schützt, wenn Sie die App nutzen.
 
-**Vom Entwickler betriebenes Demo-Backend:**
-Der Entwickler betreibt eine Backend-Instanz unter raventag.com ausschliesslich fur Demonstrations- und Infrastrukturtestzwecke. Wenn Sie eine App-Instanz verwenden, die mit diesem Demo-Backend verbunden ist, ist der Verantwortliche fur serverseitige Verifizierungsdaten (Abschnitt 3.2):
+Der Entwickler verpflichtet sich zur Datenminimierung. Die App ist als nicht-verwahrende (non-custodial) Software konzipiert und arbeitet mit der Mindestmenge an Netz- und Technikdaten, die für ihre Funktion unbedingt erforderlich ist.
+
+Diese Datenschutzrichtlinie entspricht:
+- der EU-Datenschutz-Grundverordnung (DSGVO - Verordnung EU 2016/679)
+- dem italienischen Datenschutzgesetz (D.Lgs. 196/2003 i.d.F.v. D.Lgs. 101/2018)
+- der Google Play Entwicklerrichtlinie
+
+---
+
+## 2. Verantwortlicher für die Datenverarbeitung und Infrastrukturkategorien
+
+RavenTag ist ein Open-Source-Protokoll. Die App kann sowohl mit vom Entwickler direkt betriebener Infrastruktur als auch mit unabhängiger Infrastruktur von Drittanbietern oder Marken interagieren.
+
+### 2.1 Vom Entwickler betriebenes Demo-Backend
+Der Entwickler betreibt eine Backend-Instanz auf `raventag.com` (z. B. `api.raventag.com`) zu Demonstrations-, Test- und Verifizierungszwecken. Wenn Sie eine App-Instanz nutzen, die mit diesem Demo-Backend verbunden ist, ist der Verantwortliche für serverseitige Verifizierungsdaten und Netzwerkprotokolle (Abschnitt 3.2):
 
 **Alessandro Nocentini**
 Kontakt: https://github.com/ALENOC/RavenTag
-legal@raventag.com
+E-Mail: legal@raventag.com
 
-Dieses Demo-Backend ist nicht fur den Produktionseinsatz durch Endnutzer gedacht. Marken sollten fur Produktionseinsatze ihre eigene Backend-Infrastruktur bereitstellen.
+### 2.2 Vom Entwickler betriebene ElectrumX-Infrastruktur
+Der Entwickler betreibt einen öffentlichen ElectrumX-Endpunkt (z. B. `electrumx.raventag.com` / `electrum.raventag.com`) vor einem dedizierten Ravencoin Core-Knoten. Wenn sich die App mit diesem Endpunkt für Blockchain-Abfragen oder Transaktionsübertragungen verbindet, wird die Verarbeitung von Verbindungsmetadaten vom Entwickler im Rahmen dieser Richtlinie verwaltet. Diese Infrastruktur stellt keinen Drittanbieterdienst dar.
 
-**Von einer Marke betriebenes Backend (Produktionseinsatz):**
-Im Produktionsbetrieb stellen Marken und Hersteller ihre eigene Backend-Infrastruktur bereit und kompilieren eine Version der App, die so konfiguriert ist, dass sie sich mit ihrem eigenen Server verbindet. Wenn Sie eine App-Instanz verwenden, die mit dem Backend einer Marke verbunden ist, ist diese Marke der eigenstandige Verantwortliche fur alle von ihrem Server empfangenen Verifizierungsdaten. Der Entwickler hat keinen Zugang zu und ubernimmt keine Verantwortung fur Daten, die von Backend-Diensten dritter Marken verarbeitet werden. Bezuglich der Datenverarbeitung sollten Sie die Datenschutzerklarung der Marke konsultieren, die diese App-Instanz betreibt.
+### 2.3 Von Marken betriebenes Backend (Produktivbetrieb)
+In der Produktion stellen Marken und Hersteller ihre eigene Backend-Infrastruktur bereit. Wenn Sie eine App nutzen, die mit dem Backend einer Marke verbunden ist, ist diese Marke der eigenständige Verantwortliche für die von ihren Servern verarbeiteten Daten. Der Entwickler hat keinen Zugriff und übernimmt keine Verantwortung für Daten auf Marken-Servern Dritter.
+
+### 2.4 Unabhängige Blockchain-Infrastruktur von Drittanbietern
+Die App kann sich auch mit öffentlichen ElectrumX-Knoten oder unabhängigen Ravencoin Core-Knoten von Drittanbietern verbinden. Diese Knoten liegen außerhalb der Kontrolle des Entwicklers.
 
 ---
 
-## 3. Erhobene Daten und deren Verwendung
+## 3. Verarbeitete Daten und technische Architektur
 
-### 3.1 Lokal auf Ihrem Gerat Gespeicherte Daten (Niemals Ubertragen)
+### 3.1 Lokal auf Ihrem Gerät gespeicherte Daten (Niemals an Entwickler oder ElectrumX übertragen)
 
-Die folgenden Daten werden ausschliesslich auf Ihrem Gerat gespeichert und niemals an Server des Entwicklers ubertragen:
+Die folgenden sensiblen Daten werden ausschließlich verschlüsselt auf Ihrem Gerät gespeichert und niemals an den Entwickler oder ElectrumX-Server übertragen:
 
 | Daten | Zweck | Speicherung |
 |---|---|---|
-| BIP39-mnemonische Phrase (verschlusselt) | Wallet-Wiederherstellung | Android Keystore (AES-256-GCM) |
-| Private Schlussel (abgeleitet, verschlusselt) | Transaktionssignierung | Android Keystore (AES-256-GCM) |
-| Wallet-Adresse (RVN) | Anzeige und Transaktionen | Lokaler verschlusselter Speicher |
-| Admin/Operator-Schlussel (Brand-Version) | Asset-Verwaltung | Android Keystore (AES-256-GCM) |
-| App-Einstellungen und -Praferenzen | App-Konfiguration | Lokale gemeinsame Einstellungen |
+| BIP39-Mnemonic-Phrase (Seed-Phrase) | Wallet-Generierung und -Wiederherstellung | Android Keystore (AES-256-GCM) |
+| Private Schlüssel (abgeleitet, verschlüsselt) | Lokale Transaktionssignierung | Android Keystore (AES-256-GCM) |
+| Wallet-Adresse (RVN) | Lokale Anzeige und Berechnung | Verschlüsselter lokaler Speicher |
+| Admin-/Bedienschlüssel (Marken-Version) | Lokale Asset-Verwaltung | Android Keystore (AES-256-GCM) |
+| App-Einstellungen & Präferenzen | Lokale App-Konfiguration | Geschützte lokale Einstellungen |
 
-**Ihre mnemonische Phrase und privaten Schlussel verlassen niemals Ihr Gerat.**
+**Ihre Mnemonic-Phrase und Ihre privaten Schlüssel verlassen niemals Ihr Gerät.**
 
-### 3.2 Bei der NFC-Tag-Verifizierung Ubertragene Daten
+### 3.2 Bei der NFC-Tag-Verifizierung übertragene Daten (API-Backend)
 
-Wenn Sie einen NFC-Tag scannen, sendet die App zur kryptografischen Verifizierung folgende Daten an einen Backend-Server:
-
-| Daten | Zweck |
-|---|---|
-| Asset-Name (z.B. MARKE/PRODUKT#001) | Identifizierung des Assets auf der Blockchain |
-| Verschlusselter NFC-Zahler (Parameter e) | SUN MAC-Verifizierung |
-| NFC MAC-Wert (Parameter m) | SUN MAC-Verifizierung |
-| IP-Adresse Ihres Gerats | Serverseitige Ratenbegrenzung und Sicherheitsprotokollierung |
-
-Diese Daten sind das Minimum, das zur Verifizierung der Authentizitat eines NFC-Tags erforderlich ist. Die Verifizierungsanfrage enthalt keine personlich identifizierbaren Informationen uber die IP-Adresse hinaus.
-
-**Welcher Server diese Daten empfangt, hangt von der App-Konfiguration ab:**
-
-- **Standard/RavenTag-betriebenes Backend**: Wenn sich die App mit dem vom Entwickler betriebenen RavenTag-Backend (raventag.com) verbindet, empfangt und verarbeitet der Entwickler diese Daten wie in dieser Datenschutzerklarung beschrieben.
-- **Von einer Marke betriebenes Backend**: Wenn die App von einer Marke kompiliert oder konfiguriert wurde, um sich mit ihrem eigenen Server zu verbinden, empfangt der Server dieser Marke diese Daten. Der Entwickler empfangt, greift auf oder verarbeitet diese Daten in keiner Weise. Die Marke ist eigenstandiger Verantwortlicher und deren Datenschutzerklarung gilt.
-
-Sie konnen erkennen, mit welchem Backend sich die App verbindet, indem Sie die in den App-Einstellungen angezeigte Server-URL prufen.
-
-**Aufbewahrung (vom Entwickler betriebenes Backend)**: IP-Adressen und Anforderungsprotokolle werden maximal 90 Tage zu Sicherheits- und Ratenbegrenzungszwecken aufbewahrt, danach werden sie automatisch geloscht.
-
-**Rechtsgrundlage (DSGVO, vom Entwickler betriebenes Backend)**: Berechtigtes Interesse (Art. 6(1)(f) DSGVO) - Sicherheitsmonitoring und Betrugsvorbeugung.
-
-### 3.3 Bei Blockchain-Operationen Ubertragene Daten
-
-Wenn Sie Wallet-Operationen durchfuhren (Saldo prufen, RVN senden, Assets ausgeben), kommuniziert die App mit Ravencoin-Netzwerkknoten. Diese Kommunikation kann folgendes umfassen:
+Wenn Sie einen NFC-Tag scannen, um die Produktauthentizität zu überprüfen, sendet die App folgende Parameter an das API-Backend:
 
 | Daten | Zweck |
 |---|---|
-| Ihre Ravencoin-Wallet-Adresse | Saldo- und Transaktionsverlaufsabfrage |
-| Transaktionsdaten | Ubertragung von Transaktionen an das Netzwerk |
-| IP-Adresse Ihres Gerats | Netzwerkkommunikation |
+| Asset-Name (z. B. BRAND/PRODUCT#001) | Identifizierung des Assets auf der Ravencoin-Blockchain |
+| Verschlüsselter NFC-Zähler (Parameter e) | Kryptografische SUN MAC-Überprüfung |
+| NFC-MAC-Wert (Parameter m) | Kryptografische SUN MAC-Überprüfung |
+| IP-Adresse Ihres Geräts | Serverseitige Ratenbegrenzung und Netzwerksicherheit |
 
-Die Ravencoin-Blockchain ist ein offentliches, dezentrales Netzwerk. Alle ans Netzwerk ubertragenen Transaktionen sind dauerhaft und offentlich fur jeden sichtbar. Verwenden Sie dieses Wallet nicht fur Transaktionen, die Sie privat halten mochten.
+**Protokollaufbewahrung (vom Entwickler betriebenes Backend)**: IP-Adressen und API-Backend-Netzwerkprotokolle werden maximal 30 Tage aufbewahrt (auf Code-Ebene im Protokollbereinigungs-Middleware überprüft) und danach automatisch gelöscht.
 
-### 3.4 Beim Laden von Asset-Bildern Ubertragene Daten
+**Rechtsgrundlage (DSGVO)**: Berechtigtes Interesse (Art. 6 Abs. 1 lit. f DSGVO) zur Gewährleistung der Infrastruktursicherheit und Missbrauchsverhinderung.
 
-Beim Laden von IPFS-gehosteten Asset-Bildern verbindet sich die App mit offentlichen IPFS-Gateways (wie ipfs.io, cloudflare-ipfs.com). Diese Drittanbieterdienste konnen Ihre IP-Adresse gemas ihren eigenen Datenschutzerklarungen protokollieren.
+### 3.3 Datenverarbeitung bei Blockchain- und ElectrumX-Operationen
 
-### 3.5 Kameradaten
+Bei Guthabenabfragen, Transaktionsverläufen oder Übertragungen kommuniziert die App mit der ElectrumX-Infrastruktur.
 
-Wenn Sie die Kamera zum Scannen von QR-Codes in der App verwenden, werden die Kameradaten ausschliesslich in Echtzeit auf Ihrem Gerat verarbeitet und niemals gespeichert oder ubertragen.
+**A. Was ein ElectrumX-Server beobachten oder empfangen kann:**
+Ein öffentlicher ElectrumX-Server kann Verbindungsdaten und Metadaten beobachten:
+- Quell-IP-Adresse des Geräts;
+- TLS-Verbindungsmetadaten, Zeitstempel und Anfragefrequenz;
+- JSON-RPC-Protokollabfragen und Script-Hash-Abfragen;
+- Guthabenanfragen, Transaktionsverläufe und UTXOs;
+- Transaktions-IDs (TxID) und Asset-Metadaten;
+- Bereits signierte Roh-Transaktionen (raw signed transactions) zur Übertragung.
 
-### 3.6 NFC-Daten
+Aufgrund von Abfragemustern können diese Informationen technisch Korrelationen zwischen Netzwerkkennungen (wie der IP-Adresse) und öffentlicher Blockchain-Aktivität ermöglichen.
 
-NFC-Tag-Daten werden lokal auf Ihrem Gerat gelesen. Rohe NFC-Daten (UID, NDEF-Eintrager) werden gerate-seitig verarbeitet, und nur die abgeleiteten Verifizierungsparameter (Asset, e, m) werden wie in Abschnitt 3.2 beschrieben ubertragen.
+> **Expliziter Sicherheitshinweis:**
+> Private Schlüssel und Mnemonic-Phrasen werden vom ElectrumX-Server nicht benötigt und während des normalen Wallet-Betriebs niemals an diesen übertragen.
 
-### 3.7 Daten, die Wir Nicht Erheben
+**B. Ablauf von Transaktionserstellung und -signierung:**
+Für jede über das Wallet ausgeführte Transaktion:
+1. Der Benutzer leitet die Transaktion in der App ein;
+2. Die App erstellt die Roh-Transaktion lokal auf dem Gerät;
+3. Die Transaktion wird auf dem Gerät mit den Schlüsseln des Benutzers signiert;
+4. Die App sendet die bereits signierte Transaktion an den ElectrumX-Server;
+5. ElectrumX überträgt (relay/broadcast) die signierte Transaktion an Ravencoin Core-Knoten zur Einbindung in Blöcke.
 
-Wir erheben ausdruecklich nicht:
+Die ElectrumX-Infrastruktur besitzt keine privaten Schlüssel des Benutzers, kann keine eigenen Signaturen erstellen, entscheidet nicht über Empfänger oder Beträge und verwahrt keine Gelder.
 
-- Ihren Namen, Ihre E-Mail-Adresse oder andere personlich identifizierbare Informationen.
-- Gerateidentifikatoren (IMEI, Android ID, Werbe-ID).
-- Standortdaten.
-- Nutzungsanalysen oder Telemetrie.
-- Absturzberichte (es sei denn, diese werden von Ihnen explizit ubermittelt).
-- Daten fur Werbezwecke.
+**C. Rolle öffentlicher Ravencoin Core-Knoten:**
+Ein öffentlicher Ravencoin Core-Knoten führt ausschließlich Infrastrukturfunktionen aus (Blockchain-Synchronisierung, Block- und Transaktionsvalidierung, P2P-Weiterleitung). Er verwahrt keine Kundengelder und besitzt keine privaten Schlüssel.
+
+### 3.4 Laden von Asset-Bildern (IPFS Gateways)
+Zum Anzeigen von auf IPFS gehosteten Asset-Bildern kann sich die App mit öffentlichen IPFS-Gateways verbinden (z. B. ipfs.io, cloudflare-ipfs.com).
+
+### 3.5 Kamera- und NFC-Daten
+- **Kamera**: Ausschließlich lokal auf dem Gerät zum Lesen von QR-Codes verwendet.
+- **NFC**: Tag-Auslesung erfolgt lokal; nur abgeleitete Verifizierungsparameter (asset, e, m) werden übertragen.
+
+### 3.6 Daten, die wir nicht sammeln
+Der Entwickler sammelt keine Namen, E-Mail-Adressen, Hardware-IDs (IMEI), Standortdaten oder Telemetriedaten.
 
 ---
 
-## 4. Drittanbieterdienste
+## 4. Dienste und Knoten von Drittanbietern
 
-Die App interagiert mit folgenden Drittanbieterdiensten. Deren Datenschutzerklarungen regeln ihre Datenpraktiken:
-
-| Dienst | Zweck | Datenschutzerklarung |
+| Dienst / Knoten | Zweck | Datenschutzhinweis |
 |---|---|---|
-| Ravencoin-Netzwerkknoten | Blockchain-Abfragen und Transaktionen | Dezentrales Netzwerk, keine einheitliche Richtlinie |
-| IPFS-Gateways (ipfs.io, cloudflare-ipfs.com) | Asset-Bild-Laden | Siehe jeweilige Anbieter |
-| Pinata (pinata.cloud) | IPFS-Metadaten-Pinning (optional, nur Brand-Version) | https://pinata.cloud/privacy |
-| Google Play Store | App-Vertrieb | https://policies.google.com/privacy |
-
-Der Entwickler ist nicht fur die Datenpraktiken dieser Drittanbieterdienste verantwortlich.
+| Unabhängige ElectrumX-Knoten Dritter | Blockchain-Abfragen & Fallback | Entwickler kontrolliert deren Protokolle nicht. Drittbetreiber können IP-Adressen und Roh-Transaktionen sehen. |
+| Unabhängige Ravencoin Core-Knoten | P2P-Validierung & Weiterleitung | Dezentrales Netzwerk. |
+| Öffentliche IPFS-Gateways | Medien- & Metadatenladen | Von Drittanbietern betrieben. |
+| Google Play Store | App-Bereitstellung | Datenschutzbestimmungen von Google LLC. |
 
 ---
 
-## 5. Datensicherheit
+## 5. Datensicherheit und nicht-verwahrende Architektur
 
-Alle auf Ihrem Gerat gespeicherten sensiblen Daten (mnemonische Phrase, private Schlussel, API-Schlussel) werden mit AES-256-GCM uber das Android-Keystore-System verschlusselt, das hardwaregesicherte Sicherheit verwendet, wo verfugbar.
-
-Die Kommunikation zwischen der App und dem Backend-Server des Entwicklers ist mit HTTPS/TLS verschlusselt.
-
-Trotz dieser Massnahmen ist keine Methode der elektronischen Speicherung oder Ubertragung zu 100 % sicher. Sie sind fur die Aufrechterhaltung der Sicherheit Ihres Gerats und Ihrer mnemonischen Phrase verantwortlich.
+Sensible Daten auf dem Gerät sind per AES-256-GCM über das Android Keystore-System geschützt. Netzverbindungen zum Entwickler-Backend nutzen verschlüsselte HTTPS/TLS-Kanäle.
 
 ---
 
-## 6. Datenspeicherung
+## 6. Datenspeicherung (Speicherbegrenzung)
 
-- **Daten auf dem Gerat**: gespeichert, bis Sie das Wallet loschen oder die App deinstallieren.
-- **Serverseitige Anforderungsprotokolle**: maximal 90 Tage aufbewahrt, dann automatisch geloscht.
-- **Blockchain-Daten**: Alle an die Ravencoin-Blockchain ubertragenen Transaktionen sind dauerhaft offentlich und konnen weder vom Entwickler noch von Dritten geloscht werden.
-
----
-
-## 7. Ihre Rechte nach der DSGVO
-
-Wenn Sie sich im Europaischen Wirtschaftsraum befinden, haben Sie folgende Rechte bezuglich Ihrer personlichen Daten:
-
-- **Auskunftsrecht**: Anforderung einer Kopie der personlichen Daten, die wir uber Sie besitzen (beschrankt auf serverseitige Protokolle).
-- **Recht auf Berichtigung**: Anforderung der Korrektur ungenauer Daten.
-- **Recht auf Loschung**: Anforderung der Loschung Ihrer personlichen Daten von unseren Servern (Serverprotokolle), vorbehaltlich gesetzlicher Aufbewahrungspflichten.
-- **Recht auf Einschrankung der Verarbeitung**: Anforderung, dass wir die Verwendung Ihrer Daten einschranken.
-- **Widerspruchsrecht**: Widerspruch gegen die auf berechtigtem Interesse beruhende Verarbeitung.
-- **Recht auf Datenuebertragbarkeit**: Empfang Ihrer Daten in einem strukturierten, maschinenlesbaren Format.
-- **Recht zur Beschwerde**: Sie haben das Recht, eine Beschwerde bei der italienischen Datenschutzbehorde einzureichen (Garante per la protezione dei dati personali, https://www.garanteprivacy.it).
-
-Um eines dieser Rechte auszuuben, kontaktieren Sie uns unter: https://github.com/ALENOC/RavenTag / legal@raventag.com
-
-Wir antworten auf Ihre Anfrage innerhalb von 30 Tagen.
+- **Gerätedaten**: Gespeichert bis zur Wallet-Löschung oder App-Deinstallation.
+- **Entwickler-Backend-Protokolle**: Maximal 30 Tage aufbewahrt (gemäß automatischem Bereinigungscode) und anschließend dauerhaft gelöscht.
+- **Entwickler-ElectrumX-Protokolle**: Nur so lange aufbewahrt, wie für Diagnosen und Sicherheit unbedingt erforderlich.
+- **Öffentliche Ravencoin-Blockchain-Daten**: Transaktionen auf der Blockchain sind dauerhaft öffentlich und unlöschbar.
 
 ---
 
-## 8. Datenschutz fur Minderjahrige
+## 7. IP-Adressverarbeitung und DSGVO-Grundsätze
 
-Die App richtet sich nicht an Kinder unter 18 Jahren. Wir erheben wissentlich keine personlichen Daten von Kindern unter 18 Jahren. Wenn Sie glauben, dass ein Kind unter 18 Jahren die App genutzt und personliche Daten bereitgestellt hat, kontaktieren Sie uns und wir werden Schritte zur Loschung dieser Daten einleiten.
-
----
-
-## 9. Internationale Datenuebermittlungen
-
-**Vom Entwickler betriebenes Demo-Backend**: Der Demo-Backend-Server des Entwicklers befindet sich innerhalb der Europaischen Union. Wenn Sie von ausserhalb der EU auf eine Demo-App-Instanz zugreifen, werden Ihre Verifizierungsanfragedaten (Abschnitt 3.2) in Ubereinstimmung mit den DSGVO-Anforderungen in die EU ubertragen und dort verarbeitet.
-
-**Von einer Marke betriebenes Backend**: Bei Produktionseinsatzen wird der geografische Standort des Backend-Servers ausschliesslich von der Marke oder dem Hersteller bestimmt, der ihn bereitgestellt hat. Der Entwickler hat keine Kontrolle uber und kein Wissen von den von Drittmarken gewahlten Serverstandorten. Die geltenden Regeln fur internationale Datenuebermittlungen sind jene der Marke, die diesen Einsatz betreibt. Weitere Details finden Sie in der Datenschutzerklarung der jeweiligen Marke.
+IP-Adressen und Netzwerkmetadaten werden nach den DSGVO-Grundsätzen der Datenminimierung, Zweckbindung, Speicherbegrenzung (30 Tage Löschung) und Integrität verarbeitet. Rechtsgrundlage ist das berechtigte Interesse (Art. 6 Abs. 1 lit. f DSGVO).
 
 ---
 
-## 10. Anderungen dieser Datenschutzerklarung
+## 8. Ihre Rechte nach der DSGVO
 
-Wir konnen diese Datenschutzerklarung gelegentlich aktualisieren. Wir werden Sie uber wesentliche Anderungen informieren, indem wir das Datum des Inkrafttretens oben in diesem Dokument aktualisieren und, soweit gesetzlich erforderlich, eine Benachrichtigung in der App bereitstellen.
+Sie haben das Recht auf Auskunft (Art. 15), Berichtigung (Art. 16), Löschung (Art. 17), Einschränkung (Art. 18) und Widerspruch (Art. 21 DSGVO) bezüglich der vom Entwickler verarbeiteten Server-Protokolle. Kontakt: legal@raventag.com
 
-Ihre weitere Nutzung der App nach Anderungen stellt Ihre Annahme der aktualisierten Datenschutzerklarung dar.
+Sie haben das Recht auf Beschwerde bei einer Datenschutzbehörde.
 
 ---
 
-## 11. Kontakt
+## 9. Datenschutz bei Minderjährigen
 
-Fur datenschutzbezogene Fragen, Anfragen oder Beschwerden:
+Die App richtet sich nicht an Personen unter 18 Jahren.
+
+---
+
+## 10. Internationale Datenübertragungen
+
+Die Infrastruktur des Entwicklers befindet sich in Rechenzentren in der EU oder den USA gemäß DSGVO-Standards.
+
+---
+
+## 11. Regulatorischer Rahmen und MiCA-Begrifflichkeiten
+
+RavenTag ist als nicht-verwahrende Open-Source-Software konzipiert. Der Entwickler hält keine privaten Schlüssel der Nutzer, übt keine Kontrolle oder Verwahrung über Krypto-Werte (RVN oder Token) aus und erbringt keine Kryptowertpapier-Verwahr- oder Verwaltungsdienste gemäß Verordnung (EU) 2023/1114 (MiCA). Die Tätigkeit der ElectrumX-Infrastruktur beschränkt sich auf das technische Weiterleiten von Netzwerkdaten und signierten Transaktionen.
+
+---
+
+## 12. Änderungen dieser Datenschutzrichtlinie
+
+Der Entwickler behält sich das Recht vor, diese Datenschutzrichtlinie zu aktualisieren.
+
+---
+
+## 13. Kontaktinformationen
 
 **Alessandro Nocentini**
-https://github.com/ALENOC/RavenTag
-legal@raventag.com
-
-Bei Datenschutzbeschwerden konnen Sie sich auch an folgende Stelle wenden:
-**Garante per la protezione dei dati personali**
-https://www.garanteprivacy.it
-
----
-
-*RavenTag Verify ist ein quelloffenes Projekt. Quellcode: https://github.com/ALENOC/RavenTag*
+GitHub: https://github.com/ALENOC/RavenTag
+E-Mail: legal@raventag.com

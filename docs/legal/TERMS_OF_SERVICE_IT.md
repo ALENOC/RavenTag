@@ -1,6 +1,6 @@
 # RavenTag Verify - Termini di Servizio
 
-**Versione 1.0 - Data di entrata in vigore: 2026-03-21**
+**Versione 1.1 - Data di entrata in vigore: 18 agosto 2026**
 **Copyright 2026-present Alessandro Nocentini. Tutti i diritti riservati.**
 
 ---
@@ -15,224 +15,157 @@ Al primo avvio, l'App presenta questi Termini di Servizio e l'Informativa sulla 
 
 Scaricando, installando o continuando a utilizzare l'App dopo l'accettazione, tu ("Utente") confermi di essere legalmente vincolato da questi Termini. Se non sei d'accordo con questi Termini nella loro interezza, devi immediatamente disinstallare e smettere di utilizzare l'App.
 
-Questi Termini costituiscono un accordo legalmente vincolante tra te e Alessandro Nocentini ("Sviluppatore"), unico autore e operatore di RavenTag Verify.
+Questi Termini costituiscono un accordo legalmente vincolante tra te e Alessandro Nocentini ("Sviluppatore"), autore di RavenTag Verify.
 
 ---
 
 ## 2. Descrizione dell'App
 
-RavenTag Verify è un'applicazione mobile che fornisce:
+RavenTag Verify e' un'applicazione mobile che fornisce:
 
 - **Verifica tag NFC**: lettura e verifica crittografica di chip NFC NTAG 424 DNA collegati ad asset blockchain Ravencoin, utilizzando il RavenTag Protocol v1 (RTP-1).
-- **Wallet Ravencoin**: generazione, archiviazione e gestione di un wallet HD BIP39/BIP44 non custodiale per la blockchain Ravencoin (RVN).
-- **Gestione asset** (solo versione Brand): emissione, trasferimento e revoca di asset Ravencoin collegati a prodotti fisici.
+- **Wallet Ravencoin Non Custodiale**: generazione, archiviazione locale e gestione autonoma di un wallet HD BIP39/BIP44 non custodiale per la blockchain Ravencoin (RVN).
+- **Gestione asset** (solo versione Brand): emissione, trasferimento e gestione locale di asset Ravencoin collegati a prodotti fisici.
 
-L'App è uno strumento per interagire con la blockchain Ravencoin e l'hardware NFC. Non e' un servizio finanziario, un exchange, ne' un prodotto di investimento.
+L'App e' uno strumento software per interagire in modalita' non custodiale con la blockchain Ravencoin e l'hardware NFC. Non e' un servizio finanziario, un exchange, una banca, un intermediario di custodia, ne' un prodotto finanziario o di investimento.
 
 ---
 
-## 3. Requisiti
+## 3. Requisiti e Ambito di Utilizzo
 
 Devi avere almeno 18 anni per utilizzare questa App. Utilizzando l'App, dichiari e garantisci di avere almeno 18 anni e di avere la capacita' legale per stipulare questi Termini nella tua giurisdizione.
 
 ### 3.1 Uso consumer dell'App Verify
-
 La funzionalita' di verifica tag NFC dell'App RavenTag Verify e' progettata per qualsiasi consumatore che desideri verificare l'autenticita' di un prodotto fisico dotato di chip NFC. L'uso di questa funzionalita' non richiede alcuna capacita' professionale.
 
-### 3.2 Funzionalita' wallet e blockchain
-
-La funzionalita' wallet Ravencoin comporta la custodia, la gestione e il trasferimento di asset digitali su una blockchain pubblica. Utilizzando queste funzionalita' riconosci di agire di tua iniziativa e a tuo rischio finanziario, e di avere una conoscenza sufficiente dei rischi descritti nella Sezione 5.
+### 3.2 Funzionalita' wallet e auto-custodia
+La funzionalita' wallet Ravencoin comporta l'auto-custodia (self-custody), la gestione diretta e il trasferimento di asset digitali su una blockchain pubblica decentralizzata. Utilizzando queste funzionalita' riconosci di agire in piena autonomia, sotto la tua esclusiva responsabilita' e a tuo rischio finanziario, avendo piena consapevolezza dei rischi descritti nella Sezione 5.
 
 ### 3.3 Codice sorgente e infrastruttura
-
-La restrizione all'uso professionale contenuta nella RavenTag Source License (RTSL-1.0) si applica esclusivamente agli sviluppatori, ai brand e alle entita' che distribuiscono, biforcano o utilizzano in altro modo il codice sorgente di RavenTag. Tale restrizione non si applica agli utenti finali dell'App che la utilizzano esclusivamente per scansionare tag NFC o gestire il proprio wallet.
+La restrizione all'uso professionale contenuta nella RavenTag Source License (RTSL-1.0) si applica esclusivamente agli sviluppatori, ai brand e alle entita' che distribuiscono, biforcano o utilizzano in altro modo il codice sorgente di RavenTag. Tale restrizione non si applica agli utenti finali dell'App che la utilizzano esclusivamente per scansionare tag NFC o gestire il proprio wallet in auto-custodia.
 
 ---
 
-## 4. Wallet Non Custodiale
+## 4. Wallet Non Custodiale e Architettura delle Transazioni
 
-### 4.1 Sei il Solo Responsabile del Tuo Wallet
+### 4.1 Nessuna Custodia da Parte dello Sviluppatore
+RavenTag Verify fornisce un wallet Ravencoin esclusivamente non custodiale. Questo significa che:
+- Lo Sviluppatore **non** detiene, archivia, gestisce, controlla o ha accessibilita' alle tue chiavi private, alla tua frase mnemonica o ai tuoi fondi in nessun momento.
+- Sei l'unico ed esclusivo custode (self-custodian) delle tue chiavi crittografiche, dei tuoi fondi e dei tuoi asset digitali.
+- Lo Sviluppatore non ha alcuna capacita' tecnica di autorizzare transazioni, bloccare i tuoi fondi o recuperare la tua frase mnemonica o le tue chiavi in nessuna circostanza.
 
-RavenTag Verify fornisce un wallet Ravencoin non custodiale. Questo significa che:
+### 4.2 Creazione, Firma e Trasmissione delle Transazioni
+Per ogni transazione effettuata tramite l'App:
+1. L'Utente avvia la transazione dall'interfaccia dell'App;
+2. L'App costruisce la transazione grezza (raw transaction) localmente sul dispositivo;
+3. La transazione viene firmata localmente sul dispositivo utilizzando le chiavi private controllate dall'Utente;
+4. L'App trasmette la transazione **gia' firmata** all'infrastruttura ElectrumX (gestita dallo Sviluppatore o da terzi);
+5. ElectrumX relaya/inoltra la transazione firmata alla rete Ravencoin Core per l'inclusione nel registro distribuito.
 
-- Lo Sviluppatore **non** detiene, archivia, gestisce o ha accesso alle tue chiavi private, alla tua frase mnemonica o ai tuoi fondi in nessun momento.
-- Sei l'unico custode delle tue chiavi crittografiche e dei tuoi fondi.
-- Lo Sviluppatore non puo' recuperare il tuo wallet, la tua frase mnemonica, le tue chiavi private o i tuoi fondi in nessuna circostanza.
+L'infrastruttura ElectrumX non possiede le chiavi private dell'Utente, non puo' generare autonomamente firme valide, non decide il destinatario o l'importo della transazione, non prende possesso dei RVN dell'Utente e non gestisce conti o saldi custodiali.
 
-### 4.2 Frase Mnemonica (Seed Phrase)
-
+### 4.3 Frase Mnemonica (Seed Phrase)
 Quando crei un wallet, l'App genera una frase mnemonica BIP39 di 12 parole ("seed phrase"). Devi:
-
 - Annotare immediatamente la tua seed phrase e conservarla in un luogo sicuro e offline.
 - Non condividere mai la tua seed phrase con nessuno, incluso lo Sviluppatore.
-- Non conservare mai la tua seed phrase in forma digitale su un dispositivo connesso a Internet.
+- Non conservare mai la tua seed phrase in forma digitale non protetta o su servizi cloud di terzi.
 
 **La perdita della tua seed phrase comporta la perdita permanente e irrecuperabile di tutti i fondi e gli asset associati al tuo wallet. Lo Sviluppatore non puo' ripristinare l'accesso al tuo wallet in nessuna circostanza.**
 
-### 4.3 Sicurezza del Dispositivo
-
-Sei responsabile del mantenimento della sicurezza del tuo dispositivo. Lo Sviluppatore non e' responsabile per eventuali perdite di fondi derivanti da:
-
-- Accesso non autorizzato al tuo dispositivo.
-- Malware, virus o spyware sul tuo dispositivo.
-- Smarrimento o furto del dispositivo.
-- Vulnerabilita' del sistema operativo.
+### 4.4 Sicurezza del Dispositivo
+Sei responsabile del mantenimento della sicurezza del tuo dispositivo. Lo Sviluppatore non e' responsabile per eventuali perdite di fondi derivanti da malware, smarrimento del dispositivo, accessi non autorizzati o compromissioni del sistema operativo.
 
 ---
 
-## 5. Rischi Blockchain e Finanziari
+## 5. Rischi Blockchain, Finanziari e Inquadramento Tecnico
 
-### 5.1 Natura di Ravencoin
+### 5.1 Natura di Ravencoin e Infrastruttura di Rete
+Ravencoin (RVN) e' una rete blockchain decentralizzata open-source gestita da miner e nodi indipendenti.
+- **Infrastruttura dello Sviluppatore**: Lo Sviluppatore opera l'endpoint ElectrumX pubblico `electrumx.raventag.com` / `electrum.raventag.com` a supporto dell'App.
+- **Infrastruttura Indipendente di Terze Parti**: L'App puo' interagire anche con nodi ElectrumX o Ravencoin Core gestiti da terzi indipendenti. Lo Sviluppatore non controlla i server di terze parti.
+- **Ruolo dei Nodi Ravencoin Core**: Un nodo pubblico Ravencoin Core svolge funzioni di sincronizzazione, validazione di blocchi e transazioni, e propagazione P2P. Il nodo Core non detiene fondi dei clienti, non gestisce account utente, non possiede chiavi private e non esercita custodia sui fondi RVN.
 
-Ravencoin (RVN) e' una rete blockchain decentralizzata e open-source gestita da terze parti indipendenti. Lo Sviluppatore non ha alcun controllo sulla rete Ravencoin.
-
-### 5.2 Riconoscimento del Rischio Finanziario
-
-Utilizzando la funzionalita' wallet di questa App, riconosci ed accetti esplicitamente che:
-
-- Ravencoin (RVN) e tutti gli asset emessi sulla blockchain Ravencoin sono asset digitali volatili il cui valore puo' fluttuare significativamente o scendere a zero.
-- Qualsiasi fondo utilizzato per acquisire RVN, pagare commissioni di transazione o emettere asset blockchain potrebbe essere perso interamente.
-- Le transazioni blockchain sono **irreversibili**. Una volta confermata sulla blockchain Ravencoin, una transazione non puo' essere annullata, cancellata o rimborsata dallo Sviluppatore o da terzi.
-- Le commissioni di transazione (commissioni di rete) non sono rimborsabili indipendentemente dall'esito della transazione.
-- Lo Sviluppatore non e' responsabile per eventuali perdite finanziarie, incluse ma non limitate a: perdita di RVN, perdita di asset emessi, transazioni fallite, transazioni errate, o perdite dovute a condizioni di mercato.
+### 5.2 Riconoscimento del Rischio Finanziario ed Irreversibilita'
+Utilizzando le funzionalita' wallet di questa App, riconosci ed accetti esplicitamente che:
+- RVN e gli asset su blockchain sono asset digitali soggetti a forte volatilita' di prezzo.
+- Le transazioni blockchain registrate sulla rete Ravencoin sono **irreversibili**. Una volta confermata, una transazione non puo' essere annullata, modificata o rimborsata dallo Sviluppatore.
+- Le commissioni di rete (miner fees) sono pagate direttamente alla rete e non sono rimborsabili.
+- Lo Sviluppatore non e' responsabile per perdite finanziarie derivanti da errori dell'utente, variazioni di mercato o guasti della rete blockchain.
 
 ### 5.3 Nessuna Consulenza Finanziaria
+Nulla in questa App o nelle comunicazioni dello Sviluppatore costituisce consulenza finanziaria, d'investimento o legale.
 
-Nulla in questa App o in qualsiasi comunicazione dello Sviluppatore costituisce consulenza finanziaria, consulenza d'investimento, o una raccomandazione ad acquisire, detenere, trasferire o cedere RVN o qualsiasi asset digitale. Dovresti consultare un consulente finanziario qualificato prima di prendere qualsiasi decisione finanziaria.
-
-### 5.4 Rischio Regolatorio
-
-Lo status legale delle criptovalute e degli asset blockchain varia a seconda della giurisdizione e puo' cambiare nel tempo. Sei il solo responsabile di garantire che il tuo utilizzo di questa App e della blockchain Ravencoin sia conforme a tutte le leggi e i regolamenti applicabili nella tua giurisdizione, inclusi ma non limitati agli obblighi fiscali, ai requisiti antiriciclaggio (AML) e alle normative sui valori mobiliari.
+### 5.4 Inquadramento Regolatorio (MiCA)
+RavenTag e' fornito come software non custodiale open-source. Lo Sviluppatore non detiene le chiavi private degli utenti e non esercita alcun controllo o custodia sui crypto-asset degli utenti. La trasmissione di transazioni firmate attraverso server ElectrumX costituisce un'attivita' meramente tecnica di inoltro dati su protocollo distribuito. L'Utente e' il solo responsabile dell'adempimento degli obblighi fiscali e normativi applicabili nella propria giurisdizione.
 
 ---
 
-## 6. Hardware NFC
+## 6. Hardware NFC e Risultati di Verifica
 
 ### 6.1 Limitazioni Hardware
-
-L'App interagisce con chip NFC NTAG 424 DNA e altri hardware NFC. Lo Sviluppatore non fornisce alcuna garanzia riguardo a:
-
-- La compatibilita' dell'App con tutti i dispositivi abilitati NFC.
-- La sicurezza, la longevita' o l'integrita' fisica di qualsiasi chip NFC.
-- L'accuratezza dei risultati di verifica NFC in tutte le condizioni ambientali.
+L'App interagisce con chip NFC NTAG 424 DNA. Lo Sviluppatore non fornisce garanzie sulla longevita' o l'integrita' fisica dell'hardware NFC di terze parti.
 
 ### 6.2 Risultati di Verifica
-
-I risultati di verifica dei tag NFC forniti dall'App si basano su calcoli crittografici e dati disponibili al momento della verifica. Lo Sviluppatore non garantisce che i risultati di verifica siano accurati, completi o aggiornati. Un risultato di verifica non costituisce un certificato legale di autenticita'.
+I risultati di verifica sono elaborati sulla base di verifiche crittografiche dei dati ricevuti. Un esito positivo indica la validita' crittografica del segnale NFC al momento della scansione, ma non costituisce una perizia o garanzia legale assoluta.
 
 ---
 
 ## 7. Distribuzione Ufficiale e Avviso di Sicurezza
 
 ### 7.1 Canali di Distribuzione Autorizzati
-
-Gli unici canali di distribuzione ufficiali e autorizzati per le applicazioni RavenTag Verify e RavenTag Brand Manager sono:
-
-1. **GitHub Releases** all'indirizzo https://github.com/ALENOC/RavenTag/releases (canale ufficiale primario)
-2. **Google Play Store** (solo per l'app consumer Verify)
-
-Qualsiasi altro canale di distribuzione, inclusi ma non limitati a app store di terze parti, siti web di download APK, reti torrent o piattaforme di condivisione file peer-to-peer, **non e' autorizzato** e non e' affiliato allo Sviluppatore.
+I canali di distribuzione ufficiali per RavenTag sono:
+1. **GitHub Releases** (https://github.com/ALENOC/RavenTag/releases)
+2. **Google Play Store** (per l'App consumer Verify)
 
 ### 7.2 Verifica della Firma Crittografica
+Le release ufficiali sono firmate dallo Sviluppatore. Gli utenti possono verificare la firma dei file APK tramite `apksigner`.
 
-Tutte le release ufficiali sono firmate crittograficamente con la chiave di release dello Sviluppatore. Gli utenti che scaricano l'App da GitHub Releases possono verificare l'autenticita' del download controllando la firma APK utilizzando il seguente comando:
-
-```bash
-apksigner verify --print-certs RavenTag-*.apk
-```
-
-L'impronta digitale del certificato per le release ufficiali sara' pubblicata sulla pagina GitHub Releases. Gli utenti sono fortemente incoraggiati a verificare questa impronta digitale prima dell'installazione.
-
-### 7.3 Rischi delle Build Non Ufficiali
-
-Scaricare, installare o utilizzare l'App da qualsiasi fonte diversa dai canali ufficiali elencati nella Sezione 7.1 comporta rischi significativi, inclusi ma non limitati a:
-
-- **Codice modificato o dannoso**: Le build non ufficiali possono contenere malware, spyware, backdoor o logica di sicurezza alterata progettata per rubare informazioni sensibili.
-- **Furto di credenziali**: Le app modificate possono acquisire e trasmettere la frase di recupero del wallet, le chiavi private, le credenziali amministrative o i dati personali a terze parti.
-- **Nessun aggiornamento di sicurezza**: Le build non ufficiali non ricevono patch o aggiornamenti di sicurezza automatici, lasciando gli utenti vulnerabili a exploit noti.
-- **Nessun supporto tecnico**: Lo Sviluppatore non puo' e non fornira' supporto tecnico, risoluzione dei problemi o assistenza per problemi derivanti da build non ufficiali.
-- **Perdita finanziaria**: Chiavi di wallet o credenziali compromesse possono portare a perdite irreversibili di fondi in criptovaluta (RVN) e asset blockchain.
-
-### 7.4 Esonero di Responsabilita' per Build Non Ufficiali
-
-**Lo Sviluppatore declina espressamente ogni responsabilita'** per eventuali danni, perdite, incidenti di sicurezza, violazioni di dati, perdite finanziarie o altri danni derivanti dall'uso di applicazioni RavenTag ottenute da fonti non ufficiali o non autorizzate.
-
-Solo le applicazioni scaricate dalla pagina ufficiale GitHub Releases o dal listing ufficiale del Google Play Store sono considerate autentiche, supportate e coperte da questi Termini di Servizio.
-
-Scaricando l'App, riconosci e accetti che:
-- Hai scaricato l'App da un canale ufficiale elencato nella Sezione 7.1.
-- Comprendi i rischi associati al download di software da fonti non ufficiali.
-- Ti assumi ogni responsabilita' per la verifica dell'autenticita' del tuo download.
-- Lo Sviluppatore non assume alcuna responsabilita' per eventuali danni derivanti da download da fonti non ufficiali.
+### 7.3 Esonero di Responsabilita' per Build Non Ufficiali
+Lo Sviluppatore declina ogni responsabilita' per danni, malware o perdite finanziarie derivanti dall'installazione di build dell'App scaricate da fonti non autorizzate o modificate da terzi.
 
 ---
 
-## 8. Dipendenza dalla Rete Ravencoin
+## 8. Dipendenza dalla Rete e Distinzione dell'Infrastruttura
 
-L'App dipende dalla rete blockchain Ravencoin e dall'infrastruttura associata, inclusi nodi RPC e gateway IPFS, gestiti da terze parti indipendenti. Lo Sviluppatore non e' responsabile per:
-
-- Indisponibilita' o interruzioni della rete Ravencoin o di qualsiasi nodo.
-- Congestione della rete che causa transazioni ritardate o fallite.
-- Modifiche al protocollo Ravencoin che influenzano la funzionalita' dell'App.
-- Scissioni o fork della rete Ravencoin.
+L'App dipende dal corretto funzionamento della rete Ravencoin. Lo Sviluppatore non e' responsabile per interruzioni di rete, forchetta (fork) della blockchain o indisponibilita' di nodi di terze parti. Per quanto riguarda l'infrastruttura gestita dallo Sviluppatore (`electrumx.raventag.com`), lo Sviluppatore adotta ragionevoli misure per garantirne la disponibilita' senza rilascio di garanzie di uptime ininterrotto.
 
 ---
 
-## 8. Limitazione di Responsabilita'
+## 9. Limitazione di Responsabilita'
 
 Nella misura massima consentita dalla legge applicabile:
-
-- L'App e' fornita "COSI' COM'E'" senza alcuna garanzia di alcun tipo.
-- Lo Sviluppatore non sara' responsabile per danni diretti, indiretti, incidentali, speciali, consequenziali o punitivi, inclusi ma non limitati a perdita di fondi, perdita di dati, perdita di profitti o interruzione dell'attivita', derivanti dall'uso o dall'impossibilita' di utilizzare l'App.
-- La responsabilita' aggregata totale dello Sviluppatore nei tuoi confronti per qualsiasi reclamo derivante da o correlato a questi Termini o all'App non superera' zero euro (EUR 0), poiche' l'App e' fornita gratuitamente.
-
-### 8.1 Esonero di Responsabilita' Specifico per Build Non Ufficiali
-
-Fermo restando quanto previsto da qualsiasi altra disposizione in questi Termini:
-
-- **Nessuna responsabilita' per build non ufficiali**: Lo Sviluppatore declina espressamente ogni responsabilita', sia in sede di illecito civile, contrattuale o altrimenti, per eventuali danni, perdite, incidenti di sicurezza, violazioni di dati, perdite finanziarie, furti di identita' o altri danni derivanti dall'uso di applicazioni RavenTag ottenute da qualsiasi fonte diversa dai canali ufficiali elencati nella Sezione 7.1.
-- **Assunzione del rischio da parte dell'utente**: Scaricando l'App da qualsiasi fonte diversa dai canali ufficiali, riconosci espressamente di farlo a tuo rischio e ti assumi la piena ed esclusiva responsabilita' per qualsiasi conseguenza derivante da tale download o utilizzo.
-- **Nessuna garanzia per build non ufficiali**: Lo Sviluppatore non rilascia dichiarazioni o garanzie di alcun tipo, espresse o implicite, riguardo a qualsiasi applicazione ottenuta da fonti non ufficiali. Tali applicazioni sono fornite "COSI' COM'E'" con tutti i difetti e senza alcuna garanzia.
-- **Esclusione da supporto e aggiornamenti**: Le applicazioni ottenute da fonti non ufficiali non sono coperte da questi Termini, non hanno diritto a ricevere aggiornamenti o patch di sicurezza e non sono idonee per alcuna forma di supporto tecnico da parte dello Sviluppatore.
+- L'App e' fornita "COSI' COM'E'" e "COME DISPONIBILE" senza garanzie di alcun tipo.
+- Lo Sviluppatore non sara' responsabile per danni diretti, indiretti, speciali o consequenziali (inclusa la perdita di fondi crypto, profitti o dati) derivanti dall'uso o dall'impossibilita' di utilizzare l'App.
+- Poiche' l'App e' distribuita gratuitamente, la responsabilita' complessiva dello Sviluppatore e' limitata a zero euro (EUR 0).
 
 ---
 
 ## 10. Modifiche all'App e ai Termini
 
-Lo Sviluppatore si riserva il diritto di:
-
-- Modificare, sospendere o interrompere l'App o qualsiasi sua funzionalita' in qualsiasi momento, con o senza preavviso.
-- Aggiornare questi Termini in qualsiasi momento. I Termini aggiornati saranno pubblicati all'interno dell'App e nel repository del progetto. L'uso continuato dell'App dopo qualsiasi aggiornamento costituisce accettazione dei Termini rivisti.
+Lo Sviluppatore si riserva il diritto di aggiornare o modificare l'App e i presenti Termini in qualsiasi momento. L'uso continuato dell'App costituisce accettazione delle modifiche.
 
 ---
 
 ## 11. Legge Applicabile e Giurisdizione
 
-Questi Termini sono disciplinati e interpretati in conformita' con le leggi italiane, incluso il Codice del Consumo italiano (D.Lgs. 206/2005) ove applicabile, il Codice Civile italiano e il Decreto Legislativo 231/2007 sull'antiriciclaggio ove rilevante.
-
-Qualsiasi controversia derivante da questi Termini sara' soggetta alla giurisdizione dei tribunali italiani competenti. Nonostante quanto precede, potresti avere anche il diritto di avviare procedimenti presso i tribunali del tuo paese di residenza ai sensi delle leggi applicabili sulla protezione dei consumatori dell'UE.
+Questi Termini sono disciplinati dalla legge italiana. Qualsiasi controversia sara' devoluta alla competenza esclusiva dei tribunali italiani, fatti salvi i diritti inderogabili previsti a tutela dei consumatori.
 
 ---
 
 ## 12. Nullita' Parziale
 
-Se una disposizione di questi Termini viene ritenuta non valida o inapplicabile, le disposizioni rimanenti continueranno ad avere piena forza ed effetto.
+Qualora una clausola sia ritenuta non valida o inapplicabile, le restanti clausole rimarranno pienamente valide ed efficaci.
 
 ---
 
 ## 13. Accordo Completo
 
-Questi Termini, insieme all'Informativa sulla Privacy, costituiscono l'accordo completo tra te e lo Sviluppatore riguardo all'utilizzo dell'App. Sostituiscono tutti gli accordi, le dichiarazioni e le intese precedenti.
+I presenti Termini e l'Informativa sulla Privacy costituiscono l'intero accordo tra l'Utente e lo Sviluppatore.
 
 ---
 
 ## 14. Contatti
 
-Per qualsiasi domanda relativa a questi Termini, contatta lo Sviluppatore a:
-https://github.com/ALENOC/RavenTag
-legal@raventag.com
-
----
-
-*RavenTag Verify e' un progetto open-source concesso in licenza sotto la RavenTag Source License (RTSL-1.0).*
-*Codice sorgente: https://github.com/ALENOC/RavenTag*
+**Alessandro Nocentini**
+GitHub: https://github.com/ALENOC/RavenTag
+Email: legal@raventag.com
