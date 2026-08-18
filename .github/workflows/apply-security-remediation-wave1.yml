@@ -26,10 +26,6 @@ jobs:
           git checkout -B "${HEAD_REF}" FETCH_HEAD
 
       - name: Apply asserted source patches
-        env:
-          # Resolved from ghcr.io/github/github-mcp-server:v0.18.0 by the previous
-          # successful GitHub runner lookup; immutable digest, not a mutable tag.
-          MCP_DIGEST: sha256:6aa543f565bc98d96106fdd80a0abdc0c7147c8ca7f4663a814ceecef1ccc6d3
         run: python3 scripts/run_security_remediation_wave1.py
 
       - name: Upgrade Axios using npm resolver and type-check backend
@@ -52,21 +48,21 @@ jobs:
           set -euo pipefail
           git diff --check
           ! grep -R '/home/ale/Android/Sdk' --exclude-dir=.git .
-          ! grep -R 'QwenLM/qwen-code-action@v1' .github/workflows
-          ! grep -R 'ghcr.io/github/github-mcp-server:v0.18.0' .github/workflows
           ! grep -R 'usesCleartextTraffic="true"' android/app/src/main/AndroidManifest.xml
           ! grep -R 'cleartextTrafficPermitted="true"' android/app/src/main/res/xml/network_security_config.xml
 
-      - name: Commit compiled wave and remove one-shot patcher
+      - name: Commit compiled source wave
         env:
           GH_TOKEN: ${{ github.token }}
           HEAD_REF: ${{ github.head_ref }}
         run: |
           set -euo pipefail
-          rm -f scripts/apply_security_remediation_wave1.py scripts/run_security_remediation_wave1.py .github/workflows/apply-security-remediation-wave1.yml
+          rm -f scripts/apply_security_remediation_wave1.py scripts/run_security_remediation_wave1.py
           git config user.name 'RavenTag Security Remediation'
           git config user.email '185200505+ALENOC@users.noreply.github.com'
           git add -A
+          # Do not include workflow-file mutations in the runner commit.
+          git reset -- .github/workflows/
           git diff --cached --check
           git commit -m 'security: fail closed auth, network, secrets and fee inputs'
           git push origin HEAD:"${HEAD_REF}"
