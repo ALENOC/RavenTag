@@ -19,7 +19,7 @@ Diese Bedingungen stellen eine rechtsverbindliche Vereinbarung zwischen Ihnen un
 
 ---
 
-## 2. Beschreibung der App
+## 2. Beschreibung der App und Lizenznatur
 
 RavenTag Verify ist eine mobile Anwendung, die Folgendes bietet:
 
@@ -27,7 +27,9 @@ RavenTag Verify ist eine mobile Anwendung, die Folgendes bietet:
 - **Nicht-verwahrendes Ravencoin-Wallet**: Generierung, lokale Speicherung und autonome Verwaltung eines nicht-verwahrenden (non-custodial) BIP39/BIP44 HD-Wallets für die Ravencoin-Blockchain (RVN).
 - **Asset-Verwaltung** (nur Marken-Version): Ausgabe, Übertragung und lokale Verwaltung von Ravencoin-Assets.
 
-Die App ist ein Software-Tool zur Interaktion mit der Ravencoin-Blockchain in Eigenverwahrung. Sie ist kein Finanzdienst, keine Börse, keine Bank und kein Finanzprodukt.
+Die App ist ein Software-Tool zur Interaktion in Eigenverwahrung (Self-Custody) mit der Ravencoin-Blockchain und NFC-Hardware. Sie ist kein Finanzdienst, keine Börse, keine Bank und kein Finanzprodukt.
+
+Die App und der Quellcode stehen unter der **RavenTag Source License (RTSL-1.0)**, einer Lizenz für Software mit öffentlich zugänglichem Quellcode (source-available software), die bestimmte kommerzielle Nutzungen einschränkt. RavenTag stellt keine Open-Source-Software gemäß OSI-Definitionen dar.
 
 ---
 
@@ -41,8 +43,8 @@ Die NFC-Verifizierungsfunktion ist für jeden Verbraucher bestimmt, der die Echt
 ### 3.2 Wallet-Funktionalität und Eigenverwahrung (Self-Custody)
 Die Ravencoin-Wallet-Funktion beinhaltet Eigenverwahrung (Self-Custody), direkte Verwaltung und Übertragung digitaler Vermögenswerte auf einer öffentlichen Blockchain. Sie handeln in voller Eigenverantwortung auf eigenes finanzielles Risiko.
 
-### 3.3 Quellcode und Infrastruktur
-Die Beschränkung der kommerziellen Nutzung in der RavenTag Source License (RTSL-1.0) gilt ausschließlich für Entwickler und Unternehmen, die den Quellcode nutzen. Endnutzer der App sind davon nicht betroffen.
+### 3.3 Quellcode und RTSL-1.0-Lizenz
+Die Beschränkung der kommerziellen Nutzung in der Source-Available-Lizenz RTSL-1.0 gilt ausschließlich für Entwickler und Unternehmen, die den Quellcode nutzen. Endnutzer der App sind davon nicht betroffen.
 
 ---
 
@@ -64,35 +66,35 @@ Für jede über die App ausgeführte Transaktion:
 
 Die ElectrumX-Infrastruktur besitzt keine privaten Schlüssel der Nutzer, kann keine eigenen Signaturen erstellen, entscheidet nicht über Empfänger/Beträge und führt keine Verwahrkonten.
 
-### 4.3 Mnemonic-Phrase (Seed-Phrase)
+### 4.3 Mnemonic-Phrase (Seed-Phrase) und Nutzerverantwortung
 Sie müssen Ihre 12-Wörter BIP39 Mnemonic-Phrase sofort handschriftlich notieren und sicher offline aufbewahren. **Der Verlust Ihrer Seed-Phrase führt zum dauerhaften und unwiederbringlichen Verlust aller Gelder.**
 
 ### 4.4 Gerätesicherheit
-Sie sind für die Sicherheit Ihres Geräts selbst verantwortlich.
+Sie sind für die Sicherheit Ihres Geräts selbst verantwortlich. Der Entwickler haftet nicht für Schäden durch Malware, Verlust des Geräts oder rooted/jailbroken Betriebssysteme.
 
 ---
 
 ## 5. Blockchain-, Finanzrisiken und regulatorischer Rahmen
 
 ### 5.1 Natur von Ravencoin und Netzwerkinfrastruktur
-- **Entwickler-Infrastruktur**: Der Entwickler betreibt den öffentlichen ElectrumX-Endpunkt `electrumx.raventag.com` / `electrum.raventag.com`.
+- **Vom Entwickler betriebene Infrastruktur**: Der Entwickler betreibt den öffentlichen ElectrumX-Endpunkt `electrumx.raventag.com` / `electrum.raventag.com`. Diese stellt keine Drittanbieter-Infrastruktur dar.
 - **Unabhängige Infrastruktur Dritter**: Die App kann mit unabhängigen Knoten Dritter interagieren.
 - **Rolle von Ravencoin Core-Knoten**: Ein öffentlicher Core-Knoten führt Validierungs- und Weiterleitungsfunktionen aus. Er verwahrt keine Gelder und besitzt keine privaten Schlüssel.
 
-### 5.2 Finanzrisiko und Unumkehrbarkeit
+### 5.2 Finanzrisiko, Volatilität und Unumkehrbarkeit
 Transaktionen auf der Ravencoin-Blockchain sind **unumkehrbar**. Netzwerkeinzahlungen und Transaktionsgebühren sind nicht erstattungsfähig.
 
 ### 5.3 Keine Finanzberatung
-Kein Inhalt dieser App stellt eine Finanz- oder Anlageberatung dar.
+Kein Inhalt dieser App stellt eine Finanz-, Anlage-, Rechts- oder Steuerberatung dar.
 
 ### 5.4 Regulatorischer Rahmen (MiCA)
-RavenTag wird als nicht-verwahrende Open-Source-Software bereitgestellt. Der Entwickler hält keine privaten Schlüssel der Nutzer und übt keine Kontrolle oder Verwahrung über Vermögenswerte der Nutzer aus. Die Übertragung signierter Transaktionen über ElectrumX-Server stellt eine rein technische Datenweiterleitung dar.
+RavenTag wird als nicht-verwahrende Source-Available-Software bereitgestellt. Der Entwickler hält keine privaten Schlüssel der Nutzer und übt keine Kontrolle oder Verwahrung über Vermögenswerte aus.
 
 ---
 
-## 6. NFC-Hardware und Verifizierungsergebnisse
+## 6. NFC-Hardware und IPFS-Metadaten Dritter
 
-Die Verifizierungsergebnisse basieren auf kryptografischen Prüfungen. Ein positives Ergebnis stellt keine absolute rechtliche Echtheitsgarantie dar.
+Verifizierungsergebnisse basieren auf kryptografischen Prüfungen. Inhalte von IPFS-Gateways Dritter werden von unabhängigen Parteien erstellt.
 
 ---
 
@@ -102,51 +104,63 @@ Die Verifizierungsergebnisse basieren auf kryptografischen Prüfungen. Ein posit
 1. **GitHub Releases** (https://github.com/ALENOC/RavenTag/releases)
 2. **Google Play Store** (für die Verify-App)
 
-### 7.2 Signaturprüfung
-Offizielle Releases sind vom Entwickler signiert und können mit `apksigner` überprüft werden.
-
-### 7.3 Haftungsausschluss für inoffizielle Builds
+### 7.2 Haftungsausschluss für inoffizielle Builds
 Der Entwickler lehnt jede Haftung für Schäden ab, die durch die Nutzung inoffizieller oder veränderter Builds entstehen.
 
 ---
 
-## 8. Netzwerkabhängigkeit
+## 8. Netzwerkabhängigkeit und Infrastrukturverfügbarkeit
 
-Die App hängt vom Ravencoin-Netzwerk ab. Für die vom Entwickler betriebene Infrastruktur (`electrumx.raventag.com`) werden angemessene Maßnahmen zur Verfügbarkeit ergriffen, ohne Uptime-Garantien zu geben.
-
----
-
-## 9. Haftungsbeschränkung
-
-Die App wird "WIE GESEHEN" ohne Garantien bereitgestellt. Die Gesamthaftung des Entwicklers ist auf null Euro (EUR 0) beschränkt, da die App kostenlos bereitgestellt wird.
+Für die vom Entwickler betriebene Infrastruktur (`electrumx.raventag.com`) werden angemessene Maßnahmen ergriffen, ohne Uptime-Garantien oder eine Pflicht zur ewigen Wartung einzugehen.
 
 ---
 
-## 10. Änderungen der App und Bedingungen
+## 9. Allgemeine Haftungsbeschränkung und Salvatorische Klausel
 
-Der Entwickler behält sich das Recht vor, die App und diese Bedingungen jederzeit zu aktualisieren.
+### 9.1 Ausschluss indirekter Schäden
+Soweit gesetzlich zulässig, haftet der Entwickler nicht für indirekte Schäden, Folgeschäden oder entgangenen Gewinn.
 
----
+### 9.2 Haftungshöchstgrenze
+Da die App kostenlos bereitgestellt wird:
+- Für gewerbliche Nutzer ist die Haftung im gesetzlich maximal zulässigen Umfang auf null Euro (EUR 0) beschränkt.
+- Für Verbraucher ist die Haftung auf das gesetzlich zwingend vorgeschriebene Mindestmaß beschränkt.
 
-## 11. Anwendbares Recht und Gerichtsstand
-
-Diese Bedingungen unterliegen italienischem Recht. Gerichtsstand sind die zuständigen italienischen Gerichte.
-
----
-
-## 12. Salvatorische Klausel
-
-Sollte eine Bestimmung unwirksam sein, bleiben die übrigen Bestimmungen in vollem Umfang wirksam.
+### 9.3 Zwingende gesetzliche Vorbehaltsklausel
+Nichts in diesen Bedingungen schließt die Haftung des Entwicklers für Vorsatz oder grobe Fahrlässigkeit (Art. 1229 ital. ZGB) oder nach zwingendem Verbraucherschutzrecht aus.
 
 ---
 
-## 13. Gesamte Vereinbarung
+## 10. Kein Treuhandverhältnis und keine Überwachungspflicht
+
+Die Nutzung begründet kein Treuhandverhältnis. Der Entwickler ist nicht verpflichtet, Nutzeraktivitäten zu überwachen.
+
+---
+
+## 11. Änderungen der App und Bedingungen
+
+Der Entwickler behält sich das Recht vor, die App und diese Bedingungen aus berechtigten Gründen anzupassen.
+
+---
+
+## 12. Anwendbares Recht und Gerichtsstand
+
+Es gilt italienisches Recht. Zwingende Verbraucherschutzrechte nach der Rom-I-Verordnung bleiben unberührt.
+
+---
+
+## 13. Salvatorische Klausel und Keine Verwirkung
+
+Sollte eine Bestimmung unwirksam sein, bleiben die übrigen Bestimmungen wirksam.
+
+---
+
+## 14. Gesamte Vereinbarung
 
 Diese Bedingungen und die Datenschutzrichtlinie bilden die gesamte Vereinbarung.
 
 ---
 
-## 14. Kontaktinformationen
+## 15. Kontaktinformationen
 
 **Alessandro Nocentini**
 GitHub: https://github.com/ALENOC/RavenTag

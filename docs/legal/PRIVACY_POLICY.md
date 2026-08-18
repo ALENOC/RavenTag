@@ -13,7 +13,7 @@
 
 This Privacy Policy describes how RavenTag Verify ("App"), developed by Alessandro Nocentini ("Developer", "we", "us"), collects, uses, and protects information when you use the App.
 
-The Developer is committed to data minimisation. The App is designed as non-custodial software and operates with the minimum amount of network and technical data strictly necessary for its functionality.
+The Developer is committed to data minimisation. The App is designed as non-custodial software under a source-available license and operates with the minimum amount of network and technical data strictly necessary for its functionality.
 
 This Privacy Policy complies with:
 - EU General Data Protection Regulation (GDPR - Regulation EU 2016/679)
@@ -24,7 +24,7 @@ This Privacy Policy complies with:
 
 ## 2. Data Controller and Infrastructure Categories
 
-RavenTag is an open-source protocol. The App may interact with infrastructure operated directly by the Developer, as well as independent third-party or brand-operated infrastructure.
+RavenTag is a protocol and software with publicly available source code (source-available software). The App may interact with infrastructure operated directly by the Developer, as well as independent third-party or brand-operated infrastructure.
 
 ### 2.1 Developer-operated demo backend
 The Developer operates a backend instance at `raventag.com` (e.g. `api.raventag.com`) for demonstration, infrastructure testing, and asset verification purposes. If you use an instance of the App connected to this demo backend, the data controller for server-side verification data and network logs (Section 3.2) is:
@@ -34,7 +34,7 @@ Contact: https://github.com/ALENOC/RavenTag
 Email: legal@raventag.com
 
 ### 2.2 Developer-operated ElectrumX infrastructure
-The Developer operates a public ElectrumX endpoint (e.g. `electrumx.raventag.com` / `electrum.raventag.com`) deployed in front of a dedicated Ravencoin Core node. When the App connects to this specific endpoint for blockchain queries or transaction broadcasting, the processing of connection metadata is managed by the Developer under this Policy. This infrastructure does not constitute a third-party service.
+The Developer operates a public ElectrumX endpoint (e.g. `electrumx.raventag.com` / `electrum.raventag.com`) deployed in front of a dedicated Ravencoin Core node. When the App connects to this specific endpoint for blockchain queries or transaction broadcasting, the processing of connection metadata is managed by the Developer under this Policy. This Developer-operated infrastructure does not constitute a third-party service.
 
 ### 2.3 Brand-operated backend (production use)
 In production, brands and manufacturers deploy their own backend infrastructure. When you use an instance of the App configured to connect to a specific brand's backend, that brand is the independent data controller for data processed by its servers. The Developer has no access to and assumes no responsibility for data processed by third-party brand backends.
@@ -91,7 +91,7 @@ A public or network ElectrumX server may observe connection data and metadata su
 Depending on wallet query patterns, such information may technically permit correlations between network identifiers (such as the IP address) and public blockchain activity.
 
 > **Explicit Security Disclosure:**
-> Private keys and seed phrases are not required by the ElectrumX server and are not transmitted to it during normal wallet operation.
+> Private keys and seed phrases are never required by the ElectrumX server and are not transmitted as part of normal wallet operation.
 
 **B. Transaction creation and signing workflow:**
 For every transaction executed by the wallet:
@@ -147,7 +147,7 @@ Network communication between the App and Developer-operated infrastructure occu
 
 - **Device Data**: Retained until wallet deletion or App uninstallation.
 - **Developer-operated Backend Logs**: Retained for a maximum of 30 days (in accordance with automated log cleanup routines in backend code) and subsequently permanently deleted.
-- **Developer-operated ElectrumX Infrastructure Logs**: Retained for the minimum period strictly necessary for network diagnostics and security.
+- **Developer-operated ElectrumX and Network Logs**: Retained for the minimum period strictly necessary for network diagnostics and security per operator deployment settings.
 - **Public Ravencoin Blockchain Data**: Transactions confirmed on the Ravencoin blockchain are permanently public and cannot be modified, erased, or removed by the Developer or third parties.
 
 ---
@@ -166,7 +166,7 @@ No blanket or absolute claims of "full GDPR compliance" are made; technical and 
 
 ## 8. Your Rights Under GDPR
 
-If you reside in the European Economic Area, you have the right to exercise against the Developer (limited to data processed by Developer-operated servers, such as network logs):
+Where applicable under the GDPR, you have the right to exercise against the Developer (limited to data processed by Developer-operated servers, such as network logs):
 - Right of Access (Art. 15 GDPR);
 - Right to Rectification (Art. 16 GDPR);
 - Right to Erasure / Right to be Forgotten (Art. 17 GDPR), subject to immutable data already recorded on the public blockchain;
@@ -193,7 +193,7 @@ Developer-operated infrastructure is hosted within secure data centers located i
 
 ## 11. Regulatory Framework and MiCA Terminology
 
-RavenTag is designed and distributed as non-custodial open-source software. The Developer does not hold users' private keys, exercise control or custody over users' crypto-assets (RVN or tokens), or provide crypto-asset custody or administration services on behalf of third parties under Regulation (EU) 2023/1114 (MiCA). The activity of Developer-operated ElectrumX infrastructure consists of technical routing of network data and signed transactions over an open protocol.
+RavenTag is designed and distributed as non-custodial software under the source-available RavenTag Source License (RTSL-1.0). The Developer does not hold users' private keys, exercise control or custody over users' crypto-assets (RVN or tokens), or provide crypto-asset custody or administration services on behalf of third parties under Regulation (EU) 2023/1114 (MiCA). The activity of Developer-operated ElectrumX infrastructure consists of technical routing of network data and signed transactions over an open protocol.
 
 ---
 

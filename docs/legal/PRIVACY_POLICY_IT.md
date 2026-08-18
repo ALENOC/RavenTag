@@ -13,7 +13,7 @@
 
 Questa Informativa sulla Privacy descrive come RavenTag Verify ("App"), sviluppata da Alessandro Nocentini ("Sviluppatore", "noi", "ci"), raccoglie, utilizza e protegge le informazioni quando utilizzi l'App.
 
-Lo Sviluppatore si impegna a ridurre al minimo la raccolta di dati. L'App e' progettata come software non custodiale e opera con la quantita' minima di dati di rete e tecnici strettamente necessaria al suo funzionamento.
+Lo Sviluppatore si impegna a ridurre al minimo la raccolta di dati. L'App e' progettata come software non custodiale (non-custodial) con licenza source-available e opera con la quantita' minima di dati di rete e tecnici strettamente necessaria al suo funzionamento.
 
 Questa Informativa sulla Privacy e' redatta in conformita' a:
 - Regolamento Generale sulla Protezione dei Dati dell'UE (GDPR - Regolamento UE 2016/679)
@@ -24,7 +24,7 @@ Questa Informativa sulla Privacy e' redatta in conformita' a:
 
 ## 2. Titolare del Trattamento e Categorie di Infrastruttura
 
-RavenTag e' un protocollo open-source. L'App puo' interagire sia con infrastrutture gestite direttamente dallo Sviluppatore, sia con infrastrutture indipendenti di terze parti o di brand.
+RavenTag e' un protocollo e software con codice sorgente disponibile pubblicamente (source-available software). L'App puo' interagire sia con infrastrutture gestite direttamente dallo Sviluppatore, sia con infrastrutture indipendenti di terze parti o di brand.
 
 ### 2.1 Backend demo gestito dallo Sviluppatore
 Lo Sviluppatore gestisce un'istanza backend su `raventag.com` (es. `api.raventag.com`) a scopo dimostrativo, di test dell'infrastruttura e di verifica delle risorse. Se utilizzi un'istanza dell'App connessa a questo backend demo, il titolare del trattamento per i dati di verifica e i log di rete lato server (Sezione 3.2) e':
@@ -34,7 +34,7 @@ Contatti: https://github.com/ALENOC/RavenTag
 Email: legal@raventag.com
 
 ### 2.2 Infrastruttura ElectrumX gestita dallo Sviluppatore
-Lo Sviluppatore gestisce un endpoint pubblico ElectrumX (es. `electrumx.raventag.com` / `electrum.raventag.com`) posto a monte di un nodo Ravencoin Core dedicato. Quando l'App si connette a questo endpoint specifico per l'interrogazione della blockchain o l'inoltro di transazioni, il trattamento dei metadati di connessione e' gestito dallo Sviluppatore ai sensi della presente Informativa. Tale infrastruttura non costituisce un servizio di terze parti.
+Lo Sviluppatore gestisce un endpoint pubblico ElectrumX (es. `electrumx.raventag.com` / `electrum.raventag.com`) posto a monte di un nodo Ravencoin Core dedicato. Quando l'App si connette a questo endpoint specifico per l'interrogazione della blockchain o l'inoltro di transazioni, il trattamento dei metadati di connessione e' gestito dallo Sviluppatore ai sensi della presente Informativa. Tale infrastruttura gestita dallo Sviluppatore non costituisce un servizio di terze parti.
 
 ### 2.3 Backend gestito da brand (uso in produzione)
 In produzione, i brand e i produttori possono distribuire la propria infrastruttura backend. Quando utilizzi un'istanza dell'App configurata per connettersi al backend di un determinato brand, quel brand e' il titolare autonomo del trattamento per i dati elaborati dai propri server. Lo Sviluppatore non ha accesso e non si assume responsabilita' per i dati trattati dai backend di brand di terze parti.
@@ -91,7 +91,7 @@ Un server ElectrumX pubblico o di rete puo' osservare dati e metadati di conness
 In base ai modelli di interrogazione del wallet, tali informazioni possono tecnicamente permettere correlazioni tra identificativi di rete (come l'indirizzo IP) e l'attivita' sulla blockchain pubblica.
 
 > **Dichiarazione Esplicita di Sicurezza:**
-> Le chiavi private e le frasi mnemoniche non sono necessarie per il server ElectrumX e non vengono mai trasmesse ad esso durante il normale funzionamento del wallet.
+> Le chiavi private e le frasi mnemoniche non sono mai necessarie per il server ElectrumX e non vengono trasmesse ad esso durante il normale funzionamento del wallet.
 
 **B. Processo di creazione e firma delle transazioni:**
 Per ogni transazione eseguita dal wallet:
@@ -110,7 +110,7 @@ Un nodo pubblico Ravencoin Core svolge esclusivamente funzioni infrastrutturali 
 Per la visualizzazione di immagini di asset ospitate su IPFS, l'App puo' connettersi a gateway IPFS pubblici (es. ipfs.io, cloudflare-ipfs.com). Tali fornitori terzi possono registrare l'indirizzo IP del dispositivo in conformita' alle proprie informative sulla privacy.
 
 ### 3.5 Dati della Fotocamera e NFC
-- **Fotocamera**: utilizzata esclusivamente sul dispositivo per la lettura di codici QR in tempo reale; nessun dato visivo viene salvato o trasmesso.
+- **Fotocamera**: utilizzata esclusivamente sul dispositivo per la lettura di codici QR in tempo realtime; nessun dato visivo viene salvato o trasmesso.
 - **NFC**: la lettura dei tag avviene localmente; solo i parametri di verifica derivati (asset, e, m) vengono trasmessi al backend come descritto nella Sezione 3.2.
 
 ### 3.6 Dati che Non Raccogliamo
@@ -147,7 +147,7 @@ Le comunicazioni di rete tra l'App e le infrastrutture gestite dallo Sviluppator
 
 - **Dati sul dispositivo**: conservati fino alla cancellazione del wallet o alla disinstallazione dell'App.
 - **Log del backend gestito dallo Sviluppatore**: conservati per un massimo di 30 giorni (in conformita' alla routine automatica di pulizia dei log implementata nel codice backend), e successivamente eliminati in modo permanente.
-- **Log dell'infrastruttura ElectrumX dello Sviluppatore**: conservati per il tempo minimo strettamente necessario a finalita' di diagnostica e sicurezza di rete.
+- **Log dell'infrastruttura ElectrumX e di rete dello Sviluppatore**: conservati per il tempo minimo strettamente necessario a finalita' di diagnostica e sicurezza di rete secondo le configurazioni dell'operatore.
 - **Dati sulla blockchain pubblica Ravencoin**: le transazioni confermate sulla blockchain Ravencoin sono permanentemente pubbliche e non possono essere modificate, cancellate o rimosse dallo Sviluppatore o da terzi.
 
 ---
@@ -166,7 +166,7 @@ Non si rilascia alcuna dichiarazione generica o assoluta di "totale conformita' 
 
 ## 8. I Tuoi Diritti ai Sensi del GDPR
 
-Se risiedi nello Spazio Economico Europeo, hai il diritto di esercitare nei confronti dello Sviluppatore (limitatamente ai dati elaborati dai propri server gestiti, quali i log di rete):
+Ove applicabile ai sensi del GDPR, hai il diritto di esercitare nei confronti dello Sviluppatore (limitatamente ai dati elaborati dai propri server gestiti, quali i log di rete):
 - Diritto di accesso (Art. 15 GDPR);
 - Diritto di rettifica (Art. 16 GDPR);
 - Diritto alla cancellazione / oblio (Art. 17 GDPR), fatte salve le informazioni immutabili gia' iscritte sulla blockchain pubblica;
@@ -193,7 +193,7 @@ Le infrastrutture gestite dallo Sviluppatore sono collocate all'interno di data 
 
 ## 11. Inquadramento Normativo e Termini MiCA
 
-RavenTag e' progettato e distribuito come software non custodiale e open-source. Lo Sviluppatore non detiene le chiavi private degli utenti, non esercita alcun controllo o custodia sui crypto-asset (RVN o token) degli utenti, e non fornisce servizi di custodia o amministrazione di cripto-attivita' per conto di terzi ai sensi del Regolamento (UE) 2023/1114 (MiCA). L'attivita' dell'infrastruttura ElectrumX gestita dallo Sviluppatore consiste nell'inoltro tecnico di dati di rete e transazioni firmate su protocollo aperto.
+RavenTag e' progettato e distribuito come software non custodiale con licenza source-available (RavenTag Source License RTSL-1.0). Lo Sviluppatore non detiene le chiavi private degli utenti, non esercita alcun controllo o custodia sui crypto-asset (RVN o token) degli utenti, e non fornisce servizi di custodia o amministrazione di cripto-attivita' per conto di terzi ai sensi del Regolamento (UE) 2023/1114 (MiCA). L'attivita' dell'infrastruttura ElectrumX gestita dallo Sviluppatore consiste nell'inoltro tecnico di dati di rete e transazioni firmate su protocollo aperto.
 
 ---
 

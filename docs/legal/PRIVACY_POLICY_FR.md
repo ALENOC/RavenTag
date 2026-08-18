@@ -13,7 +13,7 @@
 
 Cette Politique de Confidentialité décrit comment RavenTag Verify (« Application »), développée par Alessandro Nocentini (« Développeur », « nous »), collecte, utilise et protège les informations lorsque vous utilisez l'Application.
 
-Le Développeur s'engage à la minimisation des données. L'Application est conçue comme un logiciel non-custodial (sans garde) et fonctionne avec la quantité minimale de données techniques et réseau strictement nécessaires à son fonctionnement.
+Le Développeur s'engage à la minimisation des données. L'Application est conçue comme un logiciel non-custodial (sans garde) sous licence source-available et fonctionne avec la quantité minimale de données techniques et réseau strictement nécessaires à son fonctionnement.
 
 Cette Politique de Confidentialité est conforme au :
 - Règlement Général sur la Protection des Données de l'UE (RGPD - Règlement UE 2016/679)
@@ -24,7 +24,7 @@ Cette Politique de Confidentialité est conforme au :
 
 ## 2. Responsable du Traitement et Catégories d'Infrastructure
 
-RavenTag est un protocole open-source. L'Application peut interagir avec des infrastructures gérées directement par le Développeur, ainsi qu'avec des infrastructures indépendantes de tiers ou de marques.
+RavenTag est un protocole et logiciel dont le code source est publiquement disponible (source-available software). L'Application peut interagir avec des infrastructures gérées directement par le Développeur, ainsi qu'avec des infrastructures indépendantes de tiers ou de marques.
 
 ### 2.1 Backend de démonstration géré par le Développeur
 Le Développeur exploite une instance backend sur `raventag.com` (ex. `api.raventag.com`) à des fins de démonstration, de test d'infrastructure et de vérification. Si vous utilisez une instance connectée à ce backend de démonstration, le responsable du traitement pour les données de vérification et journaux serveur (Section 3.2) est :
@@ -34,7 +34,7 @@ Contact : https://github.com/ALENOC/RavenTag
 E-mail : legal@raventag.com
 
 ### 2.2 Infrastructure ElectrumX gérée par le Développeur
-Le Développeur exploite un point d'accès public ElectrumX (ex. `electrumx.raventag.com` / `electrum.raventag.com`) placé en amont d'un nœud Ravencoin Core dédié. Lorsque l'Application se connecte à ce point d'accès pour interroger la blockchain ou relayer des transactions, le traitement des métadonnées de connexion est géré par le Développeur au titre de la présente Politique. Cette infrastructure ne constitue pas un service tiers.
+Le Développeur exploite un point d'accès public ElectrumX (ex. `electrumx.raventag.com` / `electrum.raventag.com`) placé en amont d'un nœud Ravencoin Core dédié. Lorsque l'Application se connecte à ce point d'accès pour interroger la blockchain ou relayer des transactions, le traitement des métadonnées de connexion est géré par le Développeur au titre de la présente Politique. Cette infrastructure gérée par le Développeur ne constitue pas un service tiers.
 
 ### 2.3 Backend géré par une marque (utilisation en production)
 En production, les marques et fabricants déploient leur propre infrastructure backend. Lorsque vous utilisez une Application connectée au backend d'une marque, cette marque est le responsable indépendant du traitement. Le Développeur n'a aucun accès ni responsabilité sur les données traitées par les serveurs tiers des marques.
@@ -91,7 +91,7 @@ Un serveur public ElectrumX peut observer des données et métadonnées de conne
 En raison des modèles de requête, ces informations peuvent techniquement permettre des corrélations entre identifiants réseau (comme l'adresse IP) et l'activité sur la blockchain publique.
 
 > **Déclaration Explicite de Sécurité :**
-> Les clés privées et les phrases mnémoniques ne sont pas requises par le serveur ElectrumX et ne lui sont jamais transmises lors du fonctionnement normal du portefeuille.
+> Les clés privées et les phrases mnémoniques ne sont jamais requises par le serveur ElectrumX et ne sont pas transmises dans le cadre du fonctionnement normal du portefeuille.
 
 **B. Procédure de création et signature des transactions :**
 Pour chaque transaction effectuée par le portefeuille :
@@ -139,7 +139,7 @@ Les données sensibles sur l'appareil sont protégées par un chiffrement AES-25
 
 - **Données de l'Appareil** : Conservées jusqu'à suppression du portefeuille ou désinstallation de l'App.
 - **Journaux Backend du Développeur** : Conservés pendant 30 jours maximum (conformément au code de nettoyage automatique du backend), puis définitivement supprimés.
-- **Journaux ElectrumX du Développeur** : Conservés le temps strictement nécessaire au diagnostic et à la sécurité.
+- **Journaux ElectrumX du Développeur** : Conservés le temps strictement nécessaire au diagnostic et à la sécurité selon configuration.
 - **Données sur la Blockchain Publique Ravencoin** : Les transactions confirmées sur la blockchain sont définitivement publiques et inaltérables.
 
 ---
@@ -152,7 +152,7 @@ Les adresses IP et métadonnées réseau sont traitées selon les principes de m
 
 ## 8. Vos Droits au Titre du RGPD
 
-Si vous résidez dans l'Espace Économique Européen, vous disposez d'un droit d'accès (Art. 15), de rectification (Art. 16), d'effacement (Art. 17), de limitation (Art. 18) et d'opposition (Art. 21 RGPD) sur les journaux serveur du Développeur. Contact : legal@raventag.com
+Lorsque le RGPD s'applique, vous disposez d'un droit d'accès (Art. 15), de rectification (Art. 16), d'effacement (Art. 17), de limitation (Art. 18) et d'opposition (Art. 21 RGPD) sur les journaux serveur du Développeur. Contact : legal@raventag.com
 
 Vous avez le droit d'introduire une réclamation auprès d'une autorité de protection des données.
 
@@ -172,7 +172,7 @@ L'infrastructure du Développeur est située dans des centres de données sécur
 
 ## 11. Cadre Réglementaire et Terminologie MiCA
 
-RavenTag est conçu et distribué comme un logiciel open-source non-custodial (sans garde). Le Développeur ne détient pas les clés privées des utilisateurs, n'exerce aucun contrôle ni garde sur les crypto-actifs (RVN ou tokens) des utilisateurs, et ne fournit pas de services de conservation ou d'administration de crypto-actifs pour le compte de tiers au sens du Règlement (UE) 2023/1114 (MiCA). L'activité de l'infrastructure ElectrumX du Développeur consiste en un acheminement technique de données réseau et de transactions signées.
+RavenTag est conçu et distribué comme un logiciel non-custodial sous licence source-available (RavenTag Source License RTSL-1.0). Le Développeur ne détient pas les clés privées des utilisateurs, n'exerce aucun contrôle ni garde sur les crypto-actifs (RVN ou tokens) des utilisateurs, et ne fournit pas de services de conservation ou d'administration de crypto-actifs pour le compte de tiers au sens du Règlement (UE) 2023/1114 (MiCA). L'activité de l'infrastructure ElectrumX du Développeur consiste en un acheminement technique de données réseau et de transactions signées.
 
 ---
 

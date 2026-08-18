@@ -34,7 +34,7 @@ Contacto: https://github.com/ALENOC/RavenTag
 Correo electrónico: legal@raventag.com
 
 ### 2.2 Infraestructura ElectrumX operada por el Desarrollador
-El Desarrollador opera un punto de acceso público ElectrumX (ej. `electrumx.raventag.com` / `electrum.raventag.com`) situado frente a un nodo Ravencoin Core dedicado. Cuando la Aplicación se conecta a este punto de acceso específico para consultas blockchain o retransmisión de transacciones, el tratamiento de metadatos de conexión es gestionado por el Desarrollador bajo esta Política. Esta infraestructura no constituye un servicio de terceros.
+El Desarrollador opera un punto de acceso público ElectrumX (ej. `electrumx.raventag.com` / `electrum.raventag.com`) situado frente a un nodo Ravencoin Core dedicado. Cuando la Aplicación se conecta a este punto de acceso específico para consultas blockchain o retransmisión de transacciones, el tratamiento de metadatos de conexión es gestionado por el Desarrollador bajo esta Política. Esta infraestructura operada por el Desarrollador no constituye un servicio de terceros.
 
 ### 2.3 Backend operado por marcas (uso en producción)
 En producción, las marcas y fabricantes despliegan su propia infraestructura backend. Cuando utiliza una Aplicación conectada al backend de una marca, esa marca es el responsable independiente del tratamiento de los datos procesados por sus servidores. El Desarrollador no tiene acceso ni asume responsabilidad sobre los datos procesados por servidores de marcas de terceros.
@@ -91,7 +91,7 @@ Un servidor público ElectrumX puede observar datos y metadatos de conexión:
 Debido a los patrones de consulta, esta información puede permitir técnicamente correlaciones entre identificadores de red (como la dirección IP) y la actividad en la blockchain pública.
 
 > **Aviso Explícito de Seguridad:**
-> Las claves privadas y las frases mnemónicas no son requeridas por el servidor ElectrumX y nunca se transmiten a él durante el funcionamiento normal de la cartera.
+> Las claves privadas y las frases mnemónicas nunca son requeridas por el servidor ElectrumX y no se transmiten como parte del funcionamiento normal de la cartera.
 
 **B. Flujo de creación y firma de transacciones:**
 Para cada transacción ejecutada desde la cartera:
@@ -139,7 +139,7 @@ Los datos sensibles en el dispositivo están protegidos mediante cifrado AES-256
 
 - **Datos del Dispositivo**: Conservados hasta la eliminación de la cartera o desinstalación de la App.
 - **Registros del Backend del Desarrollador**: Conservados por un máximo de 30 días (conforme al código de limpieza automática del backend) y posteriormente eliminados permanentemente.
-- **Registros ElectrumX del Desarrollador**: Conservados solo el tiempo estrictamente necesario para diagnóstico y seguridad.
+- **Registros ElectrumX del Desarrollador**: Conservados solo el tiempo estrictamente necesario para diagnóstico y seguridad según configuración.
 - **Datos en la Blockchain Pública Ravencoin**: Las transacciones confirmadas en la blockchain son permanentemente públicas e inalterables.
 
 ---

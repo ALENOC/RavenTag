@@ -13,7 +13,7 @@
 
 Diese Datenschutzrichtlinie beschreibt, wie RavenTag Verify („App“), entwickelt von Alessandro Nocentini („Entwickler“, „wir“, „uns“), Informationen sammelt, verwendet und schützt, wenn Sie die App nutzen.
 
-Der Entwickler verpflichtet sich zur Datenminimierung. Die App ist als nicht-verwahrende (non-custodial) Software konzipiert und arbeitet mit der Mindestmenge an Netz- und Technikdaten, die für ihre Funktion unbedingt erforderlich ist.
+Der Entwickler verpflichtet sich zur Datenminimierung. Die App ist als nicht-verwahrende (non-custodial) Software unter einer Source-Available-Lizenz konzipiert und arbeitet mit der Mindestmenge an Netz- und Technikdaten, die für ihre Funktion unbedingt erforderlich ist.
 
 Diese Datenschutzrichtlinie entspricht:
 - der EU-Datenschutz-Grundverordnung (DSGVO - Verordnung EU 2016/679)
@@ -24,7 +24,7 @@ Diese Datenschutzrichtlinie entspricht:
 
 ## 2. Verantwortlicher für die Datenverarbeitung und Infrastrukturkategorien
 
-RavenTag ist ein Open-Source-Protokoll. Die App kann sowohl mit vom Entwickler direkt betriebener Infrastruktur als auch mit unabhängiger Infrastruktur von Drittanbietern oder Marken interagieren.
+RavenTag ist ein Protokoll und Software mit öffentlich zugänglichem Quellcode (source-available software). Die App kann sowohl mit vom Entwickler direkt betriebener Infrastruktur als auch mit unabhängiger Infrastruktur von Drittanbietern oder Marken interagieren.
 
 ### 2.1 Vom Entwickler betriebenes Demo-Backend
 Der Entwickler betreibt eine Backend-Instanz auf `raventag.com` (z. B. `api.raventag.com`) zu Demonstrations-, Test- und Verifizierungszwecken. Wenn Sie eine App-Instanz nutzen, die mit diesem Demo-Backend verbunden ist, ist der Verantwortliche für serverseitige Verifizierungsdaten und Netzwerkprotokolle (Abschnitt 3.2):
@@ -34,7 +34,7 @@ Kontakt: https://github.com/ALENOC/RavenTag
 E-Mail: legal@raventag.com
 
 ### 2.2 Vom Entwickler betriebene ElectrumX-Infrastruktur
-Der Entwickler betreibt einen öffentlichen ElectrumX-Endpunkt (z. B. `electrumx.raventag.com` / `electrum.raventag.com`) vor einem dedizierten Ravencoin Core-Knoten. Wenn sich die App mit diesem Endpunkt für Blockchain-Abfragen oder Transaktionsübertragungen verbindet, wird die Verarbeitung von Verbindungsmetadaten vom Entwickler im Rahmen dieser Richtlinie verwaltet. Diese Infrastruktur stellt keinen Drittanbieterdienst dar.
+Der Entwickler betreibt einen öffentlichen ElectrumX-Endpunkt (z. B. `electrumx.raventag.com` / `electrum.raventag.com`) vor einem dedizierten Ravencoin Core-Knoten. Wenn sich die App mit diesem Endpunkt für Blockchain-Abfragen oder Transaktionsübertragungen verbindet, wird die Verarbeitung von Verbindungsmetadaten vom Entwickler im Rahmen dieser Richtlinie verwaltet. Diese vom Entwickler betriebene Infrastruktur stellt keinen Drittanbieterdienst dar.
 
 ### 2.3 Von Marken betriebenes Backend (Produktivbetrieb)
 In der Produktion stellen Marken und Hersteller ihre eigene Backend-Infrastruktur bereit. Wenn Sie eine App nutzen, die mit dem Backend einer Marke verbunden ist, ist diese Marke der eigenständige Verantwortliche für die von ihren Servern verarbeiteten Daten. Der Entwickler hat keinen Zugriff und übernimmt keine Verantwortung für Daten auf Marken-Servern Dritter.
@@ -91,7 +91,7 @@ Ein öffentlicher ElectrumX-Server kann Verbindungsdaten und Metadaten beobachte
 Aufgrund von Abfragemustern können diese Informationen technisch Korrelationen zwischen Netzwerkkennungen (wie der IP-Adresse) und öffentlicher Blockchain-Aktivität ermöglichen.
 
 > **Expliziter Sicherheitshinweis:**
-> Private Schlüssel und Mnemonic-Phrasen werden vom ElectrumX-Server nicht benötigt und während des normalen Wallet-Betriebs niemals an diesen übertragen.
+> Private Schlüssel und Mnemonic-Phrasen werden vom ElectrumX-Server niemals benötigt und während des normalen Wallet-Betriebs nicht als Teil des Betriebs übertragen.
 
 **B. Ablauf von Transaktionserstellung und -signierung:**
 Für jede über das Wallet ausgeführte Transaktion:
@@ -139,7 +139,7 @@ Sensible Daten auf dem Gerät sind per AES-256-GCM über das Android Keystore-Sy
 
 - **Gerätedaten**: Gespeichert bis zur Wallet-Löschung oder App-Deinstallation.
 - **Entwickler-Backend-Protokolle**: Maximal 30 Tage aufbewahrt (gemäß automatischem Bereinigungscode) und anschließend dauerhaft gelöscht.
-- **Entwickler-ElectrumX-Protokolle**: Nur so lange aufbewahrt, wie für Diagnosen und Sicherheit unbedingt erforderlich.
+- **Entwickler-ElectrumX-Protokolle**: Nur so lange aufbewahrt, wie für Diagnosen und Sicherheit unbedingt erforderlich nach Betreibereinstellungen.
 - **Öffentliche Ravencoin-Blockchain-Daten**: Transaktionen auf der Blockchain sind dauerhaft öffentlich und unlöschbar.
 
 ---
@@ -152,7 +152,7 @@ IP-Adressen und Netzwerkmetadaten werden nach den DSGVO-Grundsätzen der Datenmi
 
 ## 8. Ihre Rechte nach der DSGVO
 
-Sie haben das Recht auf Auskunft (Art. 15), Berichtigung (Art. 16), Löschung (Art. 17), Einschränkung (Art. 18) und Widerspruch (Art. 21 DSGVO) bezüglich der vom Entwickler verarbeiteten Server-Protokolle. Kontakt: legal@raventag.com
+Soweit nach der DSGVO anwendbar, haben Sie das Recht auf Auskunft (Art. 15), Berichtigung (Art. 16), Löschung (Art. 17), Einschränkung (Art. 18) und Widerspruch (Art. 21 DSGVO) bezüglich der vom Entwickler verarbeiteten Server-Protokolle. Kontakt: legal@raventag.com
 
 Sie haben das Recht auf Beschwerde bei einer Datenschutzbehörde.
 
@@ -172,7 +172,7 @@ Die Infrastruktur des Entwicklers befindet sich in Rechenzentren in der EU oder 
 
 ## 11. Regulatorischer Rahmen und MiCA-Begrifflichkeiten
 
-RavenTag ist als nicht-verwahrende Open-Source-Software konzipiert. Der Entwickler hält keine privaten Schlüssel der Nutzer, übt keine Kontrolle oder Verwahrung über Krypto-Werte (RVN oder Token) aus und erbringt keine Kryptowertpapier-Verwahr- oder Verwaltungsdienste gemäß Verordnung (EU) 2023/1114 (MiCA). Die Tätigkeit der ElectrumX-Infrastruktur beschränkt sich auf das technische Weiterleiten von Netzwerkdaten und signierten Transaktionen.
+RavenTag ist als nicht-verwahrende Software unter der RavenTag Source License (RTSL-1.0) konzipiert. Der Entwickler hält keine privaten Schlüssel der Nutzer, übt keine Kontrolle oder Verwahrung über Krypto-Werte (RVN oder Token) aus und erbringt keine Kryptowertpapier-Verwahr- oder Verwaltungsdienste gemäß Verordnung (EU) 2023/1114 (MiCA). Die Tätigkeit der ElectrumX-Infrastruktur beschränkt sich auf das technische Weiterleiten von Netzwerkdaten und signierten Transaktionen.
 
 ---
 
