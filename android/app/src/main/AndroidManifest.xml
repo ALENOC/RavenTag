@@ -19,6 +19,13 @@
         android:usesCleartextTraffic="true"
         android:networkSecurityConfig="@xml/network_security_config">
 
+        <!-- Runs before MainActivity and invalidates stale local legal acceptance. -->
+        <provider
+            android:name=".legal.LegalAcceptanceInitProvider"
+            android:authorities="${applicationId}.legalacceptanceinit"
+            android:exported="false"
+            android:initOrder="100" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true"
