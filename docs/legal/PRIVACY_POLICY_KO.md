@@ -31,7 +31,7 @@ GitHub: https://github.com/ALENOC/RavenTag
 Email: legal@raventag.com
 
 ### 2.2 개발자가 운영하는 ElectrumX 인프라
-개발자는 현재 프로젝트에서 `electrumx.raventag.com` / `electrum.raventag.com`으로 식별되는 공개 ElectrumX 엔드포인트를 Ravencoin Core 노드와 함께 운영합니다. 앱이 이 엔드포인트를 사용하는 경우 해당 인프라에서 이루어지는 연결 데이터 처리는 제3자 운영자가 아니라 개발자에게 귀속됩니다.
+개발자는 현재 프로젝트에서 `electrumx.raventag.com`으로 식별되는 공개 ElectrumX 엔드포인트를 Ravencoin Core 노드와 함께 운영합니다. 앱이 이 엔드포인트를 사용하는 경우 해당 인프라에서 이루어지는 연결 데이터 처리는 제3자 운영자가 아니라 개발자에게 귀속됩니다.
 
 ### 2.3 브랜드가 운영하는 백엔드
 브랜드 및 제조업체는 독립적인 백엔드 인스턴스를 배포할 수 있습니다. 앱 인스턴스가 브랜드가 운영하는 백엔드를 사용하도록 구성된 경우, 별도의 법적 약정이 없는 한 해당 브랜드가 자체 시스템에서 이루어지는 처리 목적과 수단을 독립적으로 결정합니다.
