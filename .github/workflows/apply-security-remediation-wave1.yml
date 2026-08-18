@@ -26,7 +26,7 @@ jobs:
           git checkout -B "${HEAD_REF}" FETCH_HEAD
 
       - name: Apply asserted financial/security patches
-        run: python3 scripts/run_security_remediation_wave2_v7.py
+        run: python3 scripts/run_security_remediation_wave2_v8.py
 
       - name: Make internal backup opt-in and fail closed
         run: |
@@ -85,7 +85,7 @@ jobs:
           HEAD_REF: ${{ github.head_ref }}
         run: |
           set -euo pipefail
-          rm -f scripts/run_security_remediation_wave2.py scripts/run_security_remediation_wave2_fixed.py scripts/run_security_remediation_wave2_v2.py scripts/run_security_remediation_wave2_v3.py scripts/run_security_remediation_wave2_v4.py scripts/run_security_remediation_wave2_v5.py scripts/run_security_remediation_wave2_v6.py scripts/run_security_remediation_wave2_v7.py scripts/run_security_remediation_wave2_diag.py
+          rm -f scripts/run_security_remediation_wave2.py scripts/run_security_remediation_wave2_fixed.py scripts/run_security_remediation_wave2_v2.py scripts/run_security_remediation_wave2_v3.py scripts/run_security_remediation_wave2_v4.py scripts/run_security_remediation_wave2_v5.py scripts/run_security_remediation_wave2_v6.py scripts/run_security_remediation_wave2_v7.py scripts/run_security_remediation_wave2_v8.py scripts/run_security_remediation_wave2_diag.py
           git config user.name 'RavenTag Security Remediation'
           git config user.email '185200505+ALENOC@users.noreply.github.com'
           git add -A
