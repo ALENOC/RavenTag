@@ -34,8 +34,12 @@ jobs:
           set -euo pipefail
           npm install --save-exact axios@1.19.0 express@4.22.2 express-rate-limit@8.6.2 form-data@4.0.6 multer@2.2.0
           npm install --save-dev --save-exact tsx@4.23.12
+          # Express 4.22.2 accepts the patched 0.1.x path-to-regexp; refresh the
+          # transitive lock entry explicitly instead of taking a breaking Express 5 upgrade.
+          npm update path-to-regexp --package-lock-only
           rm -rf node_modules
           npm ci --ignore-scripts
+          npm explain path-to-regexp
 
       - name: Backend build tests and final dependency audit
         working-directory: backend
@@ -61,7 +65,18 @@ jobs:
           ./gradlew test --console=plain
 
       - name: Generate final remediation and Codex documents
-        run: python3 scripts/write_security_final_docs.py
+        run: |
+          set -euo pipefail
+          python3 scripts/write_security_final_docs.py
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('SECURITY_REMEDIATION_REPORT.md')
+          s=p.read_text()
+          old='- `path-to-regexp` (transitive, high): Express routing dependency; fixed by Express dependency refresh.'
+          new='- `path-to-regexp` (transitive via Express, high): Express routing dependency; the lock is explicitly refreshed to patched `0.1.13`, which remains compatible with Express 4.22.2, avoiding a breaking Express 5 upgrade.'
+          if old not in s: raise SystemExit('dependency report anchor missing')
+          p.write_text(s.replace(old,new,1))
+          PY
 
       - name: Final transformation self-audit
         run: |
@@ -102,7 +117,6 @@ jobs:
           assert 'INTERNAL_BACKUP_ENCRYPTION_KEY_FILE' in index
           assert (root/'SECURITY_REMEDIATION_REPORT.md').exists()
           assert (root/'CODEX_DYNAMIC_SECURITY_TEST_PLAN.md').exists()
-          # All high-risk Qwen action refs must be immutable SHAs and containers digests.
           for p in (root/'.github/workflows').glob('qwen-*.yml'):
               for line in p.read_text().splitlines():
                   if 'qwen-code-action@' in line:
@@ -121,7 +135,6 @@ jobs:
           HEAD_REF: ${{ github.head_ref }}
         run: |
           set -euo pipefail
-          # Remove one-shot patchers/helpers; regression tests and permanent CI remain.
           rm -f scripts/run_security_remediation_wave3.py \
                 scripts/run_security_remediation_wave3_full.py \
                 scripts/run_security_remediation_final.py \
@@ -129,7 +142,6 @@ jobs:
           git config user.name 'RavenTag Security Remediation'
           git config user.email '185200505+ALENOC@users.noreply.github.com'
           git add -A
-          # Workflow files are managed separately by the authorized GitHub connector.
           git reset -- .github/workflows/
           git diff --cached --check
           git commit -m 'security: complete auth-bound storage and dependency remediation'
