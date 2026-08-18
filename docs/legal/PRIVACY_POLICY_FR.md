@@ -19,7 +19,7 @@ Pour les systèmes exploités par le Développeur, lorsque cela est applicable, 
 GitHub : https://github.com/ALENOC/RavenTag  
 E-mail : legal@raventag.com
 
-Le Développeur peut exploiter un backend de démonstration sur `raventag.com` / `api.raventag.com` et un point d’accès ElectrumX public (`electrumx.raventag.com` / `electrum.raventag.com`). Cette infrastructure exploitée par le Développeur n’est pas un service tiers.
+Le Développeur peut exploiter un backend de démonstration sur `raventag.com` / `api.raventag.com` et un point d’accès ElectrumX public (`electrumx.raventag.com`). Cette infrastructure exploitée par le Développeur n’est pas un service tiers.
 
 Des marques et fabricants peuvent exploiter leurs propres backends. L’Application peut également utiliser des nœuds ElectrumX/Ravencoin Core, des passerelles IPFS ou d’autres services indépendants. Le Développeur ne contrôle pas leurs pratiques de journalisation, conservation, sécurité ou confidentialité.
 
