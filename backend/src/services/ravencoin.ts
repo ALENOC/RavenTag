@@ -1,5 +1,6 @@
 import axios, { AxiosInstance } from 'axios'
 import { electrumXService } from './electrumx.js'
+import type { VerboseRavencoinTx } from './registry-issuance.js'
 
 export interface RaventagMetadata {
   raventag_version: 'RTP-1'
@@ -66,7 +67,7 @@ function makeClient(baseUrl: string, user?: string, pass?: string): AxiosInstanc
     const token = Buffer.from(`${user}:${pass}`).toString('base64')
     headers['Authorization'] = `Basic ${token}`
   }
-  return axios.create({ baseURL: baseUrl, headers, timeout: 10000 })
+  return axios.create({ baseURL: baseUrl, headers, timeout: 10000, maxRedirects: 0 })
 }
 
 async function rpcCall<T>(client: AxiosInstance, method: string, params: unknown[] = []): Promise<T> {
@@ -104,6 +105,12 @@ class RavencoinService {
       }
       throw _err
     }
+  }
+
+  /** Get a consensus-decoded transaction from Ravencoin Core. */
+  async getRawTransactionVerbose(txid: string): Promise<VerboseRavencoinTx> {
+    if (!/^[0-9a-fA-F]{64}$/.test(txid)) throw new Error('invalid txid')
+    return await this.call<VerboseRavencoinTx>('getrawtransaction', [txid, true])
   }
 
   /**
