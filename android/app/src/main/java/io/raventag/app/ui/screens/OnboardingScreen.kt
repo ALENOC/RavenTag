@@ -55,6 +55,97 @@ val LANGUAGES = listOf(
 )
 
 /**
+ * Copy used for the separate B2B/Brand specific approval control.
+ *
+ * The checkbox deliberately approves the identified Terms sections, not "Article 1341/1342"
+ * themselves. The statutory reference is shown only as an explanatory note.
+ */
+private data class SpecificApprovalCopy(
+    val prefix: String,
+    val clauses: String,
+    val note: String
+)
+
+private fun specificApprovalCopy(languageCode: String): SpecificApprovalCopy = when (languageCode) {
+    "it" -> SpecificApprovalCopy(
+        prefix = "Approvo specificamente le Sezioni 8, 9 e 12 dei Termini:",
+        clauses = "disponibilità/interruzione, limitazione di responsabilità e legge/foro applicabile",
+        note = "Approvazione specifica ai sensi degli artt. 1341 e 1342 c.c., ove applicabili."
+    )
+    "fr" -> SpecificApprovalCopy(
+        prefix = "J'approuve spécifiquement les Sections 8, 9 et 12 des Conditions :",
+        clauses = "disponibilité/interruption, limitation de responsabilité et droit/juridiction applicables",
+        note = "Approbation spécifique au titre des articles 1341 et 1342 du Code civil italien, lorsqu'ils sont applicables."
+    )
+    "de" -> SpecificApprovalCopy(
+        prefix = "Ich genehmige ausdrücklich die Abschnitte 8, 9 und 12 der Bedingungen:",
+        clauses = "Verfügbarkeit/Einstellung, Haftungsbegrenzung und anwendbares Recht/Gerichtsstand",
+        note = "Besondere Genehmigung nach Art. 1341 und 1342 des italienischen Zivilgesetzbuchs, soweit anwendbar."
+    )
+    "es" -> SpecificApprovalCopy(
+        prefix = "Apruebo específicamente las Secciones 8, 9 y 12 de los Términos:",
+        clauses = "disponibilidad/interrupción, limitación de responsabilidad y ley/jurisdicción aplicables",
+        note = "Aprobación específica conforme a los arts. 1341 y 1342 del Código Civil italiano, cuando resulten aplicables."
+    )
+    "zh" -> SpecificApprovalCopy(
+        prefix = "我明确同意条款第 8、9 和 12 节：",
+        clauses = "可用性/停止服务、责任限制以及适用法律/管辖权",
+        note = "在适用情况下，根据意大利《民法典》第 1341 和 1342 条进行特别确认。"
+    )
+    "ja" -> SpecificApprovalCopy(
+        prefix = "利用規約の第8条、第9条および第12条を個別に承認します：",
+        clauses = "利用可能性・停止、責任制限、準拠法・管轄",
+        note = "適用される場合、イタリア民法第1341条および第1342条に基づく個別承認です。"
+    )
+    "ko" -> SpecificApprovalCopy(
+        prefix = "이용약관 제8조, 제9조 및 제12조를 개별적으로 승인합니다:",
+        clauses = "서비스 가용성/중단, 책임 제한 및 준거법/관할",
+        note = "해당되는 경우 이탈리아 민법 제1341조 및 제1342조에 따른 특별 승인입니다."
+    )
+    "ru" -> SpecificApprovalCopy(
+        prefix = "Я отдельно одобряю разделы 8, 9 и 12 Условий:",
+        clauses = "доступность/прекращение сервиса, ограничение ответственности и применимое право/юрисдикция",
+        note = "Специальное одобрение по ст. 1341 и 1342 Гражданского кодекса Италии, когда они применимы."
+    )
+    else -> SpecificApprovalCopy(
+        prefix = "I specifically approve Sections 8, 9 and 12 of the Terms:",
+        clauses = "availability/discontinuation, limitation of liability, and governing law/jurisdiction",
+        note = "Specific approval under Articles 1341 and 1342 of the Italian Civil Code, where applicable."
+    )
+}
+
+/**
+ * The legal documents describe RavenTag as source-available under RTSL-1.0 rather than OSI
+ * open-source. Keep the onboarding badge consistent without requiring duplicated AppStrings keys.
+ */
+private fun sourceAvailableBadge(languageCode: String, consumer: Boolean): String {
+    if (consumer) {
+        return when (languageCode) {
+            "it" -> "Codice disponibile · Ravencoin"
+            "fr" -> "Code source disponible · Ravencoin"
+            "de" -> "Source-Available · Ravencoin"
+            "es" -> "Código fuente disponible · Ravencoin"
+            "zh" -> "源代码可用 · Ravencoin"
+            "ja" -> "ソース公開 · Ravencoin"
+            "ko" -> "소스 공개 · Ravencoin"
+            "ru" -> "Исходный код доступен · Ravencoin"
+            else -> "Source-Available · Ravencoin"
+        }
+    }
+    return when (languageCode) {
+        "it" -> "Protocollo RTP-1 · Codice disponibile"
+        "fr" -> "Protocole RTP-1 · Code source disponible"
+        "de" -> "Protokoll RTP-1 · Source-Available"
+        "es" -> "Protocolo RTP-1 · Código fuente disponible"
+        "zh" -> "RTP-1 协议 · 源代码可用"
+        "ja" -> "RTP-1 プロトコル · ソース公開"
+        "ko" -> "RTP-1 프로토콜 · 소스 공개"
+        "ru" -> "Протокол RTP-1 · Исходный код доступен"
+        else -> "Protocol RTP-1 · Source-Available"
+    }
+}
+
+/**
  * Onboarding screen shown once on first launch (before [SharedPreferences] key "onboarding_done"
  * is set). Introduces the RavenTag protocol and lets the user select their preferred language.
  *
@@ -95,7 +186,12 @@ fun OnboardingScreen(onComplete: (languageCode: String) -> Unit) {
  *   3. Headline and description text
  *   4. Feature row cards (NTAG, sovereignty, Ravencoin, revocation, NFC writing)
  *   5. Language picker card (3-column grid)
- *   6. "Get Started" button
+ *   6. Legal acceptance card
+ *   7. "Get Started" button
+ *
+ * Consumer builds require acceptance of Terms and Privacy only. Brand builds additionally show a
+ * separate, human-readable approval of the specific B2B clauses potentially relevant under
+ * Articles 1341/1342 of the Italian Civil Code. The user is never asked to "accept Article 1341".
  *
  * @param selectedLang Currently highlighted language code.
  * @param onLangSelect Callback when the user taps a language chip.
@@ -110,6 +206,8 @@ private fun OnboardingContent(
     val s = LocalStrings.current
     var termsAccepted by remember { mutableStateOf(false) }
     var privacyAccepted by remember { mutableStateOf(false) }
+    var specificTermsAccepted by remember { mutableStateOf(false) }
+    val specificApproval = remember(selectedLang) { specificApprovalCopy(selectedLang) }
     val uriHandler = LocalUriHandler.current
     val legalSuffix = if (selectedLang == "en") "" else "_${selectedLang.uppercase()}"
     val termsUrl = "https://github.com/ALENOC/RavenTag/blob/master/docs/legal/TERMS_OF_SERVICE${legalSuffix}.md"
@@ -153,14 +251,14 @@ private fun OnboardingContent(
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        // Protocol version badge: small pill-shaped surface beneath the logo.
+        // Protocol/license badge: keep wording consistent with RTSL-1.0 legal documents.
         Surface(
             color = RavenOrange.copy(alpha = 0.12f),
             shape = RoundedCornerShape(20.dp),
             border = BorderStroke(1.dp, RavenOrange.copy(alpha = 0.3f))
         ) {
             Text(
-                if (BuildConfig.IS_BRAND) s.onboardingBadge else s.onboardingBadgeConsumer,
+                sourceAvailableBadge(selectedLang, consumer = !BuildConfig.IS_BRAND),
                 style = MaterialTheme.typography.labelSmall,
                 color = RavenOrange,
                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
@@ -194,7 +292,6 @@ private fun OnboardingContent(
         Spacer(modifier = Modifier.height(32.dp))
 
         // Feature rows: one card per key protocol feature.
-        // Built dynamically from the features list so new entries only require list changes above.
         Column(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
             features.forEach { (icon, title, desc) ->
                 FeatureRow(icon = icon, title = title, desc = desc)
@@ -204,8 +301,6 @@ private fun OnboardingContent(
         Spacer(modifier = Modifier.height(36.dp))
 
         // Language selector card.
-        // Languages are chunked into rows of 3. The last row may have fewer than 3 items;
-        // invisible Spacer fillers maintain the column widths in that case.
         Card(
             colors = CardDefaults.cardColors(containerColor = RavenCard),
             border = BorderStroke(1.dp, RavenBorder),
@@ -227,7 +322,6 @@ private fun OnboardingContent(
                     ) {
                         row.forEach { lang ->
                             val selected = selectedLang == lang.code
-                            // Orange-tinted chip when selected; transparent when not.
                             Surface(
                                 onClick = { onLangSelect(lang.code) },
                                 shape = RoundedCornerShape(10.dp),
@@ -254,7 +348,6 @@ private fun OnboardingContent(
                                 }
                             }
                         }
-                        // Fill empty cells in the last row so column widths stay consistent.
                         repeat(3 - row.size) {
                             Spacer(modifier = Modifier.weight(1f))
                         }
@@ -265,8 +358,7 @@ private fun OnboardingContent(
 
         Spacer(modifier = Modifier.height(24.dp))
 
-        // Legal acceptance card: Terms of Service and Privacy Policy checkboxes.
-        // The "Get Started" button is disabled until both are checked.
+        // Legal acceptance card.
         Card(
             colors = CardDefaults.cardColors(containerColor = RavenCard),
             border = BorderStroke(1.dp, RavenBorder),
@@ -295,8 +387,27 @@ private fun OnboardingContent(
                     linkText = s.onboardingLegalPrivacy,
                     onLinkClick = { uriHandler.openUri(privacyUrl) }
                 )
+
                 if (BuildConfig.IS_BRAND) {
-                    Spacer(modifier = Modifier.height(4.dp))
+                    HorizontalDivider(
+                        modifier = Modifier.padding(vertical = 8.dp),
+                        color = RavenBorder
+                    )
+                    LegalCheckRow(
+                        checked = specificTermsAccepted,
+                        onCheckedChange = { specificTermsAccepted = it },
+                        prefix = specificApproval.prefix,
+                        linkText = specificApproval.clauses,
+                        onLinkClick = { uriHandler.openUri(termsUrl) }
+                    )
+                    Text(
+                        specificApproval.note,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = RavenMuted,
+                        lineHeight = 15.sp,
+                        modifier = Modifier.padding(start = 50.dp, top = 2.dp)
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
                     Text(
                         s.onboardingLegalRisk,
                         style = MaterialTheme.typography.bodySmall,
@@ -309,11 +420,14 @@ private fun OnboardingContent(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // "Get Started" button: completes onboarding and passes the selected language code
-        // to the caller, which persists it and navigates to the main app.
+        // Consumer builds need Terms + Privacy. Brand/B2B builds additionally require the
+        // separate approval of the identified clauses; the user is not asked to accept a statute.
+        val legalAcceptanceComplete = termsAccepted && privacyAccepted &&
+            (!BuildConfig.IS_BRAND || specificTermsAccepted)
+
         Button(
             onClick = { onComplete(selectedLang) },
-            enabled = termsAccepted && privacyAccepted,
+            enabled = legalAcceptanceComplete,
             modifier = Modifier.fillMaxWidth().height(54.dp),
             colors = ButtonDefaults.buttonColors(
                 containerColor = RavenOrange,
@@ -331,7 +445,7 @@ private fun OnboardingContent(
 }
 
 /**
- * A row with a checkbox and a text containing a tappable link.
+ * A row with a checkbox and text containing a tappable link.
  * Used in the legal acceptance section of the onboarding screen.
  */
 @Composable
@@ -378,13 +492,6 @@ private fun LegalCheckRow(
 
 /**
  * Single feature highlight card used in the onboarding feature list.
- *
- * Layout: 36x36 dp icon box on the left, title + description column on the right.
- * The icon box uses a subtle orange-tinted background to draw the eye without overpowering the text.
- *
- * @param icon Material icon vector representing the feature.
- * @param title Short bold headline for the feature (e.g. "NTAG 424 DNA").
- * @param desc One or two sentence description of the feature benefit.
  */
 @Composable
 private fun FeatureRow(icon: ImageVector, title: String, desc: String) {
@@ -399,7 +506,6 @@ private fun FeatureRow(icon: ImageVector, title: String, desc: String) {
             horizontalArrangement = Arrangement.spacedBy(14.dp),
             verticalAlignment = Alignment.Top
         ) {
-            // Icon container: fixed 36dp square with rounded corners and orange tint.
             Surface(
                 shape = RoundedCornerShape(8.dp),
                 color = RavenOrange.copy(alpha = 0.12f),
