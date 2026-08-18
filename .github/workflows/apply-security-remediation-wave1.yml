@@ -1,4 +1,4 @@
-name: Inspect backend dependency advisories
+name: Resolve compatible backend dependency versions
 
 on:
   pull_request:
@@ -8,10 +8,10 @@ permissions:
   contents: read
 
 jobs:
-  audit:
+  versions:
     if: github.repository == 'ALENOC/RavenTag' && github.head_ref == 'security/full-audit-remediation-2026-08-18'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
       - name: Checkout remediation branch
         env:
@@ -24,20 +24,20 @@ jobs:
           git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${HEAD_REPO}.git"
           git fetch --depth=1 origin "${HEAD_REF}"
           git checkout --detach FETCH_HEAD
-      - name: Install exact backend lockfile
-        working-directory: backend
-        run: npm ci --ignore-scripts
-      - name: Print exact npm audit JSON
+      - name: Resolve latest versions within current major lines
         working-directory: backend
         run: |
+          set -euo pipefail
+          for spec in 'axios@1' 'express@4' 'express-rate-limit@8' 'form-data@4' 'multer@2' 'tsx@4'; do
+            printf '%s = ' "$spec"
+            npm view "$spec" version --json | tail -n 3
+          done
+          npm ci --ignore-scripts >/dev/null
           set +e
-          npm audit --json > /tmp/npm-audit.json
+          npm audit fix --dry-run --json > /tmp/dry.json
           rc=$?
           node - <<'NODE'
-          const a=require('/tmp/npm-audit.json');
-          console.log('AUDIT_METADATA', JSON.stringify(a.metadata||{}));
-          for (const [name,v] of Object.entries(a.vulnerabilities||{})) {
-            console.log('ADVISORY', JSON.stringify({name,severity:v.severity,isDirect:v.isDirect,via:v.via,effects:v.effects,range:v.range,nodes:v.nodes,fixAvailable:v.fixAvailable}));
-          }
+          const a=require('/tmp/dry.json');
+          console.log('DRYRUN', JSON.stringify(a, null, 2).slice(0,30000));
           NODE
-          exit $rc
+          exit 0
