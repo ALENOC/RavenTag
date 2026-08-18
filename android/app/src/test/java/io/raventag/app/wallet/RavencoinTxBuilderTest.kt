@@ -3,6 +3,8 @@ package io.raventag.app.wallet
 import org.bouncycastle.crypto.digests.RIPEMD160Digest
 import org.bouncycastle.jce.ECNamedCurveTable
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.fail
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -701,4 +703,32 @@ class RavencoinTxBuilderTest {
         }
         assertTrue("change output to fresh address must exist", foundChangeOutput)
     }
+    @Test
+    fun foreignNetworkBitcoinAddressIsRejected() {
+        assertFalse(RavencoinTxBuilder.isValidRavencoinMainnetP2pkh("1BoatSLRHtKNngkdXEeobR76b53LETtpyT"))
+    }
+
+    @Test
+    fun builderNeverImplicitlyConvertsNormalSendToMax() {
+        val utxo = Utxo(
+            txid = "11".repeat(32), outputIndex = 0, satoshis = 1_000_000_000L,
+            script = "76a914" + "22".repeat(20) + "88ac",
+            height = 100
+        )
+        val priv = ByteArray(32).also { it[31] = 1 }
+        val pub = ByteArray(33).also { it[0] = 2; it[32] = 1 }
+        try {
+            RavencoinTxBuilder.buildAndSign(
+                utxos = listOf(utxo),
+                toAddress = "R9K8Qpz6rfMe9KvtB7w8KCpzNLKn3D2uGv",
+                amountSat = 990_000_000L,
+                feeSat = 20_000_000L,
+                changeAddress = "R9K8Qpz6rfMe9KvtB7w8KCpzNLKn3D2uGv",
+                privKeyBytes = priv,
+                pubKeyBytes = pub
+            )
+            fail("normal send must fail instead of reducing the recipient amount")
+        } catch (_: IllegalArgumentException) { }
+    }
+
 }

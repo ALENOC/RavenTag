@@ -23,6 +23,9 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import java.util.UUID
 import io.raventag.app.ravencoin.OwnedAsset
 import io.raventag.app.wallet.cache.ReservedUtxoDao
 import io.raventag.app.wallet.cache.PendingConsolidationDao
@@ -38,6 +41,9 @@ class WalletManager(private val context: Context) {
     @Volatile private var addressBatchCache: Map<Int, String> = emptyMap()
     @Volatile private var sweepRunning = false
     @Volatile private var consolidationRunning = false
+
+    /** Serializes the security-critical reserve -> sign -> broadcast transition. */
+    private val financialSigningMutex = Mutex()
 
     // UTXO cache for current address: avoids re-fetching individual asset UTXOs
     // via slow getAssetUtxosFull calls on every send/issuance.
@@ -60,6 +66,56 @@ class WalletManager(private val context: Context) {
         utxoCacheRvn = rvn
         utxoCacheAssetOutpoints = assetOutpoints
         utxoCacheAssets = assets
+    }
+
+    /**
+     * Security boundary for every on-device transaction signature.
+     *
+     * Outpoints are durably reserved under a random intent id BEFORE [build] is
+     * invoked. Once a raw transaction exists the reservation is rebound to the
+     * locally-computed txid before any network I/O. If broadcast is ambiguous or
+     * fails after signing, the reservation deliberately remains in place until
+     * reconciliation proves the transaction absent/stale.
+     */
+    private suspend fun signAndBroadcastReserved(
+        inputs: Collection<Utxo>,
+        broadcaster: suspend (String) -> String,
+        build: () -> RavencoinTxBuilder.SignedTx
+    ): RavencoinTxBuilder.SignedTx = financialSigningMutex.withLock {
+        val uniqueInputs = inputs.distinctBy { "${it.txid}:${it.outputIndex}" }
+        require(uniqueInputs.isNotEmpty()) { "No transaction inputs to reserve" }
+        val intentId = "intent:${UUID.randomUUID()}"
+        val now = System.currentTimeMillis()
+        val entries = uniqueInputs.map {
+            ReservedUtxoDao.ReservedUtxo(
+                txidIn = it.txid,
+                vout = it.outputIndex,
+                valueSat = it.satoshis,
+                submittedTxid = intentId,
+                submittedAt = now
+            )
+        }
+        check(ReservedUtxoDao.tryReserve(entries)) {
+            "UTXO reservation conflict or database failure; transaction not signed"
+        }
+
+        var signed: RavencoinTxBuilder.SignedTx? = null
+        try {
+            signed = build()
+            check(ReservedUtxoDao.retagReservation(intentId, signed.txid)) {
+                "Could not bind UTXO reservation to signed transaction"
+            }
+            val networkTxid = broadcaster(signed.hex)
+            check(networkTxid.equals(signed.txid, ignoreCase = true)) {
+                "Broadcast txid mismatch: local=${signed.txid}, remote=$networkTxid"
+            }
+            signed
+        } catch (t: Throwable) {
+            // Before signing it is safe to release. After signing, retain the
+            // reservation because a network failure may have an ambiguous outcome.
+            if (signed == null) ReservedUtxoDao.releaseFor(intentId)
+            throw t
+        }
     }
 
     companion object {
@@ -800,15 +856,20 @@ class WalletManager(private val context: Context) {
         // If no assets at all (only RVN), just send RVN to targetAddr
         if (primaryName.isEmpty() && otherInputs.isEmpty()) {
             return try {
-                val feeEstimate = 500L * maxOf(satPerByte, 200L)
+                val feeEstimate = FeeSafetyPolicy.calculateFee(500L, maxOf(satPerByte, 200L))
                 val sendAmount = totalRvnIn - feeEstimate
                 if (sendAmount <= 546) return null
-                val tx = RavencoinTxBuilder.buildAndSign(
+                val tx = signAndBroadcastReserved(
+                    inputs = (rvnUtxos),
+                    broadcaster = { raw -> node.broadcastWithAllServers(raw) }
+                ) {
+                    RavencoinTxBuilder.buildAndSign(
                     utxos = rvnUtxos, toAddress = targetAddr, amountSat = sendAmount,
                     feeSat = feeEstimate, changeAddress = targetAddr,
-                    privKeyBytes = privKey, pubKeyBytes = pubKey
+                    privKeyBytes = privKey!!, pubKeyBytes = pubKey
                 )
-                val txid = node.broadcastWithAllServers(tx.hex)
+                }
+                val txid = tx.txid
                 android.util.Log.i("WalletManager", "sweepSingleAddr: moved ${"%.8f".format(totalRvnIn / 1e8)} RVN to $targetAddr, txid=$txid")
                 txid
             } catch (e: Exception) {
@@ -821,7 +882,7 @@ class WalletManager(private val context: Context) {
 
         val totalInputs = rvnKeyed.size + primaryInputs.size + otherInputs.values.sumOf { it.size }
         val totalAssetOuts = (if (primaryTotalRaw > 0) 1 else 0) + otherInputs.size
-        val feeSat = (10L + 148L * totalInputs + 70L * totalAssetOuts + 34L) * maxOf(satPerByte, 200L)
+        val feeSat = FeeSafetyPolicy.calculateFee((10L + 148L * totalInputs + 70L * totalAssetOuts + 34L), maxOf(satPerByte, 200L))
 
         if (totalRvnIn < feeSat + 600L * totalAssetOuts) {
             android.util.Log.w("WalletManager", "sweepSingleAddr: insufficient RVN (have ${totalRvnIn / 1e8}, need ${(feeSat + 600L * totalAssetOuts) / 1e8})")
@@ -829,7 +890,11 @@ class WalletManager(private val context: Context) {
         }
 
         try {
-            val tx = RavencoinTxBuilder.buildAndSignMultiAddressAssetTransfer(
+            val tx = signAndBroadcastReserved(
+                inputs = (primaryInputs).map { it.assetUtxo.utxo } + (otherInputs).values.flatten().map { it.assetUtxo.utxo } + (rvnKeyed).map { it.utxo },
+                broadcaster = { raw -> node.broadcastWithAllServers(raw) }
+            ) {
+                RavencoinTxBuilder.buildAndSignMultiAddressAssetTransfer(
                 primaryAssetInputs = primaryInputs,
                 otherAssetInputs   = otherInputs,
                 rvnInputs          = rvnKeyed,
@@ -838,7 +903,8 @@ class WalletManager(private val context: Context) {
                 feeSat             = feeSat,
                 changeAddress      = targetAddr
             )
-            val txid = node.broadcastWithAllServers(tx.hex)
+            }
+            val txid = tx.txid
             android.util.Log.i("WalletManager", "sweepSingleAddr: moved ${rvnUtxos.size} RVN + ${assetMap.size} asset(s) from index $staleIndex to $targetAddr, txid=$txid")
             return txid
         } catch (e: Exception) {
@@ -956,7 +1022,7 @@ class WalletManager(private val context: Context) {
                     val assetTypes = r.third.keys.size
                     val totalInputs = r.first.size + r.third.values.sumOf { it.size }
                     val estimatedBytes = 10 + 148 * totalInputs + 70 * (1 + assetTypes) + 34
-                    val feeSat = estimatedBytes * satPerByte
+                    val feeSat = FeeSafetyPolicy.calculateFee(estimatedBytes, satPerByte)
                     val dustSat = assetTypes * 546L
                     val totalNeeded = feeSat + dustSat + 546L // +546 for RVN change dust floor
 
@@ -992,35 +1058,45 @@ class WalletManager(private val context: Context) {
                             val assetTypes = assetUtxosMap.keys.size
                             val totalInputs = pureRvnUtxos.size + assetUtxosMap.values.sumOf { it.size }
                             val estimatedBytes = 10 + 148 * totalInputs + 70 * (1 + assetTypes) + 34
-                            val feeSat = estimatedBytes * satPerByte
+                            val feeSat = FeeSafetyPolicy.calculateFee(estimatedBytes, satPerByte)
 
-                            val tx = RavencoinTxBuilder.buildAndSignFullAddressSweep(
+                            val tx = signAndBroadcastReserved(
+                                inputs = (pureRvnUtxos) + (assetUtxosMap).values.flatten().map { it.utxo },
+                                broadcaster = { raw -> node.broadcastWithAllServers(raw) }
+                            ) {
+                                RavencoinTxBuilder.buildAndSignFullAddressSweep(
                                 assetUtxos = assetUtxosMap,
                                 rvnUtxos = pureRvnUtxos,
                                 feeSat = feeSat,
                                 changeAddress = targetAddress,
-                                privKeyBytes = privKey,
+                                privKeyBytes = privKey!!,
                                 pubKeyBytes = pubKey
                             )
-                            val txid = node.broadcastWithAllServers(tx.hex)
+                            }
+                            val txid = tx.txid
                             txids.add(txid)
                             android.util.Log.i("WalletManager", "Sweep: self-paying assets+RVN from index ${t.index} to $currentIndex: $txid")
                         } else if (pureRvnUtxos.isNotEmpty()) {
                             val totalSat = pureRvnUtxos.sumOf { it.satoshis }
                             val estimatedBytes = 10 + 148 * pureRvnUtxos.size + 34
-                            val feeSat = estimatedBytes * satPerByte
+                            val feeSat = FeeSafetyPolicy.calculateFee(estimatedBytes, satPerByte)
                             val sendAmount = totalSat - feeSat
                             if (sendAmount > 546) {
-                                val tx = RavencoinTxBuilder.buildAndSign(
+                                val tx = signAndBroadcastReserved(
+                                    inputs = (pureRvnUtxos),
+                                    broadcaster = { raw -> node.broadcastWithAllServers(raw) }
+                                ) {
+                                    RavencoinTxBuilder.buildAndSign(
                                     utxos = pureRvnUtxos,
                                     toAddress = targetAddress,
                                     amountSat = sendAmount,
                                     feeSat = feeSat,
                                     changeAddress = targetAddress,
-                                    privKeyBytes = privKey,
+                                    privKeyBytes = privKey!!,
                                     pubKeyBytes = pubKey
                                 )
-                                val txid = node.broadcastWithAllServers(tx.hex)
+                                }
+                                val txid = tx.txid
                                 txids.add(txid)
                                 android.util.Log.i("WalletManager", "Sweep: RVN from index ${t.index} to $currentIndex: $txid")
                             }
@@ -1073,20 +1149,25 @@ class WalletManager(private val context: Context) {
                     val totalSat = rvnUtxos.sumOf { it.satoshis }
                     val satPerByte = node.getMinRelayFeeRateSatPerByte()
                     val estimatedBytes = 10 + 148 * rvnUtxos.size + 34
-                    val feeSat = estimatedBytes * satPerByte
+                    val feeSat = FeeSafetyPolicy.calculateFee(estimatedBytes, satPerByte)
                     val sendAmount = totalSat - feeSat
 
                     if (sendAmount > 546) {
-                        val tx = RavencoinTxBuilder.buildAndSign(
+                        val tx = signAndBroadcastReserved(
+                            inputs = (rvnUtxos),
+                            broadcaster = { raw -> node.broadcastWithAllServers(raw) }
+                        ) {
+                            RavencoinTxBuilder.buildAndSign(
                             utxos = rvnUtxos,
                             toAddress = targetAddress,
                             amountSat = sendAmount,
                             feeSat = feeSat,
                             changeAddress = targetAddress,
-                            privKeyBytes = privKey,
+                            privKeyBytes = privKey!!,
                             pubKeyBytes = pubKey
                         )
-                        val txid = node.broadcastWithAllServers(tx.hex)
+                        }
+                        val txid = tx.txid
                         txids.add(txid)
                         android.util.Log.i("WalletManager", "Sweep: RVN from index ${t.index} to $currentIndex: $txid")
                     }
@@ -1492,12 +1573,12 @@ class WalletManager(private val context: Context) {
             }
         } catch (e: Exception) {
             if (e is IllegalStateException) throw e
-            // DB not initialized yet — safe to proceed
+            throw IllegalStateException("Wallet transaction state unavailable; refusing to sign", e)
         }
         return true
     }
 
-    suspend fun sendRvnLocal(toAddress: String, amountRvn: Double, onProgress: ((String) -> Unit)? = null): String = withContext(Dispatchers.IO) {
+    suspend fun sendRvnLocal(toAddress: String, amountRvn: Double, explicitMax: Boolean = false, onProgress: ((String) -> Unit)? = null): String = withContext(Dispatchers.IO) {
         ensureNoPendingSends()
         var currentIndex = getCurrentAddressIndex()
         var address = getAddress(0, currentIndex) ?: error("No wallet")
@@ -1589,8 +1670,8 @@ class WalletManager(private val context: Context) {
         return@withContext try {
             val txid: String
             var feeSatActual: Long = 0L
-            var consumedUtxos: List<Utxo> = emptyList()
             var broadcastRawHex: String = ""
+            var recipientAmountSat: Long = amountSat
 
             if (hasAssets || hasOldFunds) {
                 if (oldFunds.isNotEmpty()) {
@@ -1620,84 +1701,94 @@ class WalletManager(private val context: Context) {
                 val totalInputs      = rvnUtxos.size + extraRvnKeyed.size + assetKeyed.values.sumOf { it.size }
                 val totalAssetOutputs = assetKeyed.size
                 val estimatedBytes   = 10 + 148 * totalInputs + 70 * (2 + totalAssetOutputs) + 34
-                feeSatActual = estimatedBytes * satPerByte
+                feeSatActual = FeeSafetyPolicy.calculateFee(estimatedBytes, satPerByte)
+                val totalRvnIn = currentRvnKeyed.sumOf { it.utxo.satoshis } +
+                    extraRvnKeyed.sumOf { it.utxo.satoshis } +
+                    assetKeyed.values.flatten().sumOf { it.assetUtxo.utxo.satoshis }
+                val dustForAssets = assetKeyed.values.sumOf { keyed ->
+                    if (keyed.sumOf { it.assetUtxo.utxo.satoshis } > 0L) 600L else 0L
+                }
+                recipientAmountSat = if (explicitMax) {
+                    totalRvnIn - feeSatActual - dustForAssets
+                } else {
+                    FeeSafetyPolicy.requireSafeNormalSendFee(feeSatActual, amountSat)
+                    amountSat
+                }
+                require(recipientAmountSat > 546L) { "Insufficient balance after safe fee and asset dust" }
+                require(totalRvnIn >= recipientAmountSat + feeSatActual + dustForAssets) {
+                    "Insufficient balance for amount plus safe fee"
+                }
 
-                val tx = RavencoinTxBuilder.buildAndSignMultiAddressSend(
+                val tx = signAndBroadcastReserved(
+                    inputs = (currentRvnKeyed).map { it.utxo } + (extraRvnKeyed).map { it.utxo } + (assetKeyed).values.flatten().map { it.assetUtxo.utxo },
+                    broadcaster = { raw -> node.broadcastWithAllServers(raw) }
+                ) {
+                    RavencoinTxBuilder.buildAndSignMultiAddressSend(
                     currentRvnInputs  = currentRvnKeyed,
                     extraRvnInputs    = extraRvnKeyed,
                     assetInputsByName = assetKeyed,
                     toAddress         = toAddress,
-                    amountSat         = amountSat,
+                    amountSat         = recipientAmountSat,
                     feeSat            = feeSatActual,
                     changeAddress     = nextAddress
                 )
+                }
                 onProgress?.invoke("Broadcasting transaction...")
-                txid = node.broadcastWithAllServers(tx.hex)
+                txid = tx.txid // broadcast already completed inside reservation boundary
 
                 android.util.Log.i("WalletManager", "sendRvn atomic: sent $amountRvn RVN to $toAddress, " +
                     "all assets and remaining RVN to $nextAddress, txid=$txid")
 
             } else {
                 val totalIn = rvnUtxos.sumOf { it.satoshis }
-                // Sweep / MAX detection: when the requested amount + estimated fee
-                // would exceed the available balance, treat as a "send all" and let
-                // RavencoinTxBuilder subtract the exact fee from the recipient amount.
-                // The wallet will end at 0 RVN with no change output.
-                val outputsForFee = if (amountSat >= totalIn) 1 else 2
+                val outputsForFee = if (explicitMax) 1 else 2
                 val estimatedBytes = 10 + 148 * rvnUtxos.size + 34 * outputsForFee
-                feeSatActual = estimatedBytes * satPerByte
+                feeSatActual = FeeSafetyPolicy.calculateFee(estimatedBytes, satPerByte)
 
-                val isMaxSend = amountSat + feeSatActual > totalIn
-                if (isMaxSend) {
-                    require(totalIn > feeSatActual + 546) {
-                        "Insufficient funds to cover network fee: have ${totalIn / 1e8} RVN, fee ${feeSatActual / 1e8} RVN"
-                    }
+                recipientAmountSat = if (explicitMax) {
+                    totalIn - feeSatActual
                 } else {
-                    require(totalIn > amountSat + feeSatActual) {
-                        "Insufficient funds: have ${totalIn / 1e8} RVN, need ${amountSat / 1e8} RVN + ${feeSatActual / 1e8} RVN fee"
-                    }
-                    val changeSat = totalIn - amountSat - feeSatActual
-                    require(changeSat > 546) {
-                        "Remaining change (${"%.8f".format(changeSat / 1e8)} RVN) is below dust limit. " +
-                        "Send a slightly smaller amount or send the full balance."
+                    FeeSafetyPolicy.requireSafeNormalSendFee(feeSatActual, amountSat)
+                    amountSat
+                }
+                require(recipientAmountSat > 546L) { "Amount too small after safe network fee" }
+                require(totalIn >= recipientAmountSat + feeSatActual) {
+                    "Insufficient balance for amount plus safe fee"
+                }
+                if (!explicitMax) {
+                    val changeSat = totalIn - recipientAmountSat - feeSatActual
+                    require(changeSat == 0L || changeSat > 546L) {
+                        "Remaining change is below dust limit; lower the amount or use explicit MAX"
                     }
                 }
 
-                val tx = RavencoinTxBuilder.buildAndSign(
+                val tx = signAndBroadcastReserved(
+                    inputs = (rvnUtxos),
+                    broadcaster = { raw -> node.broadcastWithAllServers(raw) }
+                ) {
+                    RavencoinTxBuilder.buildAndSign(
                     utxos = rvnUtxos,
-                    // Pass totalIn when sweeping so buildAndSign's fee-subtraction branch fires.
                     toAddress = toAddress,
-                    amountSat = if (isMaxSend) totalIn else amountSat,
+                    amountSat = recipientAmountSat,
                     feeSat = feeSatActual,
                     changeAddress = nextAddress,
                     privKeyBytes = privKey!!,
                     pubKeyBytes = pubKey
                 )
+                }
                 onProgress?.invoke("Broadcasting transaction...")
-                txid = node.broadcastWithAllServers(tx.hex)
+                txid = tx.txid // broadcast already completed inside reservation boundary
                 broadcastRawHex = tx.hex
-                consumedUtxos = rvnUtxos
 
                 val totalInLog = rvnUtxos.sumOf { it.satoshis }
-                val changeForLog = (totalInLog - (if (amountSat + feeSatActual > totalInLog) totalInLog else amountSat) - feeSatActual).coerceAtLeast(0L)
+                val changeForLog = (totalInLog - recipientAmountSat - feeSatActual).coerceAtLeast(0L)
                 android.util.Log.i("WalletManager", "sendRvn: sent $amountRvn RVN to $toAddress, " +
                     "remaining ${"%.8f".format(changeForLog / 1e8)} RVN to $nextAddress, txid=$txid")
             }
 
             setCurrentAddressIndex(currentIndex + 1)
 
-            // Reserved-UTXO + pending-consolidation bookkeeping (D-20, D-21).
             val now = System.currentTimeMillis()
-            val reserved = consumedUtxos.map {
-                ReservedUtxoDao.ReservedUtxo(
-                    txidIn = it.txid,
-                    vout = it.outputIndex,
-                    valueSat = it.satoshis,
-                    submittedTxid = txid,
-                    submittedAt = now
-                )
-            }
-            ReservedUtxoDao.reserve(reserved)
             PendingConsolidationDao.upsert(
                 PendingConsolidationDao.PendingConsolidation(
                     submittedTxid = txid, submittedAt = now,
@@ -1716,14 +1807,14 @@ class WalletManager(private val context: Context) {
             val changeSat = when {
                 hasAssets || hasOldFunds -> {
                     val totalIn = rvnUtxos.sumOf { it.satoshis } + oldFunds.flatMap { it.rvn }.sumOf { it.satoshis }
-                    (totalIn - amountSat - feeSatActual).coerceAtLeast(0L)
+                    (totalIn - recipientAmountSat - feeSatActual).coerceAtLeast(0L)
                 }
                 else -> {
                     val totalIn = rvnUtxos.sumOf { it.satoshis }
-                    (totalIn - amountSat - feeSatActual).coerceAtLeast(0L)
+                    (totalIn - recipientAmountSat - feeSatActual).coerceAtLeast(0L)
                 }
             }
-            "$txid|fee:$feeSatActual|change:$changeSat"
+            "$txid|fee:$feeSatActual|change:$changeSat|sent:$recipientAmountSat"
         } finally {
             privKey?.fill(0)
         }
@@ -1903,7 +1994,7 @@ class WalletManager(private val context: Context) {
             val primaryAssetChangeOutputs = if (assetChangeRaw > 0) 1 else 0
             val totalAssetOutputs = 1 + primaryAssetChangeOutputs + otherKeyed.size + secondaryKeyed.size
             val totalInputs = primaryKeyed.size + otherKeyed.values.sumOf { it.size } + secondaryKeyed.values.sumOf { it.size } + rvnKeyed.size
-            val feeSat = (10L + 148L * totalInputs + 70L * totalAssetOutputs + 34L) * maxOf(satPerByte, 200L)
+            val feeSat = FeeSafetyPolicy.calculateFee((10L + 148L * totalInputs + 70L * totalAssetOutputs + 34L), maxOf(satPerByte, 200L))
             val dustEstimate = 600L * totalAssetOutputs
 
             val totalRvnIn = rvnKeyed.sumOf { it.utxo.satoshis } +
@@ -1916,7 +2007,11 @@ class WalletManager(private val context: Context) {
                     "have ${totalRvnIn / 1e8} RVN. Fund your wallet with at least 0.01 RVN.")
             }
 
-            val tx = RavencoinTxBuilder.buildAndSignMultiAddressAssetTransfer(
+            val tx = signAndBroadcastReserved(
+                inputs = (primaryKeyed).map { it.assetUtxo.utxo } + (otherKeyed).values.flatten().map { it.assetUtxo.utxo } + (rvnKeyed).map { it.utxo } + (secondaryKeyed).values.flatten().map { it.assetUtxo.utxo },
+                broadcaster = { raw -> node.broadcastWithAllServers(raw) }
+            ) {
+                RavencoinTxBuilder.buildAndSignMultiAddressAssetTransfer(
                 primaryAssetInputs = primaryKeyed,
                 otherAssetInputs   = otherKeyed,
                 rvnInputs          = rvnKeyed,
@@ -1926,22 +2021,12 @@ class WalletManager(private val context: Context) {
                 changeAddress      = nextAddress,
                 secondaryAssetsToToAddress = secondaryKeyed
             )
-            val txid = node.broadcastWithAllServers(tx.hex)
-
-            // Reserved-UTXO + pending-consolidation bookkeeping (D-20, D-21).
-            val allConsumedUtxos = allFunds.flatMap { af ->
-                af.rvnUtxos + af.assetUtxos.values.flatten().map { it.utxo }
             }
-            val xferNow = System.currentTimeMillis()
-            ReservedUtxoDao.reserve(allConsumedUtxos.map {
-                ReservedUtxoDao.ReservedUtxo(
-                    txidIn = it.txid, vout = it.outputIndex, valueSat = it.satoshis,
-                    submittedTxid = txid, submittedAt = xferNow
-                )
-            })
+            val txid = tx.txid
+
             PendingConsolidationDao.upsert(
                 PendingConsolidationDao.PendingConsolidation(
-                    submittedTxid = txid, submittedAt = xferNow,
+                    submittedTxid = txid, submittedAt = System.currentTimeMillis(),
                     lastRetryAt = null, retryCount = 0, lastError = null
                 )
             )
@@ -2046,7 +2131,7 @@ class WalletManager(private val context: Context) {
             assetName.contains('/') -> 5
             else -> 4
         }
-        val feeSat = (10 + 148 * totalInputs + 70 * (outputCountForIssuance + totalAssetSweepOutputs) + 34) * satPerByte
+        val feeSat = FeeSafetyPolicy.calculateFee((10 + 148 * totalInputs + 70 * (outputCountForIssuance + totalAssetSweepOutputs) + 34).toLong(), satPerByte)
 
         val qtyRaw = if (assetName.contains('#')) {
             RavencoinTxBuilder.ASSET_UNIT_RAW
@@ -2061,7 +2146,13 @@ class WalletManager(private val context: Context) {
         return@withContext try {
             android.util.Log.i("WalletManager", "issueAsset: ownerUtxo=${ownerAssetUtxos.map { "${it.txid}:${it.outputIndex}" }}, " +
                 "rvnUtxos=${rvnUtxos.map { "${it.txid}:${it.outputIndex}" }}, burnSat=$burnSat, feeSat=$feeSat")
-            val tx = RavencoinTxBuilder.buildAndSignAssetIssueWithAssetSweep(
+            val tx = signAndBroadcastReserved(
+                inputs = (rvnUtxos.filterNot { rvn ->
+                    ownerAssetUtxos.any { owner -> owner.txid == rvn.txid && owner.outputIndex == rvn.outputIndex }
+                }) + (ownerAssetUtxos) + (otherAssetUtxos).values.flatten().map { it.utxo },
+                broadcaster = { raw -> node.broadcastWithAllServers(raw) }
+            ) {
+                RavencoinTxBuilder.buildAndSignAssetIssueWithAssetSweep(
                 utxos = rvnUtxos.filterNot { rvn ->
                     ownerAssetUtxos.any { owner -> owner.txid == rvn.txid && owner.outputIndex == rvn.outputIndex }
                 },
@@ -2079,7 +2170,8 @@ class WalletManager(private val context: Context) {
                 privKeyBytes = privKey!!,
                 pubKeyBytes = pubKey
             )
-            val txid = node.broadcastWithAllServers(tx.hex)
+            }
+            val txid = tx.txid
 
             android.util.Log.i("WalletManager", "issueAsset: issued $qty $assetName to $actualToAddress, " +
                 "RVN change + current-index assets to $nextAddress in the same tx, txid=$txid")
@@ -2169,7 +2261,7 @@ class WalletManager(private val context: Context) {
         val totalAssetSweepOutputs = otherAssetUtxos.size
         val totalInputs = rvnUtxos.size + ownerAssetUtxos.size + otherAssetUtxos.values.sumOf { it.size }
         val outputCount = 4 + totalAssetSweepOutputs // burn + change + owner + reissue + sweep
-        val feeSat = (10L + 148L * totalInputs + 70L * outputCount + 34L) * maxOf(satPerByte, 200L)
+        val feeSat = FeeSafetyPolicy.calculateFee((10L + 148L * totalInputs + 70L * outputCount + 34L), maxOf(satPerByte, 200L))
 
         val addQtyRaw = (addQty * RavencoinTxBuilder.ASSET_UNIT_RAW.toDouble()).toLong()
 
@@ -2187,7 +2279,11 @@ class WalletManager(private val context: Context) {
                 "reissueAsset: $assetName addQty=$addQty newUnits=$newUnits reissuable=$reissuable " +
                 "ipfs=${newIpfsHash != null} ownerIndex=${ownerHolder.index} feeSat=$feeSat")
 
-            val tx = if (!needsMultiKey) {
+            val tx = signAndBroadcastReserved(
+                inputs = rvnUtxos + ownerAssetUtxos + otherAssetUtxos.values.flatten().map { it.utxo },
+                broadcaster = { raw -> node.broadcastWithAllServers(raw) }
+            ) {
+                if (!needsMultiKey) {
                 RavencoinTxBuilder.buildAndSignAssetReissue(
                     utxos = rvnUtxos,
                     ownerAssetUtxos = ownerAssetUtxos,
@@ -2208,7 +2304,8 @@ class WalletManager(private val context: Context) {
                 error("Owner token on a different address than the current index is not yet supported. " +
                       "Consolidate the wallet first so the owner token sits on the active address.")
             }
-            val txid = node.broadcastWithAllServers(tx.hex)
+            }
+            val txid = tx.txid
             setCurrentAddressIndex(currentIndex + 1)
             android.util.Log.i("WalletManager", "reissueAsset: $assetName reissued, txid=$txid")
             txid
@@ -2397,11 +2494,16 @@ class WalletManager(private val context: Context) {
                     var curPrivKey: ByteArray? = curKeyPair.first
                     try {
                         val currentUtxos = node.getUtxos(currentAddr)
-                        val fundFee = (10L + 148L * currentUtxos.size + 34L * 2) * satPerByte
-                        val tx = RavencoinTxBuilder.buildAndSign(
+                        val fundFee = FeeSafetyPolicy.calculateFee(10L + 148L * currentUtxos.size + 34L * 2, satPerByte)
+                        val tx = signAndBroadcastReserved(
+                            inputs = (currentUtxos),
+                            broadcaster = { raw -> node.broadcastWithAllServers(raw) }
+                        ) {
+                            RavencoinTxBuilder.buildAndSign(
                             currentUtxos, addr, 10000000L, fundFee, currentAddr, curPrivKey!!, curKeyPair.second
                         )
-                        node.broadcastWithAllServers(tx.hex)
+                        }
+                        tx.txid // broadcast already completed inside reservation boundary
                         // Poll until funding UTXOs are visible in mempool (up to 60s)
                         var waited = 0
                         while (waited < 60) {
@@ -2418,18 +2520,23 @@ class WalletManager(private val context: Context) {
                 val targetAddr = getAddress(0, currentIndex) ?: return@withContext
                 val sweepResult = node.getUtxosAndAllAssetUtxosBatch(addr)
                 val totalSweepInputs = sweepResult.first.size + sweepResult.third.values.sumOf { it.size }
-                val sweepFee = (10L + 148L * totalSweepInputs + 34L * (1 + sweepResult.third.size)) * satPerByte
-                val tx = RavencoinTxBuilder.buildAndSignRvnSendWithAssetSweep(
+                val sweepFee = FeeSafetyPolicy.calculateFee(10L + 148L * totalSweepInputs + 34L * (1 + sweepResult.third.size), satPerByte)
+                val tx = signAndBroadcastReserved(
+                    inputs = (sweepResult.first) + (sweepResult.third).values.flatten().map { it.utxo },
+                    broadcaster = { raw -> node.broadcastWithAllServers(raw) }
+                ) {
+                    RavencoinTxBuilder.buildAndSignRvnSendWithAssetSweep(
                     rvnUtxos = sweepResult.first,
                     assetUtxos = sweepResult.third,
                     toAddress = targetAddr,
                     amountSat = 0L,
                     feeSat = sweepFee,
                     changeAddress = targetAddr,
-                    privKeyBytes = privKey,
+                    privKeyBytes = privKey!!,
                     pubKeyBytes = pubKey
                 )
-                node.broadcastWithAllServers(tx.hex)
+                }
+                tx.txid // broadcast already completed inside reservation boundary
                 android.util.Log.i("WalletManager", "AutoHeal/Sweep: Consolidated index $index to $currentIndex")
             }
         } catch (e: Exception) {
@@ -2686,7 +2793,7 @@ suspend fun consolidateAllFundsToFreshAddress(): String? = withContext(Dispatche
         val oldAssetInputs = oldFundsOnly.sumOf { it.assetUtxos.values.sumOf { it.size } }
         val oldRvnInputs = oldFundsOnly.sumOf { it.rvnUtxos.size }
         val estimatedBytes = 10 + 148 * (oldRvnInputs + oldAssetInputs) + 70 * (1 + oldAssetTypes) + 34
-        val feeSatEst = estimatedBytes * satPerByte
+        val feeSatEst = FeeSafetyPolicy.calculateFee(estimatedBytes, satPerByte)
         val dustEst = oldAssetTypes * 546L
         val needed = feeSatEst + dustEst + 546L
         canSelfPay = oldRvn >= needed
@@ -2779,7 +2886,7 @@ suspend fun consolidateAllFundsToFreshAddress(): String? = withContext(Dispatche
     // Tight byte estimate: ~150 bytes per signed P2PKH input, ~34 bytes per RVN output,
     // ~85 bytes per asset output (extra OP_RVN_ASSET payload). +10 bytes header.
     val estimatedBytes = 10L + 150L * totalInputs + 34L + 85L * totalAssetOutputs
-    val feeSat = estimatedBytes * satPerByte
+    val feeSat = FeeSafetyPolicy.calculateFee(estimatedBytes, satPerByte)
 
     android.util.Log.i("WalletManager", "consolid: fee estimate : ${estimatedBytes} bytes at ${satPerByte} sat/byte = ${feeSat} sat (raw relay fee was ${rawSatPerByte})")
 
@@ -2849,7 +2956,11 @@ suspend fun consolidateAllFundsToFreshAddress(): String? = withContext(Dispatche
                 "rvnInputs=$totalRvnInputs, assetInputs=$totalAssetInputs, " +
                 "assetOutputs=$totalAssetOutputs, amountSat=$amountSat, feeSat=$feeSat, assetDust=$totalAssetDust")
 
-            val tx = RavencoinTxBuilder.buildAndSignMultiAddressSend(
+            val tx = signAndBroadcastReserved(
+                inputs = (allRvnKeyed).map { it.utxo } + (allAssetKeyed).values.flatten().map { it.assetUtxo.utxo },
+                broadcaster = { raw -> broadcastConsolidation(raw) }
+            ) {
+                RavencoinTxBuilder.buildAndSignMultiAddressSend(
                 currentRvnInputs  = allRvnKeyed,
                 extraRvnInputs    = emptyList(),
                 assetInputsByName = allAssetKeyed,
@@ -2858,7 +2969,8 @@ suspend fun consolidateAllFundsToFreshAddress(): String? = withContext(Dispatche
                 feeSat            = feeSat,
                 changeAddress     = useTargetAddress
             )
-            txid = broadcastConsolidation(tx.hex)
+            }
+            txid = tx.txid
 
         } else {
             // Single address, RVN only
@@ -2881,7 +2993,11 @@ suspend fun consolidateAllFundsToFreshAddress(): String? = withContext(Dispatche
             android.util.Log.i("WalletManager", "consolid: single-address RVN sweep : " +
                 "totalIn=$totalSat, send=$sendAmount, fee=$feeSat")
 
-            val tx = RavencoinTxBuilder.buildAndSign(
+            val tx = signAndBroadcastReserved(
+                inputs = (utxos),
+                broadcaster = { raw -> broadcastConsolidation(raw) }
+            ) {
+                RavencoinTxBuilder.buildAndSign(
                 utxos = utxos,
                 toAddress = useTargetAddress,
                 amountSat = sendAmount,
@@ -2890,7 +3006,8 @@ suspend fun consolidateAllFundsToFreshAddress(): String? = withContext(Dispatche
                 privKeyBytes = singleKeyPair.first,
                 pubKeyBytes = singleKeyPair.second
             )
-            txid = broadcastConsolidation(tx.hex)
+            }
+            txid = tx.txid
         }
 
         setCurrentAddressIndex(useNextIndex)

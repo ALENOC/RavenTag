@@ -265,7 +265,11 @@ const server = app.listen(PORT, () => {
   console.log(`RavenTag API running on http://localhost:${PORT}`)
   console.log(`Protocol: RTP-1 | Env: ${process.env.NODE_ENV ?? 'development'}`)
   startLogCleanup()
-  startBackupScheduler()
+  if (process.env.ENABLE_INTERNAL_BACKUP === 'true') {
+  const backupKeyPath = process.env.INTERNAL_BACKUP_ENCRYPTION_KEY_FILE
+  if (!backupKeyPath) throw new Error('ENABLE_INTERNAL_BACKUP requires INTERNAL_BACKUP_ENCRYPTION_KEY_FILE')
+  startBackupScheduler(backupKeyPath)
+}
 })
 
 export default app

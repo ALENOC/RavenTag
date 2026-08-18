@@ -2864,7 +2864,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * showing a generic error.
      *
      */
-    fun sendRvn(toAddress: String, amount: Double) {
+    fun sendRvn(toAddress: String, amount: Double, explicitMax: Boolean) {
         val s = getStrings()
         val wm = walletManager ?: run {
             sendSuccess = false; sendResult = s.walletNoWallet; return
@@ -2881,7 +2881,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 // Execute send with retry (D-06)
                 val result = RetryUtils.retryWithBackoff {
                     withContext(Dispatchers.IO) {
-                        wm.sendRvnLocal(toAddress, amount) { msg ->
+                        wm.sendRvnLocal(toAddress, amount, explicitMax) { msg ->
                             sendProgressLog = sendProgressLog + msg
                         }
                     }
@@ -2890,6 +2890,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val txid = result.substringBefore("|fee:")
                 val feeRvn = result.substringAfter("|fee:", "0").substringBefore("|").toLongOrNull()?.let { it / 1e8 } ?: 0.0
                 val cycledSat = result.substringAfter("|change:", "0").toLongOrNull() ?: 0L
+                val sentSatActual = result.substringAfter("|sent:", "0").toLongOrNull() ?: (amount * 1e8).toLong()
+                val sentRvnActual = sentSatActual / 1e8
 
                 // Show confirming notification (waiting for blocks)
                 TransactionNotificationHelper.showConfirming(getApplication(), 1, 1)
@@ -2904,7 +2906,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 sendLoading = false
                 sendSuccess = true
                 sendProgressLog = emptyList()
-                sendResult = s.walletSendResult.replace("%1", amount.toString())
+                sendResult = s.walletSendResult.replace("%1", sentRvnActual.toString())
                     .replace("%2", "%.5f".format(feeRvn))
                     .replace("%3", "${txid.take(20)}...")
 
@@ -2916,7 +2918,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val currentBalance = walletInfo?.balanceRvn
                 if (currentBalance != null) {
                     walletInfo = walletInfo?.copy(
-                        balanceRvn = (currentBalance - amount - feeRvn).coerceAtLeast(0.0)
+                        balanceRvn = (currentBalance - sentRvnActual - feeRvn).coerceAtLeast(0.0)
                     )
                 }
 
@@ -2924,7 +2926,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 // user sees it immediately instead of waiting for the next ElectrumX poll.
                 val nowMs = System.currentTimeMillis()
                 val nowSec = nowMs / 1000L
-                val sentSatOpt = (amount * 1e8).toLong()
+                val sentSatOpt = sentSatActual
                 val feeSatOpt = (feeRvn * 1e8).toLong()
                 if (txHistory.none { it.txid == txid }) {
                     val optimistic = io.raventag.app.wallet.TxHistoryEntry(
@@ -4686,7 +4688,7 @@ fun RavenTagApp(
                 viewModel.sendFeeUnavailable = false
                 viewModel.estimatedFee = 0.0
             },
-            onSend = viewModel::sendRvn
+            onSend = { address, amount, explicitMax -> viewModel.sendRvn(address, amount, explicitMax) }
         )
         return
     }

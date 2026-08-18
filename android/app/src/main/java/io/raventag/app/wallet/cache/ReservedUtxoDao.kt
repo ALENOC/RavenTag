@@ -3,6 +3,7 @@ package io.raventag.app.wallet.cache
 import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
+import android.database.sqlite.SQLiteConstraintException
 
 /**
  * DAO for the reserved_utxos table (D-20).
@@ -30,11 +31,16 @@ object ReservedUtxoDao {
         WalletReliabilityDb.getDatabase().execSQL("DELETE FROM $TABLE")
     }
 
-    fun reserve(entries: List<ReservedUtxo>) {
-        if (entries.isEmpty()) return
+    /**
+     * Atomically reserve every outpoint. Existing reservations are never replaced.
+     * Returns false for a conflicting outpoint or any database failure; callers must
+     * fail closed and MUST NOT sign when this returns false.
+     */
+    fun tryReserve(entries: List<ReservedUtxo>): Boolean {
+        if (entries.isEmpty()) return false
         val db = WalletReliabilityDb.getDatabase()
         db.beginTransaction()
-        try {
+        return try {
             for (e in entries) {
                 val cv = ContentValues().apply {
                     put("txid_in", e.txidIn)
@@ -43,12 +49,28 @@ object ReservedUtxoDao {
                     put("submitted_txid", e.submittedTxid)
                     put("submitted_at", e.submittedAt)
                 }
-                db.insertWithOnConflict(TABLE, null, cv, SQLiteDatabase.CONFLICT_REPLACE)
+                val rowId = db.insertWithOnConflict(TABLE, null, cv, SQLiteDatabase.CONFLICT_ABORT)
+                if (rowId == -1L) throw SQLiteConstraintException("outpoint already reserved")
             }
             db.setTransactionSuccessful()
+            true
+        } catch (_: Exception) {
+            false
         } finally {
             db.endTransaction()
         }
+    }
+
+    /** Backward-compatible strict wrapper used by older call sites/tests. */
+    fun reserve(entries: List<ReservedUtxo>) {
+        check(tryReserve(entries)) { "UTXO reservation conflict or database failure" }
+    }
+
+    /** Associate a pre-sign intent reservation with the locally computed txid. */
+    fun retagReservation(fromId: String, submittedTxid: String): Boolean {
+        val db = WalletReliabilityDb.getDatabase()
+        val cv = ContentValues().apply { put("submitted_txid", submittedTxid) }
+        return db.update(TABLE, cv, "submitted_txid = ?", arrayOf(fromId)) > 0
     }
 
     fun releaseFor(submittedTxid: String) {

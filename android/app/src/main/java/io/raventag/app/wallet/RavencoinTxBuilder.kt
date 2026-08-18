@@ -133,9 +133,9 @@ object RavencoinTxBuilder {
     /**
      * Build and sign a plain P2PKH RVN transfer transaction.
      *
-     * The function automatically handles the "send-all / sweep" case: if
-     * [amountSat] + [feeSat] exceeds the total UTXO value, the fee is subtracted
-     * from the recipient amount so the sender can drain the wallet completely.
+     * [amountSat] is always the exact recipient amount. Explicit MAX/sweep intent
+     * must be resolved by the caller before this builder is invoked; the builder
+     * never reduces a recipient amount because a fee estimate is high.
      *
      * A change output is added only when the change exceeds the 546-satoshi
      * dust limit, to avoid creating unspendable outputs.
@@ -158,18 +158,15 @@ object RavencoinTxBuilder {
         privKeyBytes: ByteArray,
         pubKeyBytes: ByteArray
     ): SignedTx {
+        FeeSafetyPolicy.requireSafeAbsoluteFee(feeSat)
         val totalIn = utxos.sumOf { it.satoshis }
-        require(totalIn > feeSat) {
-            "Insufficient funds to cover fee: have ${totalIn / 1e8} RVN, fee ${feeSat / 1e8} RVN"
+        require(amountSat > 546) { "Amount below dust limit" }
+        require(totalIn >= amountSat + feeSat) {
+            "Insufficient funds: have ${totalIn / 1e8} RVN, need ${amountSat / 1e8} RVN + ${feeSat / 1e8} RVN fee"
         }
 
-        // If the requested amount leaves no room for the fee, subtract the fee from the
-        // recipient amount (send-all / sweep mode). The recipient gets slightly less.
-        val effectiveAmount = if (amountSat + feeSat > totalIn) totalIn - feeSat else amountSat
-        require(effectiveAmount > 546) { "Amount too small after fee deduction" }
-
-        val changeSat = totalIn - effectiveAmount - feeSat
-        val outputs = mutableListOf(TxOutput(effectiveAmount, toAddress))
+        val changeSat = totalIn - amountSat - feeSat
+        val outputs = mutableListOf(TxOutput(amountSat, toAddress))
         if (changeSat > 546) outputs.add(TxOutput(changeSat, changeAddress)) // dust limit
 
         // Sign each input independently (legacy P2PKH: sign with that input's scriptPubKey)
@@ -229,6 +226,7 @@ object RavencoinTxBuilder {
         privKeyBytes: ByteArray,
         pubKeyBytes: ByteArray
     ): SignedTx {
+        FeeSafetyPolicy.requireSafeAbsoluteFee(feeSat)
         // Asset UTXOs from issuance may have 0 satoshis (dustOut = 0 in buildAndSignAssetIssue).
         // To avoid consensus error "bad-txns-asset-transfer-amount-isn't-zero", we must preserve
         // the satoshi value from input to output for each asset UTXO.
@@ -325,6 +323,7 @@ object RavencoinTxBuilder {
         privKeyBytes: ByteArray,
         pubKeyBytes: ByteArray
     ): SignedTx {
+        FeeSafetyPolicy.requireSafeAbsoluteFee(feeSat)
         // Calculate input dust for each asset type to preserve value balance
         val primaryAssetDustIn = primaryAssetUtxos.sumOf { it.satoshis }
 
@@ -431,6 +430,7 @@ object RavencoinTxBuilder {
         changeAddress: String,
         secondaryAssetsToToAddress: Map<String, List<KeyedAssetUtxo>> = emptyMap()
     ): SignedTx {
+        FeeSafetyPolicy.requireSafeAbsoluteFee(feeSat)
         val primaryDustIn = primaryAssetInputs.sumOf { it.assetUtxo.utxo.satoshis }
         val dustForPrimaryOut    = if (primaryDustIn > 0) 600L else 0L
         val dustForPrimaryChange = if (primaryAssetChange > 0 && primaryDustIn > 0) 600L else 0L
@@ -541,6 +541,7 @@ object RavencoinTxBuilder {
         privKeyBytes: ByteArray,
         pubKeyBytes: ByteArray
     ): SignedTx {
+        FeeSafetyPolicy.requireSafeAbsoluteFee(feeSat)
         // Calculate dust for all asset outputs
         var dustForAssets = 0L
         val assetOutputs = mutableListOf<AssetOutput>()
@@ -630,6 +631,7 @@ object RavencoinTxBuilder {
         feeSat: Long,
         changeAddress: String
     ): SignedTx {
+        FeeSafetyPolicy.requireSafeAbsoluteFee(feeSat)
         // Dust for asset outputs: 0 if input had 0 sat (issued with dustOut=0), else 600
         val assetOutputs = mutableListOf<AssetOutput>()
         var dustForAssets = 0L
@@ -888,6 +890,7 @@ object RavencoinTxBuilder {
         privKeyBytes: ByteArray,
         pubKeyBytes: ByteArray
     ): SignedTx {
+        FeeSafetyPolicy.requireSafeAbsoluteFee(feeSat)
         // Unique tokens (containing '#') don't mint a new owner output.
         // Sub-assets and unique tokens still spend the parent owner token as an input,
         // then return it to the issuer as an rvnt transfer of "PARENT!" with raw amount 100_000_000.
@@ -1019,6 +1022,7 @@ object RavencoinTxBuilder {
         privKeyBytes: ByteArray,
         pubKeyBytes: ByteArray
     ): SignedTx {
+        FeeSafetyPolicy.requireSafeAbsoluteFee(feeSat)
         val isUnique = assetName.contains('#')
 
         val preservedOwnerAssetName = when {
@@ -1163,6 +1167,7 @@ object RavencoinTxBuilder {
         privKeyBytes: ByteArray,
         pubKeyBytes: ByteArray
     ): SignedTx {
+        FeeSafetyPolicy.requireSafeAbsoluteFee(feeSat)
         // Calculate dust for all asset outputs
         var dustForAssets = 0L
         val assetOutputs = mutableListOf<AssetOutput>()
@@ -1323,6 +1328,7 @@ object RavencoinTxBuilder {
         pubKeyBytes: ByteArray,
         otherAssetUtxos: Map<String, List<AssetUtxo>> = emptyMap()
     ): SignedTx {
+        FeeSafetyPolicy.requireSafeAbsoluteFee(feeSat)
         require(ownerAssetUtxos.isNotEmpty()) {
             "Missing owner-token UTXO for $assetName! - cannot reissue"
         }
