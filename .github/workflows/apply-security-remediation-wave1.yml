@@ -28,6 +28,26 @@ jobs:
       - name: Apply asserted financial/security patches
         run: python3 scripts/run_security_remediation_wave2_v5.py
 
+      - name: Make internal backup opt-in and fail closed
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('backend/src/index.ts')
+          s = p.read_text()
+          old = '  startBackupScheduler()\n'
+          new = '''  if (process.env.ENABLE_INTERNAL_BACKUP === 'true') {
+            const backupKeyPath = process.env.INTERNAL_BACKUP_ENCRYPTION_KEY_FILE
+            if (!backupKeyPath) {
+              throw new Error('ENABLE_INTERNAL_BACKUP requires INTERNAL_BACKUP_ENCRYPTION_KEY_FILE')
+            }
+            startBackupScheduler(backupKeyPath)
+          }
+          '''
+          if s.count(old) != 1:
+              raise SystemExit(f'expected one startBackupScheduler() call, got {s.count(old)}')
+          p.write_text(s.replace(old, new, 1))
+          PY
+
       - name: Backend type-check and unit tests
         working-directory: backend
         run: |
