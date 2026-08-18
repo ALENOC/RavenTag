@@ -1,4 +1,4 @@
-name: Apply security remediation wave 1
+name: Apply security remediation wave 2
 
 on:
   pull_request:
@@ -11,7 +11,7 @@ jobs:
   apply:
     if: github.repository == 'ALENOC/RavenTag' && github.head_ref == 'security/full-audit-remediation-2026-08-18'
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 45
     steps:
       - name: Checkout exact remediation branch
         env:
@@ -25,44 +25,45 @@ jobs:
           git fetch --depth=1 origin "${HEAD_REF}"
           git checkout -B "${HEAD_REF}" FETCH_HEAD
 
-      - name: Apply asserted source patches
-        run: python3 scripts/run_security_remediation_wave1.py
+      - name: Apply asserted financial/security patches
+        run: python3 scripts/run_security_remediation_wave2.py
 
-      - name: Upgrade Axios using npm resolver and type-check backend
+      - name: Backend type-check
         working-directory: backend
         run: |
           set -euo pipefail
-          npm install --save-exact --ignore-scripts axios@1.18.0
           npm ci --ignore-scripts
           npm run build
 
-      - name: Compile Android Kotlin after patch
+      - name: Full Android JVM regression suite
         working-directory: android
         run: |
           set -euo pipefail
           chmod +x gradlew
-          ./gradlew compileBrandDebugKotlin compileConsumerDebugKotlin --stacktrace
+          ./gradlew test --stacktrace
 
-      - name: Static patch checks
+      - name: Static financial self-audit
         run: |
           set -euo pipefail
           git diff --check
-          ! grep -R '/home/ale/Android/Sdk' --exclude-dir=.git .
-          ! grep -R 'usesCleartextTraffic="true"' android/app/src/main/AndroidManifest.xml
-          ! grep -R 'cleartextTrafficPermitted="true"' android/app/src/main/res/xml/network_security_config.xml
+          ! grep -n 'isMaxSend' android/app/src/main/java/io/raventag/app/wallet/WalletManager.kt
+          ! grep -n 'effectiveAmount = if' android/app/src/main/java/io/raventag/app/wallet/RavencoinTxBuilder.kt
+          ! grep -n 'node.broadcastWithAllServers(tx.hex)' android/app/src/main/java/io/raventag/app/wallet/WalletManager.kt
+          ! grep -n 'broadcastConsolidation(tx.hex)' android/app/src/main/java/io/raventag/app/wallet/WalletManager.kt
+          grep -n 'CONFLICT_ABORT' android/app/src/main/java/io/raventag/app/wallet/cache/ReservedUtxoDao.kt
+          grep -n 'signAndBroadcastReserved' android/app/src/main/java/io/raventag/app/wallet/WalletManager.kt
 
-      - name: Commit compiled source wave
+      - name: Commit tested financial remediation
         env:
           GH_TOKEN: ${{ github.token }}
           HEAD_REF: ${{ github.head_ref }}
         run: |
           set -euo pipefail
-          rm -f scripts/apply_security_remediation_wave1.py scripts/run_security_remediation_wave1.py
+          rm -f scripts/run_security_remediation_wave2.py
           git config user.name 'RavenTag Security Remediation'
           git config user.email '185200505+ALENOC@users.noreply.github.com'
           git add -A
-          # Do not include workflow-file mutations in the runner commit.
           git reset -- .github/workflows/
           git diff --cached --check
-          git commit -m 'security: fail closed auth, network, secrets and fee inputs'
+          git commit -m 'security: serialize wallet spends and remove implicit max-send'
           git push origin HEAD:"${HEAD_REF}"
