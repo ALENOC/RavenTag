@@ -19,7 +19,7 @@ Para los sistemas operados por el Desarrollador, cuando corresponda, el responsa
 GitHub: https://github.com/ALENOC/RavenTag  
 Email: legal@raventag.com
 
-El Desarrollador puede operar un backend de demostración en `raventag.com` / `api.raventag.com` y un endpoint ElectrumX público (`electrumx.raventag.com` / `electrum.raventag.com`). Esta infraestructura no es de un tercero.
+El Desarrollador puede operar un backend de demostración en `raventag.com` / `api.raventag.com` y un endpoint ElectrumX público (`electrumx.raventag.com`). Esta infraestructura no es de un tercero.
 
 Marcas y fabricantes pueden operar backends propios. La Aplicación también puede usar nodos ElectrumX/Ravencoin Core, gateways IPFS u otros servicios independientes. El Desarrollador no controla sus prácticas de logging, conservación, seguridad o privacidad.
 
