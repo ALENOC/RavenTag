@@ -29,14 +29,20 @@ enum class ConnectionHealth { GREEN, YELLOW, RED }
  * [nextHealthyNode] before connecting and call [reportSuccess] /
  * [reportFailure] / [reportTofuMismatch] after the attempt.
  *
+ * Selection policy:
+ * - the first entry in [AppConfig.ELECTRUM_SERVERS] is the authoritative primary;
+ * - the primary is always tried before a persisted `last_good_host` when healthy;
+ * - after a transient primary failure, fallbacks are allowed for a short window;
+ * - after that window expires, the primary is automatically tried again;
+ * - a TOFU mismatch still quarantines a host for one hour.
+ *
  * State is split across two layers:
- * - In-memory [ConcurrentHashMap]s track "recent failure / success" windows
- *   used to compute [stateFlow] (authoritative for sub-minute UX).
+ * - In-memory [ConcurrentHashMap]s track recent failure / success windows.
  * - [QuarantineDao] persists 1-hour TOFU-mismatch quarantines across process
  *   restarts (authoritative for long-lived bans).
- * - SharedPreferences persists the last known good host so cold starts skip
- *   the failover rotation and connect immediately to the previously working
- *   server.
+ * - SharedPreferences persists the last known good fallback so failover can be
+ *   fast while the primary is temporarily unavailable. It never overrides the
+ *   configured primary server.
  */
 object NodeHealthMonitor {
 
@@ -50,7 +56,20 @@ object NodeHealthMonitor {
     )
 
     private const val QUARANTINE_DURATION_MS: Long = 3_600_000L       // D-11: 1 hour
-    private const val TRANSIENT_COOLDOWN_MS: Long = 0L
+
+    /**
+     * Failed fallback nodes are skipped briefly so one failover loop can advance
+     * through the pool instead of immediately selecting the same failed host again.
+     */
+    private const val TRANSIENT_COOLDOWN_MS: Long = 2_000L
+
+    /**
+     * After the primary fails, use a working fallback for this interval before
+     * probing the primary again. This keeps the primary authoritative without
+     * hammering it on every RPC while it is temporarily offline.
+     */
+    private const val PRIMARY_RETRY_COOLDOWN_MS: Long = 30_000L
+
     private const val YELLOW_FAILURE_WINDOW_MS: Long = 30_000L
     private const val GREEN_SUCCESS_WINDOW_MS: Long = 60_000L
     private const val PREFS_NAME = "node_health_prefs"
@@ -79,24 +98,42 @@ object NodeHealthMonitor {
     }
 
     /**
-     * Returns the next host in "host:port" form that is NOT currently
-     * quarantined (1h TOFU ban) and is outside the transient-failure cooldown.
+     * Returns the next host in "host:port" form.
      *
-     * When ALL pool nodes are in transient cooldown, falls back to the
-     * least-recently-failed node so the app never enters a dead state
-     * where no RPC can be attempted. Without this, a network blip that
-     * touches every node once quarantines the entire pool for 2 s.
+     * The configured primary (the first entry in [AppConfig.ELECTRUM_SERVERS])
+     * always has priority over a previously persisted `last_good_host`. Fallbacks
+     * are considered only when the primary is currently quarantined or has failed
+     * within [PRIMARY_RETRY_COOLDOWN_MS].
      *
-     * Tries the last known good host (persisted across restarts) first so
-     * cold starts skip the failover rotation and connect immediately.
+     * This means an upgraded installation that previously remembered a community
+     * ElectrumX server will still attempt `electrumx.raventag.com:50002` first.
      */
     fun nextHealthyNode(): String? {
         val now = System.currentTimeMillis()
         val quarantinedHosts = activeQuarantineHosts(now)
+        val configured = AppConfig.ELECTRUM_SERVERS
+        if (configured.isEmpty()) {
+            recomputeState()
+            return null
+        }
 
-        // Fast path: try the persisted last-good host first on cold start.
+        val (primaryHost, primaryPort) = configured.first()
+        val primary = "$primaryHost:$primaryPort"
+        val primaryFailedAt = lastFailureAt[primary]
+        val primaryCoolingDown = primaryFailedAt != null &&
+            (now - primaryFailedAt) <= PRIMARY_RETRY_COOLDOWN_MS
+
+        // Absolute priority: a healthy primary always wins, even if an older
+        // installation persisted a different last_good_host.
+        if (primary !in quarantinedHosts && !primaryCoolingDown) {
+            recomputeState()
+            return primary
+        }
+
+        // The primary is temporarily unavailable. Prefer the previously working
+        // fallback to avoid needless rotation during the primary retry window.
         val preferred = getPreferredHost()
-        if (preferred != null && preferred !in quarantinedHosts) {
+        if (preferred != null && preferred != primary && preferred !in quarantinedHosts) {
             val failedAt = lastFailureAt[preferred]
             if (failedAt == null || (now - failedAt) > TRANSIENT_COOLDOWN_MS) {
                 recomputeState()
@@ -104,23 +141,36 @@ object NodeHealthMonitor {
             }
         }
 
-        // Standard rotation: non-quarantined nodes outside transient cooldown.
-        val candidate = AppConfig.ELECTRUM_SERVERS.firstOrNull { (host, port) ->
+        // Standard fallback rotation. The primary is intentionally excluded here:
+        // it will become eligible again only when its retry cooldown expires.
+        val candidate = configured.drop(1).firstOrNull { (host, port) ->
             val key = "$host:$port"
             if (key in quarantinedHosts) return@firstOrNull false
             val failedAt = lastFailureAt[key]
             failedAt == null || (now - failedAt) > TRANSIENT_COOLDOWN_MS
         }?.let { (h, p) -> "$h:$p" }
-        if (candidate != null) { recomputeState(); return candidate }
+        if (candidate != null) {
+            recomputeState()
+            return candidate
+        }
 
-        // All nodes are in transient cooldown: fall back to the least recently
-        // failed non-quarantined node so the app never deadlocks.
-        val fallback = AppConfig.ELECTRUM_SERVERS
+        // All fallbacks are in transient cooldown. Pick the least-recently-failed
+        // non-quarantined fallback so the app does not enter a dead state. If no
+        // fallback is available, return the primary only after its transient retry
+        // window; a quarantined primary remains excluded.
+        val fallback = configured.drop(1)
             .map { (h, p) -> "$h:$p" }
             .filter { it !in quarantinedHosts }
             .minByOrNull { lastFailureAt[it] ?: 0L }
+
+        if (fallback != null) {
+            recomputeState()
+            return fallback
+        }
+
+        val primaryRetry = if (primary !in quarantinedHosts && !primaryCoolingDown) primary else null
         recomputeState()
-        return fallback
+        return primaryRetry
     }
 
     fun reportSuccess(host: String) {
@@ -151,9 +201,14 @@ object NodeHealthMonitor {
         recomputeState()
     }
 
-    /** Host with the most recent [reportSuccess] (falls back to persisted on cold start). */
+    /**
+     * Host currently known to be connected. Before the first successful RPC,
+     * report the configured primary rather than a stale persisted fallback.
+     */
     fun currentNode(): String? =
-        lastSuccessAt.maxByOrNull { it.value }?.key ?: getPreferredHost()
+        lastSuccessAt.maxByOrNull { it.value }?.key
+            ?: AppConfig.ELECTRUM_SERVERS.firstOrNull()?.let { (host, port) -> "$host:$port" }
+            ?: getPreferredHost()
 
     fun diagnostics(): List<NodeDiagnostic> {
         val now = System.currentTimeMillis()
@@ -210,6 +265,7 @@ object NodeHealthMonitor {
         // GREEN takes precedence over YELLOW: once any host answers successfully in
         // the last 60s we are connected, regardless of transient failures on other hosts.
         val next = when {
+            total == 0 -> ConnectionHealth.RED
             quarantined >= total -> ConnectionHealth.RED
             lastSuccessAt.values.any { (now - it) <= GREEN_SUCCESS_WINDOW_MS } ->
                 ConnectionHealth.GREEN
