@@ -40,29 +40,25 @@ object AppConfig {
      * D-09: Hardcoded public ElectrumX fallback pool. Round-robin via
      * [io.raventag.app.wallet.health.NodeHealthMonitor].
      *
-     * Primary endpoint:
-     *   - electrumx.raventag.com (RavenTag-operated public ElectrumX)
+     * The clearnet pool mirrors the current Electrum-Ravencoin client order:
+     *   1. electrumx.raventag.com (RavenTag-operated primary)
+     *   2. electrum1.cipig.net
+     *   3. electrum2.cipig.net
+     *   4. electrum3.cipig.net
+     *   5. rvn4lyfe.com
      *
-     * Additional community fallbacks researched from:
-     *   - github.com/Electrum-RVN-SIG/electrum-ravencoin servers.json
-     *   - rvn4lyfe.com operator-hosted infrastructure
+     * Cipig uses TLS port 20051 for Ravencoin; RavenTag and rvn4lyfe use 50002.
+     * The Electrum client's onion entry is intentionally not included because
+     * RavenTag does not provide an integrated Tor transport.
      *
-     * Note: "rvn-dashboard.com" may rotate off SSL in the future; quarantine
-     * handles silently (D-11, 1h quarantine on TOFU mismatch). If a future
-     * community list expands coverage, add hosts here (no user-configurable
-     * list in v1, deferred to a later "power user" phase).
-     *
-     * Current count: 6.
+     * Current count: 5.
      */
     val ELECTRUM_SERVERS: List<Pair<String, Int>> = listOf(
-        // RavenTag-operated endpoint is intentionally first. Remaining entries
-        // are independent community fallbacks used if the primary is unavailable.
         "electrumx.raventag.com" to 50002,
+        "electrum1.cipig.net" to 20051,
+        "electrum2.cipig.net" to 20051,
+        "electrum3.cipig.net" to 20051,
         "rvn4lyfe.com" to 50002,
-        "rvn-dashboard.com" to 50002,
-        "rvn.electrum1.cipig.net" to 20051,
-        "rvn.electrum2.cipig.net" to 20051,
-        "rvn.electrum3.cipig.net" to 20051,
     )
 
     /**
