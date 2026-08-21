@@ -43,6 +43,12 @@ router.get('/search', async (req: Request, res: Response) => {
     res.status(400).json({ error: 'Query must be at least 3 characters', code: 'BAD_REQUEST' })
     return
   }
+  // RT108-SEC-209: bound length and charset so unique oversized queries cannot
+  // grow the cache table with multi-KB keys and oversized RPC patterns.
+  if (q.length > 64 || !/^[A-Za-z0-9_./#!-]+$/.test(q)) {
+    res.status(400).json({ error: 'Query must be 3-64 chars of asset-name characters', code: 'BAD_REQUEST' })
+    return
+  }
 
   // Cache key uses the uppercased query for case-insensitive deduplication
   const cacheKey = `search:${q.toUpperCase()}`
@@ -128,6 +134,12 @@ router.get('/:assetName', async (req: Request, res: Response) => {
  */
 router.get('/:assetName/verify-nfc', async (req: Request, res: Response) => {
   const assetName = req.params.assetName.toUpperCase()
+  // RT108-SEC-209: validate like every sibling route instead of only uppercasing.
+  const assetCheck = assetNameWithUniqueSchema.safeParse(assetName)
+  if (!assetCheck.success) {
+    res.status(400).json({ error: 'Invalid asset name', code: 'BAD_REQUEST' })
+    return
+  }
   const pubId = req.query['pub_id']
 
   if (typeof pubId !== 'string' || !/^[0-9a-fA-F]{64}$/.test(pubId)) {

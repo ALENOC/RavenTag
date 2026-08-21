@@ -97,34 +97,67 @@ class RpcClient(
     }
 
     /**
+     * RT108-SEC-103: the IPFS name arrives from server-controlled asset
+     * metadata and is used as a filename. Only strict content-identifier
+     * shapes are accepted — no path separators, dots, or free-form strings,
+     * so `../databases/...` can never reach the filesystem layer.
+     */
+    private fun isSafeIpfsName(hash: String): Boolean =
+        hash.length in 46..64 &&
+            (hash.matches(Regex("^Qm[1-9A-HJ-NP-Za-km-z]{44}$")) ||          // CIDv0
+             hash.matches(Regex("^baf[a-z0-9]{20,59}$")) ||                   // CIDv1
+             hash.matches(Regex("^[0-9a-fA-F]{64}$")))                        // raw sha256
+
+    /**
      * Downloads image bytes from [url] and saves to the app's cache directory.
-     * Returns a file:// URL, or null on failure.
+     * Returns a file:// URL, or null on failure. Download size is capped and
+     * the destination is verified to stay inside the cache directory.
      */
     private fun cacheImageFile(hash: String, url: String): String? {
         return try {
+            if (!isSafeIpfsName(hash)) return null
             val dir = java.io.File(context?.cacheDir ?: return null, "ipfs_images")
             if (!dir.exists()) dir.mkdirs()
             val file = java.io.File(dir, hash)
+            // Defense in depth: even with the shape check above, refuse any
+            // name that resolves outside the cache directory.
+            if (!file.canonicalPath.startsWith(dir.canonicalPath + java.io.File.separator)) return null
             if (file.exists()) return "file://${file.absolutePath}"
             val req = Request.Builder().url(url).get().build()
             noRedirectHttp.newCall(req).execute().use { resp ->
                 if (!resp.isSuccessful) return null
                 resp.body?.byteStream()?.use { input ->
                     java.io.FileOutputStream(file).use { output ->
-                        input.copyTo(output)
+                        // RT108-SEC-103: bounded copy — a malicious image URL
+                        // must not be able to fill the disk.
+                        val buffer = ByteArray(16 * 1024)
+                        var total = 0L
+                        val maxBytes = 10L * 1024 * 1024
+                        while (true) {
+                            val read = input.read(buffer)
+                            if (read < 0) break
+                            total += read
+                            if (total > maxBytes) {
+                                output.close()
+                                file.delete()
+                                return null
+                            }
+                            output.write(buffer, 0, read)
+                        }
                     }
                 }
             }
-            android.util.Log.d("RpcClient", "cacheImageFile: saved $hash to ${file.absolutePath} (${file.length()} bytes)")
+            android.util.Log.d("RpcClient", "cacheImageFile: saved $hash (${file.length()} bytes)")
             "file://${file.absolutePath}"
         } catch (e: Exception) {
-            android.util.Log.w("RpcClient", "cacheImageFile: failed for $hash via $url: ${e.message}")
+            android.util.Log.w("RpcClient", "cacheImageFile: failed for $hash: ${e.message}")
             null
         }
     }
 
     /** Returns cached local image file URL for [hash], or null if not cached. */
     private fun getCachedImageFile(hash: String): String? {
+        if (!isSafeIpfsName(hash)) return null
         val dir = java.io.File(context?.cacheDir ?: return null, "ipfs_images")
         val file = java.io.File(dir, hash)
         return if (file.exists()) "file://${file.absolutePath}" else null
@@ -250,7 +283,9 @@ class RpcClient(
     suspend fun searchAssets(query: String): List<String> {
         return try {
             val request = Request.Builder()
-                .url("$rpcUrl/api/assets?search=${query.uppercase()}")
+                // RT108-SEC-116: encode the user query so separators/fragments
+                // cannot alter the request path.
+                .url("$rpcUrl/api/assets?search=" + java.net.URLEncoder.encode(query.uppercase(), "UTF-8"))
                 .get().build()
             val response = noRedirectHttp.newCall(request).executeSuspend()
             if (!response.isSuccessful) return emptyList()

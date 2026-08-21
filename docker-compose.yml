@@ -21,6 +21,9 @@ services:
       RVN_RPC_PASS: ${RVN_RPC_PASS:-}
       RVN_PUBLIC_RPC_URL: ${RVN_PUBLIC_RPC_URL:-https://rvn-rpc.publicnode.com}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-https://raventag.com}
+      # RT108-SEC-205: set true only when behind a reverse proxy that appends
+      # the real client IP to X-Forwarded-For (e.g. the documented nginx setup).
+      TRUST_PROXY: ${TRUST_PROXY:-false}
       CACHE_TTL_ASSET: ${CACHE_TTL_ASSET:-300}
       CACHE_TTL_IPFS: ${CACHE_TTL_IPFS:-3600}
       IPFS_GATEWAY: ${IPFS_GATEWAY:-https://ipfs.io/ipfs/}

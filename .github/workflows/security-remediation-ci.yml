@@ -10,7 +10,9 @@ permissions:
 
 jobs:
   final-security-gate:
-    if: github.head_ref == 'security/full-audit-remediation-2026-08-18'
+    # RT108-SEC-204: this gate previously ran only for one specific audit
+    # branch, making it a no-op for every other PR. It now runs for ALL PRs
+    # targeting master.
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -20,13 +22,21 @@ jobs:
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           HEAD_REF: ${{ github.head_ref }}
           EVENT_SHA: ${{ github.event.pull_request.head.sha }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
-          git init .
-          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${HEAD_REPO}.git"
-          git fetch --depth=1 origin "${HEAD_REF}"
-          git checkout --detach FETCH_HEAD
-          test "$(git rev-parse HEAD)" = "$EVENT_SHA"
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            git init .
+            git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${HEAD_REPO}.git"
+            git fetch --depth=1 origin "${HEAD_REF}"
+            git checkout --detach FETCH_HEAD
+            test "$(git rev-parse HEAD)" = "$EVENT_SHA"
+          else
+            git init .
+            git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+            git fetch --depth=1 origin "${GITHUB_SHA}"
+            git checkout --detach FETCH_HEAD
+          fi
           git status --short
 
       - name: Backend exact install build tests and audit
@@ -34,6 +44,10 @@ jobs:
         run: |
           set -euo pipefail
           npm ci --ignore-scripts
+          # Deliberate, scoped exception: build the native binding of the
+          # lockfile-pinned better-sqlite3 only. Without it the DB-backed
+          # security regression tests cannot run under --ignore-scripts.
+          npm rebuild better-sqlite3
           npm run build
           npm test
           npm audit --audit-level=low

@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.coroutineContext
 import java.io.BufferedReader
@@ -116,22 +117,32 @@ class SubscriptionManager(
             synchronized(lifecycleLock) { scope?.cancel(); scope = null }
             return@withContext
         }
-        synchronized(lifecycleLock) { session = opened }
 
-        // Handshake
+        // Handshake. RT108-SEC-105: until the reader loop below is running,
+        // nothing completes sendAndAwait's deferred — a silent server would
+        // suspend start() forever and leave a zombie session published. Every
+        // startup await is timeout-bounded and the session is only published
+        // after the handshake succeeds; failures close the socket and scope.
         try {
-            sendAndAwait(opened, "server.version", listOf("RavenTag/1.0", "1.4"))
+            withTimeout(15_000L) {
+                sendAndAwait(opened, "server.version", listOf("RavenTag/1.0", "1.4"))
+            }
         } catch (_: Exception) {
+            try { opened.socket.close() } catch (_: Exception) {}
+            synchronized(lifecycleLock) { scope?.cancel(); scope = null }
             events.emit(ScripthashEvent.ConnectionLost)
             return@withContext
         }
+        synchronized(lifecycleLock) { session = opened }
 
         // Subscribe per address
         val node = RavencoinPublicNode(context)
         for (addr in addresses) {
             val sh = node.addressToScripthash(addr)
             try {
-                sendAndAwait(opened, "blockchain.scripthash.subscribe", listOf(sh))
+                withTimeout(15_000L) {
+                    sendAndAwait(opened, "blockchain.scripthash.subscribe", listOf(sh))
+                }
             } catch (_: Exception) {
                 Log.w(TAG, "subscribe failed for $sh, readLoop may deliver status anyway")
             }

@@ -108,7 +108,12 @@ export function unrevokeAsset(assetName: string): boolean {
  */
 export function checkAndUpdateCounter(nfcPubId: string, counter: number): boolean {
   if (!Number.isSafeInteger(counter) || counter < 0) return false
-  const result = db.prepare(`
+  // RT108-SEC-201: must go through getDb() — the module-level `db` is only
+  // assigned lazily, and this function can be the first DB-touching call of
+  // the process (public verify route right after a restart). Using the bare
+  // binding crashed with TypeError → unhandledRejection → process exit.
+  const database = getDb()
+  const result = database.prepare(`
     INSERT INTO nfc_counters (nfc_pub_id, last_counter)
     VALUES (?, ?)
     ON CONFLICT(nfc_pub_id) DO UPDATE SET last_counter = excluded.last_counter
@@ -254,19 +259,51 @@ export function deleteChip(assetName: string): boolean {
 /**
  * Return all chip-to-asset registrations in reverse-chronological order.
  */
-export function listChips(): Array<{ asset_name: string; tag_uid: string; nfc_pub_id: string; registered_at: number }> {
+/**
+ * RT108-SEC-206: operator-facing chip list must not disclose the raw hardware
+ * UID — only the public nfc_pub_id. tag_uid stays in the database for the
+ * server-side substitution check, it is just never listed back.
+ */
+export function listChips(): Array<{ asset_name: string; nfc_pub_id: string; registered_at: number }> {
   const database = getDb()
   return database.prepare(`
     SELECT
         asset_name,
-        tag_uid,
         nfc_pub_id,
         registered_at
     FROM chip_registry
     ORDER BY registered_at DESC
   `).all() as Array<{
-    asset_name: string; tag_uid: string; nfc_pub_id: string; registered_at: number
+    asset_name: string; nfc_pub_id: string; registered_at: number
   }>
+}
+
+/**
+ * RT108-SEC-209: periodic purge of expired cache rows. Without this, unique
+ * search queries grew the cache table unboundedly (expired rows were only
+ * deleted opportunistically on read of the same key).
+ */
+export function purgeExpiredCacheRows(): number {
+  const database = getDb()
+  const result = database.prepare('DELETE FROM cache WHERE expires < unixepoch()').run()
+  return result.changes
+}
+
+/** Start the hourly expired-cache purge (idempotent). */
+let cacheCleanupStarted = false
+export function startCacheCleanup(): void {
+  if (cacheCleanupStarted) return
+  cacheCleanupStarted = true
+  const purge = () => {
+    try {
+      const removed = purgeExpiredCacheRows()
+      if (removed > 0) console.log(`[Cache] Purged ${removed} expired rows`)
+    } catch (err) {
+      console.error('[Cache] Purge failed:', (err as Error).message)
+    }
+  }
+  purge()
+  setInterval(purge, 60 * 60 * 1000).unref()
 }
 
 export { ASSET_TTL, IPFS_TTL }

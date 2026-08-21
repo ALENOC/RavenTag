@@ -41,7 +41,10 @@
             <!-- Only the canonical RavenTag verification origin may invoke the
                  exported NDEF verification route. MainActivity/NfcReader also
                  re-validates scheme/host/path before accepting SUN parameters. -->
-            <intent-filter android:autoVerify="true">
+            <!-- autoVerify is an App Links attribute and is inert on
+                 NDEF_DISCOVERED filters; the host/path restriction below is
+                 what scopes NFC dispatch, and NfcReader re-validates. -->
+            <intent-filter>
                 <action android:name="android.nfc.action.NDEF_DISCOVERED" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data

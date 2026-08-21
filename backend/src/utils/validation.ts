@@ -129,7 +129,8 @@ export const adminRegisterTagSchema = z.object({
   asset_name: assetNameSchema,
   nfc_pub_id: hexString(64),   // SHA-256 = 32 bytes = 64 hex chars
   brand_info: z.object({
-    website: z.string().url().optional(),
+    // RT108-SEC-214: javascript:/data: URLs must not be storable.
+    website: z.string().url().regex(/^https:\/\//, 'website must be https').optional(),
     description: z.string().max(500).optional(),
     contact: z.string().max(200).optional()
   }).optional(),

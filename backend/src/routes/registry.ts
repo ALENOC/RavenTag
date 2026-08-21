@@ -99,10 +99,12 @@ router.post('/notify', notifyLimiter, async (req: Request, res: Response) => {
   }
 
   const name = proof.assetName
-  const now = typeof issued_at === 'string' && issued_at.length <= 64
+  // RT108-SEC-212: these strings are echoed verbatim on the public emissions
+  // endpoint, so accept only strict formats instead of any <=64-char payload.
+  const now = typeof issued_at === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/.test(issued_at)
     ? issued_at
     : new Date().toISOString()
-  const version = typeof protocol_version === 'string' && protocol_version.length <= 32
+  const version = typeof protocol_version === 'string' && /^RTP-1(\.\d+)?$/.test(protocol_version)
     ? protocol_version
     : 'RTP-1'
 

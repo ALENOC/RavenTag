@@ -205,7 +205,7 @@ fun MnemonicBackupScreen(
             // Words grid: rows of 3. Skip render if buffer already zero-filled
             // (confirm-in-flight) to avoid a phantom "1." cell.
             // ----------------------------------------------------------------
-            if (words.isNotEmpty())
+            if (words.isNotEmpty()) {
             Column(
                 modifier = Modifier
                     .padding(horizontal = 20.dp)
@@ -247,6 +247,7 @@ fun MnemonicBackupScreen(
                         }
                     }
                 }
+            }
             }
 
             Spacer(modifier = Modifier.height(16.dp))

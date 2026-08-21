@@ -245,6 +245,101 @@ class RavencoinPublicNode(private val context: Context) {
         true
     } catch (_: Exception) { false }
 
+    // Core Trust evidence collection (1.0.8) ─────────────────────────────────
+    //
+    // Unlike the failover methods above, these target ONE specific server:
+    // core-trust evidence describes the backend of the exact host the wallet
+    // is using, so failover here would silently answer about another server.
+
+    /** The configured pool as host/port pairs, in priority order. */
+    val poolHosts: List<Pair<String, Int>>
+        get() = SERVERS.map { it.host to it.port }
+
+    /** Outcome of a `server.ravencoin_backend` probe against one server. */
+    sealed class BackendInfoOutcome {
+        /** JSON-RPC method-not-found: server predates the 1.13 extension. */
+        object NotSupported : BackendInfoOutcome()
+        /** Server answered with a result object (structure validated later). */
+        data class Response(val result: JsonObject) : BackendInfoOutcome()
+        /** Transport timeout while collecting evidence. */
+        object Timeout : BackendInfoOutcome()
+        /** Any other transport or protocol failure. */
+        object Failure : BackendInfoOutcome()
+    }
+
+    /**
+     * Fetches `server.features` from one specific server, or null on failure.
+     * Used for capability detection (`ravencoin.backend_info`) and the
+     * advertised checkpoint height.
+     */
+    fun serverFeaturesDirect(host: String, port: Int): JsonObject? = try {
+        call(ElectrumServer(host, port), "server.features", emptyList()).asJsonObject
+    } catch (_: Exception) {
+        null
+    }
+
+    /**
+     * Probes `server.ravencoin_backend` on one specific server. Legacy
+     * servers reject the method with a JSON-RPC error, which maps to
+     * [BackendInfoOutcome.NotSupported] — a legacy server is a supported,
+     * non-trusted state, not an error.
+     */
+    fun ravencoinBackendDirect(host: String, port: Int): BackendInfoOutcome {
+        return try {
+            val result = call(
+                ElectrumServer(host, port),
+                "server.ravencoin_backend",
+                emptyList()
+            )
+            if (result.isJsonObject) {
+                BackendInfoOutcome.Response(result.asJsonObject)
+            } else {
+                BackendInfoOutcome.Failure
+            }
+        } catch (e: Exception) {
+            val message = e.message ?: e.javaClass.simpleName
+            when {
+                e is java.net.SocketTimeoutException ||
+                    e.cause is java.net.SocketTimeoutException -> BackendInfoOutcome.Timeout
+                message.contains("-32601", ignoreCase = true) ||
+                    message.contains("unknown method", ignoreCase = true) ||
+                    message.contains("method not found", ignoreCase = true) ->
+                    BackendInfoOutcome.NotSupported
+                else -> BackendInfoOutcome.Failure
+            }
+        }
+    }
+
+    /**
+     * Fetches the raw block header at [height] (hex) from one specific server
+     * via the standard `blockchain.block.header` method. Used to corroborate
+     * the checkpoint header across independent operators. Null on any failure.
+     */
+    fun blockHeaderDirect(host: String, port: Int, height: Long): String? = try {
+        val result = call(ElectrumServer(host, port), "blockchain.block.header", listOf(height))
+        if (result.isJsonPrimitive) result.asString else null
+    } catch (_: Exception) {
+        null
+    }
+
+    /**
+     * Returns the current chain tip as (height, header-hex) from one specific
+     * server via `blockchain.headers.subscribe`. On a fresh session the call
+     * answers with the tip status immediately. Null on any failure.
+     */
+    fun tipHeaderDirect(host: String, port: Int): Pair<Long, String>? {
+        return try {
+            val result = call(ElectrumServer(host, port), "blockchain.headers.subscribe", emptyList())
+            if (!result.isJsonObject) return null
+            val obj = result.asJsonObject
+            val height = obj.get("height")?.takeIf { it.isJsonPrimitive }?.asLong
+            val hex = obj.get("hex")?.takeIf { it.isJsonPrimitive }?.asString
+            if (height != null && hex != null && height > 0 && hex.isNotEmpty()) height to hex else null
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     /**
      * Returns the confirmed and unconfirmed RVN balance for [address].
      *
@@ -875,6 +970,10 @@ class RavencoinPublicNode(private val context: Context) {
         val rvnUtxos      = mutableListOf<Utxo>()
         val assetOutpoints = mutableSetOf<String>()
         val assetUtxosMap  = mutableMapOf<String, MutableList<AssetUtxo>>()
+        // RT108-SEC-106: outpoints whose script could not be fetched during a
+        // full-asset sweep. Misclassifying them as RVN risks signing with a
+        // wrong script or destroying an asset, so a full sweep fails closed.
+        val unresolvableOutpoints = mutableListOf<String>()
 
         for (u in pending) {
             val outpoint = "${u.txHash}:${u.txPos}"
@@ -886,10 +985,7 @@ class RavencoinPublicNode(private val context: Context) {
                     val vout = try {
                         tx?.getAsJsonArray("vout")?.get(u.txPos)?.asJsonObject
                     } catch (_: Exception) { null }
-                    val satoshis = try {
-                        val rvn = vout?.get("value")?.asDouble ?: 0.0
-                        (rvn * 100_000_000.0).toLong()
-                    } catch (_: Exception) { 0L }
+                    val satoshis = rvnValueToSatoshis(vout?.get("value")) ?: 0L
                     val onChainScript = try {
                         vout?.getAsJsonObject("scriptPubKey")?.get("hex")?.asString
                     } catch (_: Exception) { null }
@@ -915,21 +1011,27 @@ class RavencoinPublicNode(private val context: Context) {
                         val parsed = parseAssetFromScript(scriptHex)
                         if (parsed != null) {
                             val (assetName, rawAmount) = parsed
-                            val satoshis = try {
-                                ((vout?.get("value")?.asDouble ?: 0.0) * 100_000_000.0).toLong()
-                            } catch (_: Exception) { 0L }
+                            val satoshis = rvnValueToSatoshis(vout?.get("value")) ?: 0L
                             val utxo = Utxo(u.txHash, u.txPos, satoshis, scriptHex, u.height)
                             assetUtxosMap.getOrPut(assetName) { mutableListOf() }
                                 .add(AssetUtxo(utxo, assetName, rawAmount))
                         } else {
-                            // Recognition failed but it has an asset marker: treat as RVN so it's at least swept
-                            val satoshis = try {
-                                ((vout?.get("value")?.asDouble ?: 0.0) * 100_000_000.0).toLong()
-                            } catch (_: Exception) { u.valueField ?: 0L }
-                            rvnUtxos.add(Utxo(u.txHash, u.txPos, satoshis, scriptHex, u.height))
+                            // RT108-SEC-106: recognition failed but the script carries the
+                            // OP_RVN_ASSET marker. Spending it as plain RVN would destroy
+                            // the asset on-chain, so it is quarantined instead — never
+                            // added to rvnUtxos, whatever its RVN value.
+                            android.util.Log.w(
+                                "RavencoinPublicNode",
+                                "quarantined unparseable asset UTXO $outpoint (asset marker present, parser rejected script)"
+                            )
                         }
+                    } else if (scriptHex == null && fetchMissingAssetUtxos) {
+                        // RT108-SEC-106: during a full-asset sweep an unfetchable script
+                        // cannot be safely classified — fail the scan instead of guessing.
+                        unresolvableOutpoints.add(outpoint)
                     } else {
-                        // Confirmed RVN or unknown (treat as RVN to avoid locking up funds)
+                        // Confirmed RVN or unknown (treat as RVN to avoid locking up funds;
+                        // an asset UTXO mis-signed here fails at broadcast, not on-chain)
                         val satoshis = u.valueField ?: continue
                         rvnUtxos.add(Utxo(u.txHash, u.txPos, satoshis, rvnScript, u.height))
                     }
@@ -1003,7 +1105,7 @@ class RavencoinPublicNode(private val context: Context) {
                         val outpoint = "${u.txHash}:${u.txPos}"
                         if (!existingAssetOutpoints.add(outpoint)) continue
                         assetOutpoints.add(outpoint)
-                        val satoshis = try { ((vout.get("value")?.asDouble ?: 0.0) * 100_000_000.0).toLong() } catch (_: Exception) { 0L }
+                        val satoshis = rvnValueToSatoshis(vout.get("value")) ?: 0L
                         val utxo = Utxo(u.txHash, u.txPos, satoshis, scriptHex, u.height)
                         assetUtxosMap.getOrPut(assetName) { mutableListOf() }.add(AssetUtxo(utxo, assetName, rawAmount))
                         android.util.Log.i("RavencoinPublicNode", "  secondary: re-parsed $assetName from unknown UTXO ${u.txHash}:${u.txPos}")
@@ -1017,8 +1119,35 @@ class RavencoinPublicNode(private val context: Context) {
         if (fetchMissingAssetUtxos && unresolvedAssetNames.isNotEmpty()) {
             throw java.io.IOException("incomplete asset UTXO scan: missing=$unresolvedAssetNames")
         }
+        if (unresolvableOutpoints.isNotEmpty()) {
+            throw java.io.IOException(
+                "incomplete asset UTXO scan: unfetchable scripts for ${unresolvableOutpoints.size} output(s)"
+            )
+        }
 
         return Triple(rvnUtxos, assetOutpoints, assetUtxosMap)
+    }
+
+    /**
+     * RT108-SEC-109: exact satoshi conversion from a JSON RVN value. ElectrumX
+     * serializes RVN amounts as JSON decimals; going through Double can be off
+     * by a satoshi, which feeds fee/change math. Parse the literal exactly and
+     * only fall back to the legacy conversion if the literal is unavailable.
+     */
+    private fun rvnValueToSatoshis(element: JsonElement?): Long? {
+        if (element == null || !element.isJsonPrimitive) return null
+        return try {
+            java.math.BigDecimal(element.asJsonPrimitive.asString)
+                .movePointRight(8)
+                .setScale(0, java.math.RoundingMode.HALF_UP)
+                .longValueExact()
+        } catch (_: Exception) {
+            try {
+                (element.asDouble * 100_000_000.0).toLong()
+            } catch (_: Exception) {
+                null
+            }
+        }
     }
 
     /**
