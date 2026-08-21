@@ -44,6 +44,10 @@ jobs:
         run: |
           set -euo pipefail
           npm ci --ignore-scripts
+          # Deliberate, scoped exception: build the native binding of the
+          # lockfile-pinned better-sqlite3 only. Without it the DB-backed
+          # security regression tests cannot run under --ignore-scripts.
+          npm rebuild better-sqlite3
           npm run build
           npm test
           npm audit --audit-level=low
