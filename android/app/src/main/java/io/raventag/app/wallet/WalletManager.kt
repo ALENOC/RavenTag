@@ -480,7 +480,9 @@ class WalletManager(private val context: Context) {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                         setUnlockedDeviceRequired(true)
                     }
-                    if (strongBox) setIsStrongBoxBacked(true)
+                    if (strongBox && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                        setIsStrongBoxBacked(true)
+                    }
                 }
                 .build()
 
@@ -554,7 +556,12 @@ class WalletManager(private val context: Context) {
             val key = entry?.secretKey ?: return false
             val factory = javax.crypto.SecretKeyFactory.getInstance(key.algorithm, "AndroidKeyStore")
             val keyInfo = factory.getKeySpec(key, KeyInfo::class.java) as KeyInfo
-            keyInfo.securityLevel != KeyProperties.SECURITY_LEVEL_SOFTWARE
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                keyInfo.securityLevel != KeyProperties.SECURITY_LEVEL_SOFTWARE
+            } else {
+                @Suppress("DEPRECATION")
+                keyInfo.isInsideSecureHardware
+            }
         } catch (_: Exception) { false }
     }
 
@@ -1190,7 +1197,9 @@ class WalletManager(private val context: Context) {
         for (t in targets) {
             try {
                 if (!t.hasRvn) continue
-                val rvnUtxos = node.getUtxos(t.address)
+                // RT108-SEC-107: raw-tx-verified classification so an asset UTXO
+                // can never enter a plain-RVN sweep as a signing input.
+                val rvnUtxos = try { node.getUtxosAndAllAssetUtxosBatch(t.address).first } catch (_: Exception) { emptyList() }
                 if (rvnUtxos.isEmpty()) continue
 
                 var privKey: ByteArray? = null
@@ -1977,6 +1986,8 @@ class WalletManager(private val context: Context) {
         includeOwnerToken: Boolean = false
     ): String = withContext(Dispatchers.IO) {
         ensureNoPendingSends()
+        // RT108-SEC-110: paying an asset to a non-mainnet address burns it.
+        RavencoinTxBuilder.requireRavencoinMainnetP2pkh(toAddress)
         val currentIndex = getCurrentAddressIndex()
         val nextAddress = getAddress(0, currentIndex + 1) ?: error("Cannot derive next address")
         val node = RavencoinPublicNode(context)
@@ -2179,6 +2190,9 @@ class WalletManager(private val context: Context) {
         ipfsHash: String? = null
     ): String = withContext(Dispatchers.IO) {
         ensureNoPendingSends()
+        // RT108-SEC-110: the burn is irreversible; the destination must be a
+        // canonical Ravencoin mainnet P2PKH address before anything is built.
+        RavencoinTxBuilder.requireRavencoinMainnetP2pkh(toAddress)
         val assetName = assetNameRaw.trim()
         require(assetName.length <= RavencoinTxBuilder.MAX_ASSET_NAME_LENGTH) {
             "Asset name too long (${assetName.length}/${RavencoinTxBuilder.MAX_ASSET_NAME_LENGTH}): $assetName"
@@ -2604,7 +2618,8 @@ class WalletManager(private val context: Context) {
                     val curKeyPair = getKeyPair(0, currentIndex) ?: return@withContext
                     var curPrivKey: ByteArray? = curKeyPair.first
                     try {
-                        val currentUtxos = node.getUtxos(currentAddr)
+                        // RT108-SEC-107: raw-tx-verified classification for signing inputs.
+                        val currentUtxos = node.getUtxosAndAllAssetUtxosBatch(currentAddr).first
                         val fundFee = FeeSafetyPolicy.calculateFee(10L + 148L * currentUtxos.size + 34L * 2, satPerByte)
                         val tx = signAndBroadcastReserved(
                             inputs = (currentUtxos),
@@ -2783,7 +2798,9 @@ suspend fun consolidateAllFundsToFreshAddress(): String? = withContext(Dispatche
                                         android.util.Log.w("WalletManager", "consolid: getAssetUtxosFull failed for ${ab.name}: ${e.message}")
                                     }
                                 }
-                                val rvnUtxos = node.getUtxos(addr)
+                                // RT108-SEC-107: raw-tx-verified classification so
+                                // consolidation cannot sweep an asset UTXO as RVN.
+                                val rvnUtxos = try { node.getUtxosAndAllAssetUtxosBatch(addr).first } catch (_: Exception) { emptyList() }
                                 if (assetUtxosMap.isNotEmpty() || rvnUtxos.isNotEmpty()) {
                                     AddrFunds(i, rvnUtxos, assetUtxosMap)
                                 } else null

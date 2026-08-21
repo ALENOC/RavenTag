@@ -369,7 +369,9 @@ class AssetManager(
     fun checkRevocationStatus(assetName: String): RevocationStatus {
         return try {
             val request = Request.Builder()
-                .url("$apiBaseUrl/api/assets/${assetName.uppercase()}/revocation")
+                // RT108-SEC-111: encode the asset name — unique tokens legally
+                // contain '#' and '/', which would otherwise alter the request.
+                .url("$apiBaseUrl/api/assets/" + java.net.URLEncoder.encode(assetName.uppercase(), "UTF-8") + "/revocation")
                 .get()
                 .build()
             val response = http.newCall(request).execute()
@@ -497,7 +499,7 @@ class AssetManager(
                 .build()
             val response = http.newCall(request).execute()
             val bodyStr = response.body?.string()
-            Log.d("AssetManager", "verifyTag HTTP ${response.code} body=$bodyStr")
+            Log.d("AssetManager", "verifyTag HTTP ${response.code}") // RT108-SEC-113: never log the response body
             val parsed = gson.fromJson(bodyStr, com.google.gson.JsonElement::class.java)
             val obj = parsed?.takeIf { it.isJsonObject }?.asJsonObject
                 ?: return ServerVerifyResponse(

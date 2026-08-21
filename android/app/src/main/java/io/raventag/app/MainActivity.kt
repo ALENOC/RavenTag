@@ -3705,6 +3705,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             // Fallback: local SUN verification (requires sdmmacKey and sunMacKey configured).
+            // RT108-SEC-101: fail closed when the chip keys were never configured.
+            // The default all-zero keys are public, so AES-128/CMAC under them is
+            // offline-computable by anyone — verifying with them would certify
+            // any forged tag as AUTHENTIC. No assignment path exists today, so
+            // this fallback must refuse to verify at all.
+            if (sdmmacKey.all { it == 0.toByte() } || sunMacKey.all { it == 0.toByte() }) {
+                verifyStep = VerifyStep.ERROR
+                verifyResult = VerifyResult(
+                    authentic = false,
+                    error = "This tag is not linked to a registered asset, so it cannot be verified."
+                )
+                return@launch
+            }
             val sunResult = withContext(Dispatchers.Default) {
                 SunVerifier.verify(e, m, sdmmacKey, sunMacKey, salt)
             }
@@ -4609,6 +4622,15 @@ fun RavenTagApp(
                 viewModel.fetchBlockHeight()
                 viewModel.fetchRvnPrice()
                 viewModel.fetchNetworkHashrate()
+                // 1.0.8: Core Trust Status refresh — CoreTrustManager skips the
+                // work while its result is fresh, so this costs a real check
+                // roughly every 10 minutes, off the main loop's cadence.
+                launch(Dispatchers.IO) {
+                    try {
+                        io.raventag.app.wallet.coretrust.CoreTrustManager.refresh(context.applicationContext)
+                    } catch (_: Exception) {
+                    }
+                }
                 if (currentTab == AppTab.WALLET) {
                     viewModel.refreshBalance()
                 }

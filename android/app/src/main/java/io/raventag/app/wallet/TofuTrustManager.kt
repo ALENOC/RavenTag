@@ -30,41 +30,49 @@ internal class TofuTrustManager(private val context: Context, private val host: 
         val fingerprint = MessageDigest.getInstance("SHA-256").digest(cert.encoded)
             .joinToString("") { "%02x".format(it) }
 
-        val persisted = TofuFingerprintDao.getFingerprint(host)
-        val inMemory = certCache[host]
+        // RT108-SEC-104: serialize the read→compare→pin sequence per host.
+        // Multiple sockets connect to the same host concurrently (batch calls,
+        // subscription, workers); without the lock two first-use handshakes
+        // could both observe "no pin" and each persist a different certificate.
+        val lock = hostLocks.computeIfAbsent(host) { Any() }
+        synchronized(lock) {
+            val persisted = TofuFingerprintDao.getFingerprint(host)
+            val inMemory = certCache[host]
 
-        // Persistent storage is authoritative across process restarts. If a pin exists,
-        // only that exact fingerprint is accepted. Never accept a changed certificate
-        // merely because an in-memory value differs or is absent.
-        if (persisted != null) {
-            if (fingerprint != persisted) {
-                Log.e(TAG, "TOFU: certificate mismatch for $host; refusing changed fingerprint")
+            // Persistent storage is authoritative across process restarts. If a pin exists,
+            // only that exact fingerprint is accepted. Never accept a changed certificate
+            // merely because an in-memory value differs or is absent.
+            if (persisted != null) {
+                if (fingerprint != persisted) {
+                    Log.e(TAG, "TOFU: certificate mismatch for $host; refusing changed fingerprint")
+                    throw CertificateException(
+                        "Certificate mismatch for $host: expected $persisted, got $fingerprint"
+                    )
+                }
+                certCache[host] = persisted
+                return
+            }
+
+            // No persistent pin yet. If this process already saw the host, require consistency
+            // with that first observation before persisting it.
+            if (inMemory != null && fingerprint != inMemory) {
+                Log.e(TAG, "TOFU: first-use race/mismatch for $host; refusing changed fingerprint")
                 throw CertificateException(
-                    "Certificate mismatch for $host: expected $persisted, got $fingerprint"
+                    "Certificate mismatch for $host: expected $inMemory, got $fingerprint"
                 )
             }
-            certCache[host] = persisted
-            return
-        }
 
-        // No persistent pin yet. If this process already saw the host, require consistency
-        // with that first observation before persisting it.
-        if (inMemory != null && fingerprint != inMemory) {
-            Log.e(TAG, "TOFU: first-use race/mismatch for $host; refusing changed fingerprint")
-            throw CertificateException(
-                "Certificate mismatch for $host: expected $inMemory, got $fingerprint"
-            )
+            // First trusted observation for this host. Persist before returning success so a
+            // subsequent connection cannot silently establish a different identity.
+            TofuFingerprintDao.pinFingerprint(host, fingerprint)
+            certCache[host] = fingerprint
+            Log.i(TAG, "TOFU: pinned first certificate for $host")
         }
-
-        // First trusted observation for this host. Persist before returning success so a
-        // subsequent connection cannot silently establish a different identity.
-        TofuFingerprintDao.pinFingerprint(host, fingerprint)
-        certCache[host] = fingerprint
-        Log.i(TAG, "TOFU: pinned first certificate for $host")
     }
 
     companion object {
         private const val TAG = "ElectrumX"
         internal val certCache = ConcurrentHashMap<String, String>()
+        private val hostLocks = ConcurrentHashMap<String, Any>()
     }
 }
