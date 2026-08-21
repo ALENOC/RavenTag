@@ -24,7 +24,8 @@ import com.google.gson.JsonObject
  *  4. TRUSTED requires ALL of:
  *       - every compatibility flag true (coreSafe, networkMatches,
  *         backendSynchronized, kawpowHeightValidation, checkpoint4487775);
- *       - fresh evidence (observedAt within [MAX_EVIDENCE_AGE_MS]);
+ *       - fresh evidence (observedAt, normalized to milliseconds, within
+ *         [MAX_EVIDENCE_AGE_MS]);
  *       - build identity (repository + commit) matching a KNOWN_SAFE release
  *         of a signature-verified, non-expired policy;
  *       - the checkpoint block header from this server byte-identical to the
@@ -45,6 +46,24 @@ object CoreTrustEvaluator {
 
     /** Evidence older than this is not acted upon. */
     const val MAX_EVIDENCE_AGE_MS: Long = 10 * 60 * 1000L
+
+    /**
+     * Boundary between a Unix timestamp expressed in seconds and one expressed
+     * in milliseconds. As milliseconds this is 1973-03-03, as seconds it is the
+     * year 5138, so no real timestamp is ambiguous.
+     */
+    private const val OBSERVED_AT_MILLIS_THRESHOLD: Long = 100_000_000_000L
+
+    /**
+     * ElectrumX-RVN publishes `observedAt` as whole Unix seconds
+     * (`int(time.time())` in `ravencoin_backend.py`), while every timestamp the
+     * evaluator compares against is in milliseconds. A value inside the plausible
+     * seconds range is scaled up; a value already in milliseconds is returned
+     * unchanged. This corrects the unit only: the freshness window and the
+     * future-timestamp guard are still applied to the normalized value.
+     */
+    fun normalizeObservedAtMs(rawObservedAt: Long): Long =
+        if (rawObservedAt < OBSERVED_AT_MILLIS_THRESHOLD) rawObservedAt * 1000L else rawObservedAt
 
     private const val EXPECTED_NETWORK = "main"
 
@@ -274,8 +293,9 @@ object CoreTrustEvaluator {
         val network = backend.stringOrNull("network") ?: return null
         if (network.isEmpty() || network.length > 16) return null
 
-        val observedAt = response.longOrNull("observedAt") ?: return null
-        if (observedAt <= 0) return null
+        val rawObservedAt = response.longOrNull("observedAt") ?: return null
+        if (rawObservedAt <= 0) return null
+        val observedAt = normalizeObservedAtMs(rawObservedAt)
 
         val flags = mapOf(
             "coreSafe" to compatibility.booleanOrNull("coreSafe"),

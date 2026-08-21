@@ -167,10 +167,25 @@ class RavencoinPublicNode(private val context: Context) {
         private const val TAG = "ElectrumX"
 
         /** Timeout for the TCP connection handshake in milliseconds.
-         *  Kept tight so a dead server does not stall the cold-start failover
-         *  rotation: 5 servers × 5 s previously meant up to 25 s of "Reconnecting…"
-         *  on app resume; 2.5 s caps that at ~12 s worst case. */
-        private const val CONNECT_TIMEOUT_MS = 2_500
+         *  A dropped SYN is retransmitted by the kernel after 1 s and again after
+         *  3 s, so a 2.5 s budget turned a single lost packet into a server
+         *  failure and an immediate failover away from the primary. 5 s covers
+         *  two retransmissions while still bounding the cold-start rotation. */
+        private const val CONNECT_TIMEOUT_MS = 5_000
+
+        /** Extra connection attempts for the primary before it is failed over. */
+        private const val PRIMARY_CONNECT_RETRIES = 1
+
+        /**
+         * Minimum spacing between two TCP handshakes opened towards the same
+         * host. Several call sites connect at once (batch chunks, subscription,
+         * background workers) and a burst of simultaneous SYNs is dropped by
+         * per-source rate limiting in front of some ElectrumX deployments, which
+         * looks like a dead server to the client. Handshakes are therefore
+         * serialized per host and spaced; only the connect phase is serialized,
+         * so established sockets still work in parallel.
+         */
+        private const val CONNECT_SPACING_MS = 150L
 
         /** Timeout for reading a response line from the server in milliseconds. */
         private const val READ_TIMEOUT_MS = 15_000
@@ -212,6 +227,54 @@ class RavencoinPublicNode(private val context: Context) {
 
         /** Shared Gson instance for serializing JSON-RPC request objects. */
         private val gson = Gson()
+
+        /** Per-host handshake gate, see [CONNECT_SPACING_MS]. */
+        private val connectGates = java.util.concurrent.ConcurrentHashMap<String, Any>()
+
+        /** Start time of the last handshake attempt per host, in epoch millis. */
+        private val lastConnectAt = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+        /** Hosts that get [PRIMARY_CONNECT_RETRIES] extra attempts on timeout. */
+        private val primaryKey: String? =
+            SERVERS.firstOrNull()?.let { "${it.host}:${it.port}" }
+
+        /**
+         * Opens a TCP socket to [server], serializing and spacing the handshake
+         * against other connections to the same host and retrying the primary
+         * once when the handshake times out.
+         *
+         * @throws java.net.SocketTimeoutException when every attempt times out.
+         */
+        private fun openConnectedSocket(server: ElectrumServer): java.net.Socket {
+            val key = "${server.host}:${server.port}"
+            val attempts = if (key == primaryKey) 1 + PRIMARY_CONNECT_RETRIES else 1
+            val gate = connectGates.computeIfAbsent(key) { Any() }
+            var lastTimeout: java.net.SocketTimeoutException? = null
+            for (attempt in 1..attempts) {
+                val socket = java.net.Socket()
+                try {
+                    synchronized(gate) {
+                        val sinceLast = System.currentTimeMillis() - (lastConnectAt[key] ?: 0L)
+                        if (sinceLast in 0 until CONNECT_SPACING_MS) {
+                            Thread.sleep(CONNECT_SPACING_MS - sinceLast)
+                        }
+                        lastConnectAt[key] = System.currentTimeMillis()
+                        socket.connect(InetSocketAddress(server.host, server.port), CONNECT_TIMEOUT_MS)
+                    }
+                    return socket
+                } catch (e: java.net.SocketTimeoutException) {
+                    runCatching { socket.close() }
+                    lastTimeout = e
+                    if (attempt < attempts) {
+                        Log.w(TAG, "Handshake to $key timed out, retrying (${attempt + 1}/$attempts)")
+                    }
+                } catch (e: Exception) {
+                    runCatching { socket.close() }
+                    throw e
+                }
+            }
+            throw lastTimeout ?: java.net.SocketTimeoutException("connect to $key failed")
+        }
     }
 
     // Public API ──────────────────────────────────────────────────────────────
@@ -2040,8 +2103,7 @@ class RavencoinPublicNode(private val context: Context) {
         }
         val sslCtx = SSLContext.getInstance("TLS")
         sslCtx.init(null, arrayOf(TofuTrustManager(context, server.host)), SecureRandom())
-        val rawSocket = java.net.Socket()
-        rawSocket.connect(InetSocketAddress(server.host, server.port), CONNECT_TIMEOUT_MS)
+        val rawSocket = openConnectedSocket(server)
         val sslSocket = sslCtx.socketFactory.createSocket(rawSocket, server.host, server.port, true) as SSLSocket
         // Scale timeout with batch size so the last response has time to arrive
         sslSocket.soTimeout = READ_TIMEOUT_MS + requests.size * 500
@@ -2173,8 +2235,7 @@ class RavencoinPublicNode(private val context: Context) {
         sslCtx.init(null, arrayOf(TofuTrustManager(context, server.host)), SecureRandom())
 
         // Connect TCP first with the connect timeout, then upgrade to TLS
-        val rawSocket = java.net.Socket()
-        rawSocket.connect(InetSocketAddress(server.host, server.port), CONNECT_TIMEOUT_MS)
+        val rawSocket = openConnectedSocket(server)
         val sslSocket = sslCtx.socketFactory.createSocket(rawSocket, server.host, server.port, true) as SSLSocket
         sslSocket.soTimeout = READ_TIMEOUT_MS
 

@@ -314,6 +314,41 @@ class CoreTrustEvaluatorTest {
         assertEquals(CoreTrustReason.STALE_EVIDENCE, result.reason)
     }
 
+    // ── observedAt unit handling (server publishes Unix seconds) ─────────────
+
+    @Test
+    fun `observedAt in seconds is fresh and TRUSTED`() {
+        // ElectrumX-RVN sends int(time.time()): whole seconds, not milliseconds.
+        val result = evaluate(
+            backendResponse = backendResponse(observedAt = (NOW - 60_000L) / 1000L)
+        )
+        assertEquals(CoreTrustLevel.TRUSTED, result.level)
+        assertEquals(CoreTrustReason.CERTIFIED_BUILD, result.reason)
+    }
+
+    @Test
+    fun `stale observedAt in seconds is UNKNOWN`() {
+        val result = evaluate(
+            backendResponse = backendResponse(observedAt = (NOW - 11 * 60_000L) / 1000L)
+        )
+        assertEquals(CoreTrustLevel.UNKNOWN, result.level)
+        assertEquals(CoreTrustReason.STALE_EVIDENCE, result.reason)
+    }
+
+    @Test
+    fun `observedAt far in the future is UNKNOWN in both units`() {
+        val millis = evaluate(backendResponse = backendResponse(observedAt = NOW + 3_600_000L))
+        assertEquals(CoreTrustReason.STALE_EVIDENCE, millis.reason)
+        val seconds = evaluate(backendResponse = backendResponse(observedAt = NOW / 1000L + 3_600L))
+        assertEquals(CoreTrustReason.STALE_EVIDENCE, seconds.reason)
+    }
+
+    @Test
+    fun `normalizeObservedAtMs scales seconds and preserves milliseconds`() {
+        assertEquals(1_787_343_224_000L, CoreTrustEvaluator.normalizeObservedAtMs(1_787_343_224L))
+        assertEquals(NOW, CoreTrustEvaluator.normalizeObservedAtMs(NOW))
+    }
+
     // ── Additional adversarial cases ──────────────────────────────────────────
 
     @Test
