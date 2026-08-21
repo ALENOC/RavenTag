@@ -2296,8 +2296,20 @@ private fun ConnectionHealthPill(
 @Composable
 private fun ConnectionPillSheet(onDismiss: () -> Unit) {
     val strings = LocalStrings.current
+    val context = LocalContext.current
     val currentNode = NodeHealthMonitor.currentNode() ?: strings.connectionPillNoNode
     val diagnostics = NodeHealthMonitor.diagnostics()
+
+    // 1.0.8: Core Trust Status of the current server's Ravencoin Core backend.
+    // Refresh (rate-limited) every time the sheet opens; collect the latest result.
+    val coreTrust by io.raventag.app.wallet.coretrust.CoreTrustManager.stateFlow
+        .collectAsState()
+    LaunchedEffect(Unit) {
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            io.raventag.app.wallet.coretrust.CoreTrustManager.refresh(context, force = true)
+        }
+    }
+
     val sheetState = rememberModalBottomSheetState()
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -2333,6 +2345,7 @@ private fun ConnectionPillSheet(onDismiss: () -> Unit) {
                     color = RavenMuted
                 )
             }
+            CoreTrustSection(result = coreTrust)
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(strings.connectionPillFallbackNodes, style = MaterialTheme.typography.labelSmall, color = RavenMuted)
                 diagnostics.forEach { diag ->
@@ -2373,6 +2386,111 @@ private fun ConnectionPillSheet(onDismiss: () -> Unit) {
             ) { Text(strings.connectionPillClose) }
         }
     }
+}
+
+/**
+ * 1.0.8: Ravencoin Core trust status of the current ElectrumX server's backend.
+ *
+ * Deliberately separate from the connectivity pill above: "ElectrumX online"
+ * says the server answers; this section says whether the Ravencoin Core
+ * behind it is certified and chain-corroborated. Absence of evidence shows
+ * "unavailable" — never "unsafe", never "verified".
+ */
+@Composable
+private fun CoreTrustSection(result: io.raventag.app.wallet.coretrust.CoreTrustResult?) {
+    val strings = LocalStrings.current
+    val (dotColor, title) = when (result?.level) {
+        io.raventag.app.wallet.coretrust.CoreTrustLevel.TRUSTED ->
+            AuthenticGreen to String.format(strings.coreTrustVerifiedTitle, result.coreVersion ?: "?")
+        io.raventag.app.wallet.coretrust.CoreTrustLevel.UNSAFE ->
+            NotAuthenticRed to strings.coreTrustNotTrusted
+        else ->
+            Color(0xFFF59E0B) to (result?.let { strings.coreTrustUnavailable } ?: strings.coreTrustChecking)
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+            strings.coreTrustSectionTitle,
+            style = MaterialTheme.typography.labelSmall,
+            color = RavenMuted
+        )
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .background(dotColor, androidx.compose.foundation.shape.CircleShape)
+            )
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.SemiBold,
+                color = dotColor
+            )
+        }
+        result?.let { r ->
+            Text(
+                text = coreTrustReasonText(strings, r),
+                style = MaterialTheme.typography.labelSmall,
+                color = RavenMuted
+            )
+            if (r.level == io.raventag.app.wallet.coretrust.CoreTrustLevel.TRUSTED) {
+                r.identityRepository?.let { repo ->
+                    r.identityCommit?.let { commit ->
+                        Text(
+                            text = String.format(
+                                strings.coreTrustVerifiedCertified,
+                                repo,
+                                commit.take(12)
+                            ),
+                            style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                            color = RavenMuted
+                        )
+                    }
+                }
+                if (r.corroboratedBy.isNotEmpty()) {
+                    Text(
+                        text = String.format(
+                            strings.coreTrustVerifiedCorroboration,
+                            r.corroboratedBy.joinToString(", ")
+                        ),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = RavenMuted
+                    )
+                }
+            }
+            Text(
+                text = String.format(strings.coreTrustAsOf, formatHhMm(r.evaluatedAt)),
+                style = MaterialTheme.typography.labelSmall,
+                color = RavenMuted.copy(alpha = 0.7f)
+            )
+        }
+        Text(
+            text = strings.coreTrustHint,
+            style = MaterialTheme.typography.labelSmall,
+            color = RavenMuted.copy(alpha = 0.7f)
+        )
+    }
+}
+
+/** Localized one-line explanation for a core-trust classification. */
+private fun coreTrustReasonText(
+    strings: io.raventag.app.ui.theme.AppStrings,
+    result: io.raventag.app.wallet.coretrust.CoreTrustResult
+): String = when (result.reason) {
+    io.raventag.app.wallet.coretrust.CoreTrustReason.CERTIFIED_BUILD -> strings.coreTrustReasonCertified
+    io.raventag.app.wallet.coretrust.CoreTrustReason.LEGACY_SERVER -> strings.coreTrustReasonLegacy
+    io.raventag.app.wallet.coretrust.CoreTrustReason.MALFORMED_RESPONSE -> strings.coreTrustReasonMalformed
+    io.raventag.app.wallet.coretrust.CoreTrustReason.VERIFICATION_FAILED -> strings.coreTrustReasonFailed
+    io.raventag.app.wallet.coretrust.CoreTrustReason.TIMEOUT -> strings.coreTrustReasonTimeout
+    io.raventag.app.wallet.coretrust.CoreTrustReason.POLICY_UNAVAILABLE -> strings.coreTrustReasonPolicyUnavailable
+    io.raventag.app.wallet.coretrust.CoreTrustReason.POLICY_INVALID_SIGNATURE -> strings.coreTrustReasonPolicyInvalid
+    io.raventag.app.wallet.coretrust.CoreTrustReason.IDENTITY_MISSING -> strings.coreTrustReasonIdentityMissing
+    io.raventag.app.wallet.coretrust.CoreTrustReason.NOT_CERTIFIED -> strings.coreTrustReasonNotCertified
+    io.raventag.app.wallet.coretrust.CoreTrustReason.INCOMPATIBLE_CORE -> strings.coreTrustReasonIncompatible
+    io.raventag.app.wallet.coretrust.CoreTrustReason.KNOWN_UNSAFE_CORE -> strings.coreTrustReasonKnownUnsafe
+    io.raventag.app.wallet.coretrust.CoreTrustReason.WRONG_NETWORK -> strings.coreTrustReasonWrongNetwork
+    io.raventag.app.wallet.coretrust.CoreTrustReason.NOT_SYNCHRONIZED -> strings.coreTrustReasonNotSynced
+    io.raventag.app.wallet.coretrust.CoreTrustReason.STALE_EVIDENCE -> strings.coreTrustReasonStale
+    io.raventag.app.wallet.coretrust.CoreTrustReason.NO_CHAIN_CORROBORATION -> strings.coreTrustReasonNoCorroboration
 }
 
 @Composable
