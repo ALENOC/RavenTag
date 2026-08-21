@@ -156,6 +156,20 @@ const MIGRATIONS: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_asset_emissions_asset_name ON asset_emissions(asset_name);
       CREATE INDEX IF NOT EXISTS idx_asset_emissions_issued_at ON asset_emissions(issued_at);
     `
+  },
+  {
+    id: 8,
+    name: 'electrum_tofu_pins',
+    // RT108-SEC-202: persistent TOFU pins for outbound ElectrumX connections.
+    // Previously pins lived only in process memory, so every restart reopened
+    // the first-use MITM window for the ElectrumX data path.
+    sql: `
+      CREATE TABLE IF NOT EXISTS electrum_tofu_pins (
+        host        TEXT PRIMARY KEY,
+        fingerprint TEXT NOT NULL,
+        pinned_at   INTEGER NOT NULL DEFAULT (unixepoch())
+      );
+    `
   }
 ]
 

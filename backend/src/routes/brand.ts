@@ -252,7 +252,8 @@ router.get('/chips', requireOperatorKey, (_req: Request, res: Response) => {
 /**
  * GET /api/brand/chip/:assetName
  * Get the chip registration for a specific asset.
- * Returns tag_uid and nfc_pub_id. Returns 404 if the asset has no registered chip.
+ * RT108-SEC-206: returns only the public nfc_pub_id — the raw tag_uid is
+ * never disclosed on operator read paths. Returns 404 if unregistered.
  * Accessible to operators and admins.
  */
 router.get('/chip/:assetName', requireOperatorKey, (req: Request, res: Response) => {
@@ -261,7 +262,7 @@ router.get('/chip/:assetName', requireOperatorKey, (req: Request, res: Response)
     res.status(404).json({ error: 'Chip not registered for this asset', code: 'NOT_FOUND' })
     return
   }
-  res.json({ asset_name: req.params.assetName.toUpperCase(), ...chip })
+  res.json({ asset_name: req.params.assetName.toUpperCase(), nfc_pub_id: chip.nfc_pub_id })
 })
 
 

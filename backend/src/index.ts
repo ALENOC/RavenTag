@@ -22,7 +22,7 @@ import verifyRouter from './routes/verify.js'
 import adminRouter from './routes/admin.js'
 import brandRouter from './routes/brand.js'
 import registryRouter from './routes/registry.js'
-import { getDb } from './middleware/cache.js'
+import { getDb, startCacheCleanup } from './middleware/cache.js'
 import { requestLogger, logRateLimitEvent, getRequestStats, startLogCleanup } from './middleware/logger.js'
 import { startBackupScheduler } from './services/backup.js'
 import { requireAdminKey } from './middleware/auth.js'
@@ -60,9 +60,13 @@ if (process.env.NODE_ENV === 'production') {
 }
 
 const app = express()
-// Trust the first proxy hop so that req.ip and rate-limit headers reflect the real client IP
-// when the backend runs behind nginx or any other reverse proxy.
-app.set('trust proxy', 1)
+// RT108-SEC-205: proxy trust is opt-in via TRUST_PROXY. When the backend is
+// directly reachable (the default compose topology binds 127.0.0.1), trusting
+// client-supplied X-Forwarded-For lets attackers rotate rate-limit buckets and
+// forge logged IPs. Set TRUST_PROXY=true only behind a reverse proxy that
+// overwrites/appends the real client IP (see docs/deploy).
+const TRUST_PROXY = /^(1|true|yes)$/i.test(process.env.TRUST_PROXY ?? '')
+app.set('trust proxy', TRUST_PROXY ? 1 : false)
 
 const PORT = Number(process.env.PORT ?? 3001)
 
@@ -99,8 +103,11 @@ function makeLimiter(max: number) {
     legacyHeaders: false,
     message: { error: 'Too many requests', code: 'RATE_LIMITED' },
     handler: (req, res, _next, options) => {
-      // Prefer X-Forwarded-For (set by reverse proxies) over direct socket IP
-      const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim() ?? req.ip ?? 'unknown'
+      // Prefer X-Forwarded-For only when a proxy hop is actually trusted;
+      // otherwise the header is client-controlled and must not be logged.
+      const ip = TRUST_PROXY
+        ? (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim() ?? req.ip ?? 'unknown'
+        : req.ip ?? 'unknown'
       logRateLimitEvent(ip, req.path)
       res.status(options.statusCode).json(options.message)
     }
@@ -172,10 +179,23 @@ app.get('/verify', verifyLimiter, (_req, res) => {
   res.send(installHtml())
 })
 
+function safeExternalUrl(value: string | undefined, fallback: string): string {
+  // RT108-SEC-213: env-controlled URLs are interpolated into HTML; accept only
+  // well-formed https URLs, HTML-escaped for attribute context.
+  if (!value) return fallback
+  try {
+    const parsed = new URL(value)
+    if (parsed.protocol !== 'https:') return fallback
+  } catch {
+    return fallback
+  }
+  return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;')
+}
+
 function installHtml(): string {
   const releaseUrl = 'https://github.com/ALENOC/RavenTag/releases/latest'
-  const playStoreUrl = process.env.PLAY_STORE_URL
-  const apkUrl = process.env.VERIFY_APK_URL || releaseUrl
+  const playStoreUrl = safeExternalUrl(process.env.PLAY_STORE_URL, undefined as unknown as string)
+  const apkUrl = safeExternalUrl(process.env.VERIFY_APK_URL, releaseUrl)
 
   const downloadBtn = playStoreUrl
     ? `<a href="${playStoreUrl}" target="_blank" rel="noopener noreferrer" style="display:inline-block">
@@ -265,6 +285,7 @@ const server = app.listen(PORT, () => {
   console.log(`RavenTag API running on http://localhost:${PORT}`)
   console.log(`Protocol: RTP-1 | Env: ${process.env.NODE_ENV ?? 'development'}`)
   startLogCleanup()
+  startCacheCleanup()
   if (process.env.ENABLE_INTERNAL_BACKUP === 'true') {
   const backupKeyPath = process.env.INTERNAL_BACKUP_ENCRYPTION_KEY_FILE
   if (!backupKeyPath) throw new Error('ENABLE_INTERNAL_BACKUP requires INTERNAL_BACKUP_ENCRYPTION_KEY_FILE')

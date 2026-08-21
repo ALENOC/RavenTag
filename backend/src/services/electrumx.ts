@@ -15,10 +15,10 @@
  *   - TLS is required for all connections (port 50002).
  *   - Self-signed certificates are accepted (common in the Ravencoin ecosystem).
  *   - Trust-On-First-Use (TOFU) pinning is applied: the SHA-256 fingerprint of
- *     the server certificate is stored in memory on the first connection and
- *     compared on every subsequent connection within the same process lifetime.
- *     A fingerprint change is treated as a potential MITM and the connection is
- *     rejected.
+ *     the server certificate is persisted in SQLite on the first connection
+ *     and compared on every subsequent connection — across restarts. A
+ *     fingerprint change is treated as a potential MITM and the connection is
+ *     rejected. A pin-store failure fails closed (no new enrollment).
  *
  * Failover:
  *   Multiple public ElectrumX servers are tried in order. If a server is
@@ -27,6 +27,7 @@
 
 import * as tls from 'tls'
 import { createHash } from 'crypto'
+import { getDb } from '../middleware/cache.js'
 
 // ── Address helpers ────────────────────────────────────────────────────────────
 
@@ -112,22 +113,55 @@ function addressToScripthash(address: string): string {
 interface ElectrumServer { host: string; port: number }
 
 /**
- * Known public Ravencoin ElectrumX servers (TLS port 50002).
- * Tried in order; failover to the next on any connection or protocol error.
+ * Known public Ravencoin ElectrumX servers, tried in order.
+ * RT108-SEC-203: aligned with the mobile app pool (AppConfig.ELECTRUM_SERVERS)
+ * so the backend and the app verify against the same server set. Raw-IP
+ * entries are gone: they defeat TOFU identity across IP rotations.
  */
 const SERVERS: ElectrumServer[] = [
+  { host: 'electrumx.raventag.com', port: 50002 }, // RavenTag-operated primary
+  { host: 'electrum1.cipig.net', port: 20051 },
+  { host: 'electrum2.cipig.net', port: 20051 },
+  { host: 'electrum3.cipig.net', port: 20051 },
   { host: 'rvn4lyfe.com', port: 50002 },
-  { host: 'rvn-dashboard.com', port: 50002 },
-  { host: '162.19.153.65', port: 50002 },
-  { host: '51.222.139.25', port: 50002 },
 ]
 
 /**
  * TOFU fingerprint cache: maps hostname to its SHA-256 certificate fingerprint.
- * Populated on first connection; validated on subsequent connections.
- * Cleared on process restart (in-memory only, no persistence).
+ * RT108-SEC-202: pins are persisted in SQLite (`electrum_tofu_pins`, migration 8)
+ * and loaded lazily per host, so a process restart no longer reopens the
+ * first-use MITM window. The in-memory map is a read cache over the table;
+ * enrollment and comparison happen synchronously in the TLS callback, so
+ * concurrent connections cannot interleave a second, different enrollment.
  */
 const certCache = new Map<string, string>()
+
+/** Lazy DB-backed pin store (better-sqlite3 is synchronous — safe in the TLS callback). */
+function pinnedFingerprint(host: string): string | undefined {
+  const cached = certCache.get(host)
+  if (cached) return cached
+  try {
+    const row = getDb()
+      .prepare('SELECT fingerprint FROM electrum_tofu_pins WHERE host = ?')
+      .get(host) as { fingerprint: string } | undefined
+    if (row?.fingerprint) {
+      certCache.set(host, row.fingerprint)
+      return row.fingerprint
+    }
+  } catch (err) {
+    // A pin store failure must fail CLOSED for new enrollments: without the
+    // ability to persist a pin we would silently degrade to per-process TOFU.
+    throw new Error(`TOFU pin store unavailable for ${host}: ${(err as Error).message}`)
+  }
+  return undefined
+}
+
+function persistFingerprint(host: string, fingerprint: string): void {
+  getDb()
+    .prepare('INSERT OR REPLACE INTO electrum_tofu_pins (host, fingerprint, pinned_at) VALUES (?, ?, unixepoch())')
+    .run(host, fingerprint)
+  certCache.set(host, fingerprint)
+}
 
 /**
  * Monotonically increasing request ID counter.
@@ -198,17 +232,27 @@ async function callServer(server: ElectrumServer, method: string, params: unknow
     })
 
     socket.once('secureConnect', () => {
-      // TOFU verification: pin the cert on first connection, reject on mismatch
+      // TOFU verification: pin the cert on first connection, reject on mismatch.
+      // Fail closed if the pin store itself cannot be consulted.
       const cert = socket.getPeerCertificate(true)
       if (!cert?.raw) { done(new Error(`No certificate from ${server.host}`)); return }
       const fingerprint = sha256Hex(cert.raw)
-      const cached = certCache.get(server.host)
-      if (!cached) {
-        // First time connecting to this host: pin the fingerprint
-        certCache.set(server.host, fingerprint)
+      let pinned: string | undefined
+      try {
+        pinned = pinnedFingerprint(server.host)
+      } catch (err) {
+        done(err as Error); return
+      }
+      if (!pinned) {
+        // First time connecting to this host: persist the fingerprint
+        try {
+          persistFingerprint(server.host, fingerprint)
+        } catch (err) {
+          done(new Error(`Cannot persist TOFU pin for ${server.host}: ${(err as Error).message}`)); return
+        }
         console.log(`[ElectrumX] TOFU: pinned ${server.host}`)
-      } else if (cached !== fingerprint) {
-        // Fingerprint changed since last connection: possible MITM, abort
+      } else if (pinned !== fingerprint) {
+        // Fingerprint changed since the pin was stored: possible MITM, abort
         done(new Error(`Certificate mismatch for ${server.host} (possible MITM)`)); return
       }
       // Send handshake: server.version announces the client name and minimum protocol version
