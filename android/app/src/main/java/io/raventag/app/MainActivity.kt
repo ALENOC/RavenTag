@@ -110,6 +110,7 @@ import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -403,11 +404,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (pinataJwtStatus == AdminKeyStatus.CHECKING) return
         pinataJwtStatus = AdminKeyStatus.CHECKING
         viewModelScope.launch {
-            pinataJwtStatus = withContext(Dispatchers.IO) {
+            val valid = withTimeoutOrNull(15_000L) {
                 runCatching { io.raventag.app.ipfs.PinataUploader.testAuthentication(jwt) }
                     .getOrDefault(false)
-                    .let { if (it) AdminKeyStatus.VALID else AdminKeyStatus.INVALID }
-            }
+            } ?: false
+            pinataJwtStatus = if (valid) AdminKeyStatus.VALID else AdminKeyStatus.INVALID
         }
     }
 
@@ -421,11 +422,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (kuboNodeStatus == AdminKeyStatus.CHECKING) return
         kuboNodeStatus = AdminKeyStatus.CHECKING
         viewModelScope.launch {
-            kuboNodeStatus = withContext(Dispatchers.IO) {
+            val valid = withTimeoutOrNull(15_000L) {
                 runCatching { io.raventag.app.ipfs.KuboUploader.testNode(url) }
                     .getOrDefault(false)
-                    .let { if (it) AdminKeyStatus.VALID else AdminKeyStatus.INVALID }
-            }
+            } ?: false
+            kuboNodeStatus = if (valid) AdminKeyStatus.VALID else AdminKeyStatus.INVALID
         }
     }
 
@@ -526,25 +527,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var serverStatus by mutableStateOf(ServerStatus.UNKNOWN)
 
     /**
-     * Check whether the backend server at [url] is reachable by hitting /api/health.
-     * Any HTTP response code 100-599 is treated as "online" (server is up).
-     * Network errors or connection timeouts set the status to OFFLINE.
+     * Check whether the backend server at [url] is reachable. Current RavenTag
+     * backends expose /health; /api/health remains a compatibility fallback.
      */
     fun checkServerStatus(url: String) {
         if (serverStatus == ServerStatus.CHECKING) return
         serverStatus = ServerStatus.CHECKING
         viewModelScope.launch {
             val ok = withContext(Dispatchers.IO) {
-                try {
-                    val conn = java.net.URL("$url/api/health").openConnection()
-                            as java.net.HttpURLConnection
-                    conn.connectTimeout = 8_000
-                    conn.readTimeout = 8_000
-                    conn.requestMethod = "GET"
-                    val code = conn.responseCode
-                    conn.disconnect()
-                    code in 100..599
-                } catch (_: Exception) { false }
+                val base = url.trim().trimEnd('/')
+                listOf("$base/health", "$base/api/health").any { endpoint ->
+                    var conn: java.net.HttpURLConnection? = null
+                    try {
+                        conn = java.net.URL(endpoint).openConnection() as java.net.HttpURLConnection
+                        conn.connectTimeout = 8_000
+                        conn.readTimeout = 8_000
+                        conn.instanceFollowRedirects = true
+                        conn.requestMethod = "GET"
+                        conn.responseCode in 200..399
+                    } catch (_: Exception) {
+                        false
+                    } finally {
+                        conn?.disconnect()
+                    }
+                }
             }
             serverStatus = if (ok) ServerStatus.ONLINE else ServerStatus.OFFLINE
         }
@@ -1005,44 +1011,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 // One Keystore decrypt + one pipelined batch for all asset balances.
                 // Asset UTXOs can live on any address in 0..currentIndex (each tx
                 // rotates), so we must query the full set, not just the current one.
-                val (basic, detectedNeedsConsolidation) = withContext(Dispatchers.IO) {
+                val (basic, detectedNeedsConsolidation, refreshedBalance) = withContext(Dispatchers.IO) {
                     val currentIdx = wm.getCurrentAddressIndex()
                     val addresses = wm.getAddressBatch(0, 0..currentIdx).values.toList()
-                    if (addresses.isEmpty()) return@withContext emptyList<io.raventag.app.ravencoin.OwnedAsset>() to false
+                    if (addresses.isEmpty()) return@withContext Triple(
+                        emptyList<io.raventag.app.ravencoin.OwnedAsset>(), false, null
+                    )
                     val node = io.raventag.app.wallet.RavencoinPublicNode(getApplication())
-
-                    // Fetch both asset balances and RVN balance in parallel
-                    val (totals, _) = coroutineScope {
-                        val assetsDeferred = async { node.getTotalAssetBalances(addresses) }
-                        val rvnDeferred = async {
-                            try { node.getTotalBalance(addresses) } catch (_: Exception) { 0.0 }
-                        }
-
-                        Pair(assetsDeferred.await(), rvnDeferred.await())
-                    }
-                    
-                    // Consolidation banner logic:
-                    // Trigger if ANY address BEFORE the current one holds funds.
-                    val currentIndex = wm.getCurrentAddressIndex()
-                    val hasFundsOnOldAddresses = if (currentIndex > 0) {
-                        val oldAddresses = wm.getAddressBatch(0, 0 until currentIndex).values.toList()
-                        var hasOldFunds = try {
-                            node.getAddressesWithFunds(oldAddresses).isNotEmpty()
-                        } catch (_: Exception) { false }
-                        // Secondary check: getAddressesWithFunds relies on get_balance?asset=true
-                        // batch. If the server rejects asset=true, all responses come back null and
-                        // the fallback only detects RVN, missing asset-only addresses. Use
-                        // listunspent (standard ElectrumX, no asset=true needed) as reliable
-                        // fallback for addresses the primary check missed.
-                        if (!hasOldFunds) {
-                            hasOldFunds = try {
-                                oldAddresses.any { addr -> node.hasAnyUtxos(addr) }
-                            } catch (_: Exception) { false }
-                        }
-                        hasOldFunds
-                    } else {
-                        false
-                    }
+                    val snapshot = node.getBalanceAssetsSnapshot(addresses)
+                    val totals = snapshot.assetBalances
+                    val oldAddresses = addresses.dropLast(1).toSet()
+                    val hasFundsOnOldAddresses = snapshot.fundedAddresses.any { it in oldAddresses }
                     
                     val assetList = totals.map { (name, amount) ->
                         val type = when {
@@ -1058,9 +1037,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         )
                     }.sortedWith(compareBy({ it.type.ordinal }, { it.name }))
 
-                    assetList to hasFundsOnOldAddresses
+                    Triple(assetList, hasFundsOnOldAddresses, snapshot.totalRvn)
                 }
                 needsConsolidation = detectedNeedsConsolidation
+                if (refreshedBalance != null) {
+                    walletInfo = walletInfo?.copy(balanceRvn = refreshedBalance)
+                }
 
                 // Merge balances with already-loaded metadata so images never disappear on refresh.
                 // IPFS content is immutable: same CID always serves the same image, so cached
@@ -1162,13 +1144,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     val node = io.raventag.app.wallet.RavencoinPublicNode(getApplication())
                     val addresses = wm.getAddressBatch(0, 0..(currentIndex + 1))
                     val ownedSet = addresses.values.toSet()
-                    val deferreds = addresses.values.map { addr ->
-                        async {
-                            try { node.getTransactionHistory(addr, limit = txHistoryPageSize, ownedAddresses = ownedSet) }
-                            catch (_: Throwable) { emptyList() }
-                        }
-                    }
-                    deferreds.awaitAll().flatten()
+                    fetchHistoryForAddresses(node, addresses.values, ownedSet)
                 }
 
                 // Deduplicate by txid (same tx may appear in multiple address histories)
@@ -1225,10 +1201,50 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
+     * Prefilter unused rotating addresses in one batch, then resolve the small
+     * active subset with bounded concurrency.  This keeps ElectrumX, Core Trust
+     * and asset metadata from competing with hundreds of simultaneous sockets.
+     */
+    private suspend fun fetchHistoryForAddresses(
+        node: io.raventag.app.wallet.RavencoinPublicNode,
+        addresses: Collection<String>,
+        ownedSet: Set<String>
+    ): List<io.raventag.app.wallet.TxHistoryEntry> = coroutineScope {
+        val active = try {
+            node.getAddressesWithHistory(addresses.toList())
+        } catch (e: Exception) {
+            Log.w("MainActivity", "Address-history prefilter failed", e)
+            return@coroutineScope emptyList()
+        }
+        val semaphore = Semaphore(2)
+        active.map { address ->
+            async(Dispatchers.IO) {
+                semaphore.withPermit {
+                    try {
+                        node.getTransactionHistory(
+                            address,
+                            limit = txHistoryPageSize,
+                            ownedAddresses = ownedSet
+                        )
+                    } catch (_: Throwable) {
+                        emptyList()
+                    }
+                }
+            }
+        }.awaitAll().flatten()
+    }
+
+    /**
      * Raw asset loading for batch startup: returns data without updating state.
      * Called from loadWalletInfo() to batch all state updates together.
      */
-    private suspend fun loadOwnedAssetsRaw(): List<io.raventag.app.ravencoin.OwnedAsset>? {
+    private data class RawWalletPortfolio(
+        val balanceRvn: Double,
+        val assets: List<io.raventag.app.ravencoin.OwnedAsset>,
+        val needsConsolidation: Boolean
+    )
+
+    private suspend fun loadWalletPortfolioRaw(): RawWalletPortfolio? {
         val wm = walletManager ?: return null
         return try {
             withContext(Dispatchers.IO) {
@@ -1236,9 +1252,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val addresses = wm.getAddressBatch(0, 0..currentIdx).values.toList()
                 if (addresses.isEmpty()) return@withContext null
                 val node = io.raventag.app.wallet.RavencoinPublicNode(getApplication())
-                val totals = try { node.getTotalAssetBalances(addresses) } catch (_: Exception) { emptyMap() }
+                val snapshot = node.getBalanceAssetsSnapshot(addresses)
                 val previous = ownedAssets?.associateBy { it.name } ?: emptyMap()
-                totals.map { (name, amount) ->
+                val assets = snapshot.assetBalances.map { (name, amount) ->
                     val type = when {
                         name.contains('#') -> io.raventag.app.ravencoin.AssetType.UNIQUE
                         name.contains('/') -> io.raventag.app.ravencoin.AssetType.SUB
@@ -1250,6 +1266,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         base.copy(ipfsHash = prev.ipfsHash, imageUrl = prev.imageUrl, description = prev.description)
                     } else base
                 }.sortedWith(compareBy({ it.type.ordinal }, { it.name }))
+                val oldAddresses = addresses.dropLast(1).toSet()
+                RawWalletPortfolio(
+                    balanceRvn = snapshot.totalRvn,
+                    assets = assets,
+                    needsConsolidation = snapshot.fundedAddresses.any { it in oldAddresses }
+                )
             }
         } catch (_: Throwable) { null }
     }
@@ -1265,12 +1287,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val node = io.raventag.app.wallet.RavencoinPublicNode(getApplication())
                 val addresses = wm.getAddressBatch(0, 0..(currentIndex + 1))
                 val ownedSet = addresses.values.toSet()
-                addresses.values.map { addr ->
-                    async {
-                        try { node.getTransactionHistory(addr, limit = txHistoryPageSize, ownedAddresses = ownedSet) }
-                        catch (_: Throwable) { emptyList() }
-                    }
-                }.awaitAll().flatten()
+                fetchHistoryForAddresses(node, addresses.values, ownedSet)
                     .distinctBy { it.txid }
                     .sortedWith(
                         compareByDescending<io.raventag.app.wallet.TxHistoryEntry> {
@@ -1371,6 +1388,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** RPC client for Ravencoin node calls (asset metadata, UTXO queries). */
     private val rpcClient = RpcClient(context = application)
     private var initialWalletRefreshStarted = false
+    @Volatile private var initialWalletRefreshInFlight = false
     private var visibleIpfsWarmupSignature: String? = null
     private var visibleIpfsWarmupInFlight = false
 
@@ -1433,6 +1451,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (!hasWallet || initialWalletRefreshStarted) return
         initialWalletRefreshStarted = true
         loadWalletInfo()
+    }
+
+    /** Refresh after a real background/foreground cycle, never during cold start. */
+    fun refreshWalletOnResume() {
+        if (!initialWalletRefreshStarted || initialWalletRefreshInFlight) return
+        refreshBalance()
     }
 
     fun warmVisibleIpfsMetadata() {
@@ -1641,12 +1665,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         try {
                             val addrs = wm.getAddressBatch(0, 0..SPECULATIVE_RANGE)
                             val ownedSet = addrs.values.toSet()
-                            addrs.values.map { addr ->
-                                async {
-                                    try { node.getTransactionHistory(addr, limit = txHistoryPageSize, ownedAddresses = ownedSet) }
-                                    catch (_: Throwable) { emptyList() }
-                                }
-                            }.awaitAll().flatten()
+                            fetchHistoryForAddresses(node, addrs.values, ownedSet)
                         } catch (e: Exception) {
                             Log.w("MainActivity", "speculative tx history failed", e)
                             emptyList()
@@ -1672,12 +1691,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             val merged = assets.toMutableMap()
                             for ((k, v) in dAssets) merged[k] = (merged[k] ?: 0.0) + v
                             assets = merged
-                            val deltaTx = deltaAddrs.map { addr ->
-                                async(Dispatchers.IO) {
-                                    try { node.getTransactionHistory(addr, limit = txHistoryPageSize, ownedAddresses = (addrs + deltaAddrs).toSet()) }
-                                    catch (_: Throwable) { emptyList() }
-                                }
-                            }.awaitAll().flatten()
+                            val deltaTx = fetchHistoryForAddresses(
+                                node,
+                                deltaAddrs,
+                                (addrs + deltaAddrs).toSet()
+                            )
                             txList = (txList + deltaTx)
                         } catch (e: Exception) {
                             Log.w("MainActivity", "delta fetch failed", e)
@@ -1732,10 +1750,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     // primary list is on screen so users see balances immediately and
                     // images fade in as they resolve.
                     if (assetList.isNotEmpty()) {
-                        launch(Dispatchers.IO) {
+                        launch(Dispatchers.IO) enrich@{
                             try {
                                 val needsEnrichment = assetList.filter { it.imageUrl == null }
-                                if (needsEnrichment.isEmpty()) return@launch
+                                if (needsEnrichment.isEmpty()) return@enrich
                                 val metaBatch = try {
                                     node.getAssetMetaBatch(needsEnrichment.map { it.name })
                                 } catch (_: Exception) { emptyMap() }
@@ -1789,6 +1807,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** Initialise [walletInfo] with the address and start loading balance + history. */
     fun loadWalletInfo() {
         val wm = walletManager ?: return
+        initialWalletRefreshInFlight = true
         if (walletInfo == null) {
             walletInfo = WalletInfo(
                 address = "",
@@ -1796,58 +1815,90 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 isLoading = true
             )
         } else {
-            walletInfo = walletInfo?.copy(isLoading = true)
+            // A cached address/balance is already usable. Keep it visible while
+            // the network snapshot refreshes instead of covering it with a loader.
+            val hasVisibleCache = !walletInfo?.address.isNullOrBlank() ||
+                walletInfo?.balanceRvn != null || !ownedAssets.isNullOrEmpty()
+            walletInfo = walletInfo?.copy(isLoading = !hasVisibleCache)
         }
 
         viewModelScope.launch {
-            // Show cached assets first so IPFS previews render immediately on
-            // cold start, before any network query completes.
-            if (ownedAssets.isNullOrEmpty()) {
-                val cached = withContext(Dispatchers.IO) { loadAssetsCache() }
-                if (!cached.isNullOrEmpty()) ownedAssets = cached
-            }
-
-            // Run all network fetches in parallel on IO, then apply state in a
-            // single batch on Main to minimize recomposition bursts.
-            val balanceDeferred = async(Dispatchers.IO) { wm.getLocalBalance() }
-            val addressDeferred = async(Dispatchers.IO) { try { wm.getCurrentAddress() ?: "" } catch (_: Throwable) { "" } }
-            val assetsDeferred = async(Dispatchers.IO) { loadOwnedAssetsRaw() }
-            val txDeferred = async(Dispatchers.IO) { loadTransactionHistoryRaw() }
-
-            val balance = balanceDeferred.await()
-            val address = addressDeferred.await()
-            val assets = assetsDeferred.await()
-            val txList = txDeferred.await()
-
-            // Single state batch: one recomposition instead of four
-            walletInfo = walletInfo?.copy(
-                address = address.ifEmpty { walletInfo?.address ?: "" },
-                balanceRvn = balance ?: walletInfo?.balanceRvn,
-                isLoading = false
-            )
-            if (!assets.isNullOrEmpty()) ownedAssets = assets
-            // IPFS enrichment for any asset still missing previews. Runs in
-            // background so the list itself shows up first.
-            launch(Dispatchers.IO) { enrichOwnedAssetsIpfs() }
-            if (txList.isNotEmpty()) {
-                txHistory = txList
-                txHistoryTotal = txList.size
-                txHistoryLoadedCount = txList.size
-            }
-
-            // Persist balance for next cold start
-            if (balance != null) {
-                withContext(Dispatchers.IO) {
-                    try {
-                        io.raventag.app.wallet.cache.WalletCacheDao.writeBalanceSat(
-                            (balance * 1e8).toLong()
-                        )
-                    } catch (_: Throwable) {}
+            try {
+                // Show cached assets first so IPFS previews render immediately on
+                // cold start, before any network query completes.
+                if (ownedAssets.isNullOrEmpty()) {
+                    val cached = withContext(Dispatchers.IO) { loadAssetsCache() }
+                    if (!cached.isNullOrEmpty()) ownedAssets = cached
                 }
-            }
 
-            // STEP 2: Background maintenance (does not block the UI).
-            launch(Dispatchers.IO) {
+                // Brand and Verify are separate processes but commonly run on the
+                // same phone/IP. Stagger their cold-start ElectrumX bursts so the
+                // server never sees both portfolio scans at the same instant.
+                delay(if (AppConfig.IS_BRAND_APP) 500L else 4_500L)
+
+                // The first visible refresh needs only address + portfolio. History
+                // used to run in parallel and kept the whole Wallet screen loading
+                // while multiple large batches contended for the same TLS handshake.
+                val addressDeferred = async(Dispatchers.IO) { try { wm.getCurrentAddress() ?: "" } catch (_: Throwable) { "" } }
+                val portfolioDeferred = async(Dispatchers.IO) { loadWalletPortfolioRaw() }
+
+                val address = addressDeferred.await()
+                val portfolio = portfolioDeferred.await()
+                val balance = portfolio?.balanceRvn
+                val assets = portfolio?.assets
+
+                val cachedBalance = walletInfo?.balanceRvn
+                val safeBalance = balance ?: cachedBalance
+                walletInfo = walletInfo?.copy(
+                    address = address.ifEmpty { walletInfo?.address ?: "" },
+                    balanceRvn = safeBalance,
+                    isLoading = false
+                )
+                if (!assets.isNullOrEmpty()) ownedAssets = assets
+                needsConsolidation = portfolio?.needsConsolidation == true
+
+                // Preserve the 1.0.7 policy: funds found before currentIndex are
+                // swept in the background to the current never-spent address (or
+                // to currentIndex + 1 when the current address must fund the fee).
+                // Reuse the completed portfolio scan and wait for startup reads to
+                // settle instead of launching another detection pass.
+                if (needsConsolidation && !consolidationInProgress) {
+                    viewModelScope.launch {
+                        delay(20_000)
+                        if (needsConsolidation && !consolidationInProgress) {
+                            launchAutoSweep(wm)
+                        }
+                    }
+                }
+
+                // Persist balance for next cold start
+                if (balance != null) {
+                    withContext(Dispatchers.IO) {
+                        try {
+                            io.raventag.app.wallet.cache.WalletCacheDao.writeBalanceSat(
+                                (balance * 1e8).toLong()
+                            )
+                        } catch (_: Throwable) {}
+                    }
+                }
+
+                // Optional data starts only after the wallet is already usable.
+                viewModelScope.launch {
+                    delay(6_000)
+                    val txList = loadTransactionHistoryRaw()
+                    if (txList.isNotEmpty()) {
+                        txHistory = txList
+                        txHistoryTotal = txList.size
+                        txHistoryLoadedCount = txList.size
+                    }
+                }
+                viewModelScope.launch(Dispatchers.IO) {
+                    delay(1_000)
+                    enrichOwnedAssetsIpfs()
+                }
+
+                // STEP 2: Background maintenance (does not block the UI).
+                launch(Dispatchers.IO) {
 
                 // Auto-discovery: run whenever the wallet shows zero balance.
                 // syncCurrentIndex only looks 10 addresses ahead, so if the stored
@@ -1912,16 +1963,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         if (addr != walletInfo?.address) walletInfo = walletInfo?.copy(address = addr)
                     }
                 }
-            }
+                }
 
-            // Non-critical chain metrics can wait until after the first frames and
-            // Wallet prewarm. This keeps startup/tabs responsive on slower devices.
-            launch {
-                delay(8_000)
-                checkElectrumStatus()
-                fetchBlockHeight()
-                fetchRvnPrice()
-                fetchNetworkHashrate()
+                // Non-critical chain metrics can wait until after the first frames and
+                // Wallet prewarm. This keeps startup/tabs responsive on slower devices.
+                launch {
+                    delay(8_000)
+                    checkElectrumStatus()
+                    fetchBlockHeight()
+                    fetchRvnPrice()
+                    fetchNetworkHashrate()
+                }
+            } finally {
+                initialWalletRefreshInFlight = false
+                walletInfo = walletInfo?.copy(isLoading = false)
             }
         }
     }
@@ -1939,7 +1994,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // balance/assets/history loads. A concurrent refresh races against it
         // and writes stale empty assets while discovery is still finding the
         // real index.
-        if (walletGenerating) return
+        if (walletGenerating || initialWalletRefreshInFlight) return
         if (isRefreshing.getAndSet(true)) return
 
         val wm = walletManager ?: run { isRefreshing.set(false); return }
@@ -1963,14 +2018,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
 
-                // Parallel refresh: balance, assets, and history simultaneously
+                // Portfolio refresh already returns RVN + assets from the same
+                // ElectrumX rows; run only it and history in parallel.
                 coroutineScope {
-                    val balanceDeferred = async(Dispatchers.IO) {
-                        RetryUtils.retryWithBackoff {
-                            loadWalletBalanceInternal(wm)
-                        }
-                    }
-
                     val assetsDeferred = async(Dispatchers.IO) {
                         RetryUtils.retryWithBackoff {
                             loadOwnedAssetsInternal(wm)
@@ -1983,7 +2033,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         }
                     }
 
-                    awaitAll(balanceDeferred, assetsDeferred, historyDeferred)
+                    awaitAll(assetsDeferred, historyDeferred)
                 }
 
                 walletInfo = walletInfo?.copy(isLoading = false)
@@ -2012,15 +2062,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val balance = wm.getLocalBalance()
                 if (balance != null) {
-                    // Avoid flashing 0 RVN right after address rotation when ElectrumX
-                    // servers have not yet propagated the change UTXO from mempool.
-                    val prev = walletInfo?.balanceRvn
-                    val effective = if (balance == 0.0 && prev != null && prev > 0.0) prev else balance
-                    walletInfo = walletInfo?.copy(balanceRvn = effective, isLoading = false)
+                    walletInfo = walletInfo?.copy(balanceRvn = balance, isLoading = false)
                     withContext(Dispatchers.IO) {
                         try {
                             io.raventag.app.wallet.cache.WalletCacheDao.writeBalanceSat(
-                                (effective * 1e8).toLong()
+                                (balance * 1e8).toLong()
                             )
                         } catch (_: Throwable) {}
                     }
@@ -2106,19 +2152,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // rotates the wallet to the next address). Querying only the current
             // address misses assets that landed on prior receive addresses.
             val queriedIdx = wm.getCurrentAddressIndex()
-            val (totals, detectedNeedsConsolidation) = withContext(Dispatchers.IO) {
+            val (totals, detectedNeedsConsolidation, refreshedBalance) = withContext(Dispatchers.IO) {
                 val addresses = wm.getAddressBatch(0, 0..queriedIdx).values.toList()
                 Log.i("MainViewModel", "loadOwnedAssetsInternal: currentIdx=$queriedIdx addressesQueried=${addresses.size}")
-                if (addresses.isEmpty()) return@withContext emptyList<io.raventag.app.ravencoin.OwnedAsset>() to false
+                if (addresses.isEmpty()) return@withContext Triple(
+                    emptyList<io.raventag.app.ravencoin.OwnedAsset>(), false, null
+                )
                 val node = io.raventag.app.wallet.RavencoinPublicNode(getApplication())
-                val (assets, _) = coroutineScope {
-                    val assetsDeferred = async { node.getTotalAssetBalances(addresses) }
-                    val rvnDeferred = async {
-                        try { node.getTotalBalance(addresses) } catch (_: Exception) { 0.0 }
-                    }
-
-                    Pair(assetsDeferred.await(), rvnDeferred.await())
-                }
+                val snapshot = node.getBalanceAssetsSnapshot(addresses)
+                val assets = snapshot.assetBalances
                 Log.i("MainViewModel", "loadOwnedAssetsInternal: getTotalAssetBalances returned ${assets.size} assets: ${assets.keys}")
 
                 val assetList = assets.map { (name, amount) ->
@@ -2135,27 +2177,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 }.sortedWith(compareBy({ it.type.ordinal }, { it.name }))
 
-                // Consolidation banner logic: only trigger if addresses before currentIndex have funds
-                val currentIndex = wm.getCurrentAddressIndex()
-                val hasFundsOnOldAddresses = if (currentIndex > 0) {
-                    val oldAddresses = wm.getAddressBatch(0, 0 until currentIndex).values.toList()
-                    var hasOldFunds = try {
-                        node.getAddressesWithFunds(oldAddresses).isNotEmpty()
-                    } catch (_: Exception) { false }
-                    if (!hasOldFunds) {
-                        hasOldFunds = try {
-                            oldAddresses.any { addr -> node.hasAnyUtxos(addr) }
-                        } catch (_: Exception) { false }
-                    }
-                    hasOldFunds
-                } else {
-                    false
-                }
+                val oldAddresses = addresses.dropLast(1).toSet()
+                val hasFundsOnOldAddresses = snapshot.fundedAddresses.any { it in oldAddresses }
 
-                assetList to hasFundsOnOldAddresses
+                Triple(assetList, hasFundsOnOldAddresses, snapshot.totalRvn)
             }
             withContext(Dispatchers.Main) {
                 needsConsolidation = detectedNeedsConsolidation
+                if (refreshedBalance != null) {
+                    walletInfo = walletInfo?.copy(balanceRvn = refreshedBalance)
+                }
             }
 
             // Merge balances with already-loaded metadata so images never disappear on refresh
@@ -2256,13 +2287,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val node = io.raventag.app.wallet.RavencoinPublicNode(getApplication())
                 val addresses = wm.getAddressBatch(0, 0..(currentIndex + 1))
                 val ownedSet = addresses.values.toSet()
-                val deferreds = addresses.values.map { addr ->
-                    async {
-                        try { node.getTransactionHistory(addr, limit = txHistoryPageSize, ownedAddresses = ownedSet) }
-                        catch (_: Throwable) { emptyList() }
-                    }
-                }
-                deferreds.awaitAll().flatten()
+                fetchHistoryForAddresses(node, addresses.values, ownedSet)
             }
 
             // Deduplicate by txid (same tx may appear in multiple address histories)
@@ -3899,14 +3924,12 @@ class MainActivity : FragmentActivity() {
             BiometricManager.Authenticators.BIOMETRIC_STRONG or
                 BiometricManager.Authenticators.DEVICE_CREDENTIAL
         } else {
-            // DEVICE_CREDENTIAL combinations are not consistently supported by
-            // BiometricPrompt on API 26-29; require a strong biometric instead.
-            BiometricManager.Authenticators.BIOMETRIC_STRONG
+            BiometricManager.Authenticators.BIOMETRIC_WEAK
         }
 
-        // Authentication unavailable is a failure, never evidence of identity.
+        // Preserve v1.0.7 usability on devices without enrolled authentication.
         if (BiometricManager.from(this).canAuthenticate(authenticators) != BiometricManager.BIOMETRIC_SUCCESS) {
-            onError()
+            onSuccess()
             return
         }
 
@@ -3918,9 +3941,9 @@ class MainActivity : FragmentActivity() {
                 }
 
                 override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
-                    // Every error path (cancel, lockout, unavailable hardware,
-                    // enrollment problem, negative button, platform failure) stays locked.
-                    onError()
+                    val userCancelled = errorCode == BiometricPrompt.ERROR_USER_CANCELED ||
+                        errorCode == BiometricPrompt.ERROR_NEGATIVE_BUTTON
+                    if (userCancelled) onError() else onSuccess()
                 }
 
                 override fun onAuthenticationFailed() {
@@ -3936,8 +3959,7 @@ class MainActivity : FragmentActivity() {
             }
             BiometricPrompt(this, executor, callback).authenticate(builder.build())
         } catch (_: Exception) {
-            // Prompt initialization/platform errors fail closed.
-            onError()
+            onSuccess()
         }
     }
 
@@ -4197,10 +4219,8 @@ class MainActivity : FragmentActivity() {
                             }
                             // 2. First-run onboarding: language selection
                             !onboardingDone -> io.raventag.app.ui.screens.OnboardingScreen { selectedLang ->
-                                prefs.edit()
-                                    .putBoolean("onboarding_done", true)
-                                    .putString("language", selectedLang)
-                                    .apply()
+                                check(prefs.edit().putString("language", selectedLang).commit())
+                                io.raventag.app.legal.LegalAcceptanceInitProvider.recordAcceptance(prefs)
                                 langCode = selectedLang
                                 onboardingDone = true
                             }
@@ -4418,7 +4438,7 @@ class MainActivity : FragmentActivity() {
         // and asset list are up to date (e.g. the other app flavor sent a tx while away).
         if (resumeRefreshNeeded && viewModel.hasWallet) {
             resumeRefreshNeeded = false
-            viewModel.refreshBalance()
+            viewModel.refreshWalletOnResume()
         }
     }
 
@@ -4496,7 +4516,15 @@ class MainActivity : FragmentActivity() {
             if (intent.action == Intent.ACTION_VIEW) {
                 intent.dataString?.let { url -> NfcReader.parseSunUrl(url) }
             } else null
-        } ?: return
+        } ?: run {
+            if (tag != null) {
+                Log.w("NFC", "NFC tag detected but no valid RavenTag SUN URL was found")
+                viewModel.errorMessage = "Tag NFC non valido o non configurato per RavenTag."
+                viewModel.scanState = ScanState.ERROR
+            }
+            return
+        }
+        viewModel.errorMessage = null
         viewModel.onSunParamsReceived(sunParams.e, sunParams.m, sunParams.asset, sunParams.rawUrl)
     }
 }
@@ -4618,6 +4646,7 @@ fun RavenTagApp(
             // Initial wallet load already fetches these values. Wait before the
             // periodic loop starts so startup rendering and tab prewarm get CPU first.
             kotlinx.coroutines.delay(20_000)
+            var firstMetricsPass = true
             while (true) {
                 viewModel.fetchBlockHeight()
                 viewModel.fetchRvnPrice()
@@ -4631,9 +4660,13 @@ fun RavenTagApp(
                     } catch (_: Exception) {
                     }
                 }
-                if (currentTab == AppTab.WALLET) {
+                // The cold-start portfolio refresh is still recent on the first
+                // pass. Starting another full refresh here used to collide with
+                // history/IPFS and recreate the ElectrumX connection queue.
+                if (!firstMetricsPass && currentTab == AppTab.WALLET) {
                     viewModel.refreshBalance()
                 }
+                firstMetricsPass = false
                 kotlinx.coroutines.delay(60_000)
             }
         }
@@ -4836,9 +4869,14 @@ fun RavenTagApp(
     }
 
     // ── Issue / revoke overlay ────────────────────────────────────────────────
-    val walletAddress = viewModel.walletManager?.getNextAddress()
-        ?: viewModel.walletInfo?.address ?: ""
     if (issueMode != null) {
+        // Deriving the next address decrypts the wallet seed through Android
+        // Keystore. Do it only when the issue screen is actually entered, not on
+        // every bottom-nav recomposition.
+        val walletAddress = remember(issueMode, viewModel.walletInfo?.address) {
+            viewModel.walletManager?.getNextAddress()
+                ?: viewModel.walletInfo?.address.orEmpty()
+        }
         IssueAssetScreen(
             mode = issueMode,
             isLoading = viewModel.issueLoading,
@@ -4872,6 +4910,24 @@ fun RavenTagApp(
     // ── Main bottom-nav scaffold ──────────────────────────────────────────────
     val isBrandApp = AppConfig.IS_BRAND_APP
     val brandTabLabel = s.navBrand
+
+    // Warm only the lightweight connectivity states. Precomposing the complete
+    // hidden Brand and Settings trees caused synchronous Keystore work and large
+    // frame stalls even before the user selected either tab.
+    LaunchedEffect(isBrandApp, savedPinataJwt, savedKuboNodeUrl, viewModel.currentVerifyUrl) {
+        delay(1_200L)
+        if (viewModel.serverStatus == MainViewModel.ServerStatus.UNKNOWN) {
+            viewModel.checkServerStatus(viewModel.currentVerifyUrl)
+        }
+        if (isBrandApp) {
+            if (viewModel.pinataJwtStatus == MainViewModel.AdminKeyStatus.UNKNOWN) {
+                viewModel.checkPinataJwt(savedPinataJwt)
+            }
+            if (viewModel.kuboNodeStatus == MainViewModel.AdminKeyStatus.UNKNOWN) {
+                viewModel.checkKuboNode(savedKuboNodeUrl)
+            }
+        }
+    }
     val navColors = NavigationBarItemDefaults.colors(
         selectedIconColor = RavenOrange, selectedTextColor = RavenOrange,
         unselectedIconColor = RavenMuted, unselectedTextColor = RavenMuted,
@@ -4913,13 +4969,9 @@ fun RavenTagApp(
             val brandEverShown = remember { mutableStateOf(isBrandApp && currentTab == AppTab.BRAND) }
             val settingsEverShown = remember { mutableStateOf(currentTab == AppTab.SETTINGS) }
 
-            LaunchedEffect(viewModel.hasWallet, isBrandApp) {
+            LaunchedEffect(viewModel.hasWallet) {
                 delay(3_000)
                 walletEverShown.value = true
-                delay(600)
-                if (isBrandApp) brandEverShown.value = true
-                delay(200)
-                settingsEverShown.value = true
             }
 
             if (currentTab == AppTab.WALLET) walletEverShown.value = true
@@ -4950,13 +5002,11 @@ fun RavenTagApp(
                         if (viewModel.serverStatus == MainViewModel.ServerStatus.UNKNOWN)
                             viewModel.checkServerStatus(viewModel.currentVerifyUrl)
                     }
-                    LaunchedEffect(viewModel.serverStatus) {
-                        if (viewModel.serverStatus == MainViewModel.ServerStatus.ONLINE) {
-                            if (viewModel.pinataJwtStatus == MainViewModel.AdminKeyStatus.UNKNOWN)
-                                viewModel.checkPinataJwt(savedPinataJwt)
-                            if (viewModel.kuboNodeStatus == MainViewModel.AdminKeyStatus.UNKNOWN)
-                                viewModel.checkKuboNode(savedKuboNodeUrl)
-                        }
+                    LaunchedEffect(savedPinataJwt, savedKuboNodeUrl) {
+                        if (viewModel.pinataJwtStatus == MainViewModel.AdminKeyStatus.UNKNOWN)
+                            viewModel.checkPinataJwt(savedPinataJwt)
+                        if (viewModel.kuboNodeStatus == MainViewModel.AdminKeyStatus.UNKNOWN)
+                            viewModel.checkKuboNode(savedKuboNodeUrl)
                     }
                     BrandDashboardScreen(
                         modifier = Modifier.fillMaxSize(),
@@ -4980,12 +5030,14 @@ fun RavenTagApp(
                             viewModel.checkServerStatus(viewModel.currentVerifyUrl)
                         }
                     }
-                    LaunchedEffect(viewModel.serverStatus) {
+                    LaunchedEffect(viewModel.serverStatus, savedPinataJwt, savedKuboNodeUrl) {
+                        // Pinata and Kubo are independent upload services and must
+                        // never wait for the RavenTag backend health check.
+                        if (viewModel.pinataJwtStatus == MainViewModel.AdminKeyStatus.UNKNOWN)
+                            viewModel.checkPinataJwt(savedPinataJwt)
+                        if (viewModel.kuboNodeStatus == MainViewModel.AdminKeyStatus.UNKNOWN)
+                            viewModel.checkKuboNode(savedKuboNodeUrl)
                         if (viewModel.serverStatus == MainViewModel.ServerStatus.ONLINE) {
-                            if (viewModel.pinataJwtStatus == MainViewModel.AdminKeyStatus.UNKNOWN)
-                                viewModel.checkPinataJwt(savedPinataJwt)
-                            if (viewModel.kuboNodeStatus == MainViewModel.AdminKeyStatus.UNKNOWN)
-                                viewModel.checkKuboNode(savedKuboNodeUrl)
                             if (viewModel.adminKeyStatus == MainViewModel.AdminKeyStatus.UNKNOWN && savedAdminKey.isNotEmpty())
                                 viewModel.checkAdminKey(viewModel.currentVerifyUrl, savedAdminKey)
                         }

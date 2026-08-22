@@ -13,13 +13,14 @@ import android.nfc.NfcAdapter
 import android.nfc.Tag
 import android.nfc.tech.Ndef
 import android.util.Log
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 /** NFC reading utilities for RavenTag. */
 object NfcReader {
 
     private const val TAG = "NfcReader"
     private const val VERIFY_SCHEME = "https"
-    private const val VERIFY_HOST = "verify.raventag.com"
+    private val VERIFY_HOSTS = setOf("api.raventag.com", "verify.raventag.com")
     private const val VERIFY_PATH = "/verify"
     private const val MAX_URI_PAYLOAD_BYTES = 2048
     private const val MAX_ASSET_LENGTH = 100
@@ -41,7 +42,8 @@ object NfcReader {
 
         return when (intent.action) {
             NfcAdapter.ACTION_NDEF_DISCOVERED -> extractFromNdef(intent)
-            NfcAdapter.ACTION_TAG_DISCOVERED -> {
+            NfcAdapter.ACTION_TAG_DISCOVERED,
+            NfcAdapter.ACTION_TECH_DISCOVERED -> {
                 val tag = intent.getParcelableExtra<Tag>(NfcAdapter.EXTRA_TAG)
                 tag?.let { extractFromTagObject(it) }
             }
@@ -85,7 +87,7 @@ object NfcReader {
             val prefix = uriPrefix(prefixCode) ?: continue
             val suffix = if (payload.size > 1) String(payload, 1, payload.size - 1, Charsets.UTF_8) else ""
             val urlStr = prefix + suffix
-            parseSunUrl(urlStr)?.let { return it }
+            parsePhysicalSunUrl(urlStr)?.let { return it }
         }
         return null
     }
@@ -94,25 +96,35 @@ object NfcReader {
      * Parse a canonical RavenTag SUN URL. Generic HTTPS hosts are rejected even if
      * Android dispatches an unexpected intent to this activity.
      */
-    fun parseSunUrl(url: String): SunParams? {
+    fun parseSunUrl(url: String): SunParams? = parseSunUrl(url, allowCustomHost = false)
+
+    /**
+     * Physical tags may legitimately target the custom HTTPS backend configured
+     * by the user, as they did in v1.0.7. ACTION_VIEW/deep-link input continues
+     * to use [parseSunUrl] and is restricted to RavenTag's public origins.
+     */
+    internal fun parsePhysicalSunUrl(url: String): SunParams? =
+        parseSunUrl(url, allowCustomHost = true)
+
+    private fun parseSunUrl(url: String, allowCustomHost: Boolean): SunParams? {
         if (url.length > MAX_URI_PAYLOAD_BYTES) return null
         return try {
-            val firstParse = android.net.Uri.parse(url)
-            val fragment = firstParse.fragment
+            val fragmentStart = url.indexOf('#')
+            val fragment = if (fragmentStart >= 0) url.substring(fragmentStart + 1) else null
             val fixedUrl = if (fragment != null && fragment.contains("&e=") && fragment.contains("&m=")) {
                 url.replaceFirst("#", "%23")
             } else url
 
-            val uri = android.net.Uri.parse(fixedUrl)
+            val uri = fixedUrl.toHttpUrlOrNull() ?: return null
             if (!uri.scheme.equals(VERIFY_SCHEME, ignoreCase = true)) return null
-            if (!uri.host.equals(VERIFY_HOST, ignoreCase = true)) return null
-            if (uri.path != VERIFY_PATH && uri.path != "/") return null
-            if (uri.userInfo != null) return null
-            if (uri.port != -1 && uri.port != 443) return null
+            if (!allowCustomHost && !isAllowedVerifyHost(uri.host)) return null
+            if (uri.encodedPath != VERIFY_PATH && uri.encodedPath != "/") return null
+            if (uri.username.isNotEmpty() || uri.password.isNotEmpty()) return null
+            if (!allowCustomHost && uri.port != 443) return null
 
-            val e = uri.getQueryParameter("e") ?: return null
-            val m = uri.getQueryParameter("m") ?: return null
-            val asset = uri.getQueryParameter("asset")
+            val e = uri.queryParameter("e") ?: return null
+            val m = uri.queryParameter("m") ?: return null
+            val asset = uri.queryParameter("asset")
 
             if (!e.matches(Regex("[0-9a-fA-F]{32}"))) return null
             if (!m.matches(Regex("[0-9a-fA-F]{16}"))) return null
@@ -124,6 +136,9 @@ object NfcReader {
             null
         }
     }
+
+    internal fun isAllowedVerifyHost(host: String?): Boolean =
+        host != null && VERIFY_HOSTS.any { it.equals(host, ignoreCase = true) }
 
     /** Null means the URI-prefix identifier is unsupported. */
     private fun uriPrefix(code: Byte): String? = when (code.toInt() and 0xff) {

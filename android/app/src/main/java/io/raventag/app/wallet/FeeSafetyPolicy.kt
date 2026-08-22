@@ -45,6 +45,21 @@ object FeeSafetyPolicy {
     fun calculateFee(estimatedBytes: Int, satPerByte: Long): Long =
         calculateFee(estimatedBytes.toLong(), satPerByte)
 
+    /**
+     * Wallet-maintenance transactions only move funds between addresses derived
+     * from the same seed. Keep the bounded relay-rate and overflow checks, but do
+     * not apply the normal 0.1 RVN absolute cap: a very fragmented wallet must
+     * remain consolidatable as it was in 1.0.7.
+     */
+    fun calculateMaintenanceFee(estimatedBytes: Long, satPerByte: Long): Long {
+        require(estimatedBytes > 0L) { "Invalid transaction size" }
+        require(satPerByte in MIN_SAT_PER_BYTE..MAX_SAT_PER_BYTE) { "Unreasonable network fee" }
+        return Math.multiplyExact(estimatedBytes, satPerByte)
+    }
+
+    fun calculateMaintenanceFee(estimatedBytes: Int, satPerByte: Long): Long =
+        calculateMaintenanceFee(estimatedBytes.toLong(), satPerByte)
+
     fun requireSafeAbsoluteFee(feeSat: Long) {
         require(feeSat > 0L) { "Invalid network fee" }
         require(feeSat <= MAX_ABSOLUTE_FEE_SAT) { "Unreasonable network fee" }

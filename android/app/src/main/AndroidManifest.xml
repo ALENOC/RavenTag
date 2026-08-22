@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -16,7 +17,7 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.RavenTag"
-        android:usesCleartextTraffic="false"
+        android:usesCleartextTraffic="true"
         android:networkSecurityConfig="@xml/network_security_config">
 
         <!-- Runs before MainActivity and invalidates stale local legal acceptance. -->
@@ -38,19 +39,16 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
-            <!-- Only the canonical RavenTag verification origin may invoke the
-                 exported NDEF verification route. MainActivity/NfcReader also
-                 re-validates scheme/host/path before accepting SUN parameters. -->
-            <!-- autoVerify is an App Links attribute and is inert on
-                 NDEF_DISCOVERED filters; the host/path restriction below is
-                 what scopes NFC dispatch, and NfcReader re-validates. -->
+            <!-- Preserve v1.0.7 support for tags programmed against a custom
+                 HTTPS verification backend. Physical NFC input is validated
+                 again by NfcReader before any request is made. -->
             <intent-filter>
                 <action android:name="android.nfc.action.NDEF_DISCOVERED" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data
                     android:scheme="https"
-                    android:host="verify.raventag.com"
-                    android:pathPrefix="/verify" />
+                    android:pathPrefix="/verify"
+                    tools:ignore="AppLinkUrlError" />
             </intent-filter>
 
             <!-- TAG_DISCOVERED catch-all removed: foreground dispatch handles all NFC cases -->

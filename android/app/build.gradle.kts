@@ -24,19 +24,19 @@ android {
         applicationId = "io.raventag.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 10
-        versionName = "1.0.9"
+        versionCode = 16
+        versionName = "1.0.15"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
             useSupportLibrary = true
         }
 
-        buildConfigField("String", "IPFS_GATEWAY", "\"https://ipfs.io/ipfs/\"")
+        buildConfigField("String", "IPFS_GATEWAY", "\"https://ipfs.filebase.io/ipfs/\"")
         buildConfigField(
             "String",
             "IPFS_GATEWAYS",
-            "\"https://ipfs.io/ipfs/,https://dweb.link/ipfs/,https://gateway.pinata.cloud/ipfs/,https://cloudflare-ipfs.com/ipfs/\""
+            "\"https://ipfs.filebase.io/ipfs/,https://gateway.pinata.cloud/ipfs/,https://ipfs.io/ipfs/,https://dweb.link/ipfs/\""
         )
         buildConfigField("String", "API_BASE_URL", "\"https://api.raventag.com\"")
     }

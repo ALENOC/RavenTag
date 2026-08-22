@@ -50,7 +50,7 @@ object CoreTrustManager {
 
     private val _stateFlow = MutableStateFlow<CoreTrustResult?>(null)
 
-    /** Latest evaluation, if any has run in this process. Null = never checked. */
+    /** Latest evaluation, if any has run or been restored. Null = never checked. */
     val stateFlow: StateFlow<CoreTrustResult?> = _stateFlow
 
     private val httpClient: OkHttpClient by lazy {
@@ -161,28 +161,49 @@ object CoreTrustManager {
      * @return the evaluation result (also pushed to [stateFlow]).
      */
     fun refresh(context: Context, force: Boolean = false): CoreTrustResult {
-        val last = _stateFlow.value
+        var last = _stateFlow.value
+        if (last == null) {
+            loadPersistedResult(context)?.let { restored ->
+                _stateFlow.compareAndSet(null, restored)
+            }
+            last = _stateFlow.value
+        }
         val now = System.currentTimeMillis()
         if (!force && last != null && now - last.evaluatedAt < RESULT_STALE_AFTER_MS) {
             return last
         }
         if (force && now - lastForcedAt < MIN_FORCED_REFRESH_INTERVAL_MS) {
-            return last ?: CoreTrustResult(
+            val result = last ?: CoreTrustResult(
                 level = CoreTrustLevel.UNKNOWN,
                 reason = CoreTrustReason.VERIFICATION_FAILED,
                 evaluatedAt = now
             )
+            _stateFlow.compareAndSet(null, result)
+            return result
         }
         if (force) lastForcedAt = now
         if (!refreshing.compareAndSet(false, true)) {
-            return last ?: CoreTrustResult(
+            val result = last ?: CoreTrustResult(
                 level = CoreTrustLevel.UNKNOWN,
                 reason = CoreTrustReason.VERIFICATION_FAILED,
                 evaluatedAt = now
             )
+            _stateFlow.compareAndSet(null, result)
+            return result
         }
         try {
-            val result = evaluateCurrentNode(context)
+            val result = try {
+                evaluateCurrentNode(context)
+            } catch (e: Exception) {
+                Log.w(TAG, "Core trust evaluation failed", e)
+                CoreTrustResult(
+                    level = CoreTrustLevel.UNKNOWN,
+                    reason = if (e is java.net.SocketTimeoutException ||
+                        e.cause is java.net.SocketTimeoutException
+                    ) CoreTrustReason.TIMEOUT else CoreTrustReason.VERIFICATION_FAILED,
+                    evaluatedAt = System.currentTimeMillis()
+                )
+            }
             _stateFlow.value = result
             persistResult(context, result)
             return result
@@ -217,14 +238,19 @@ object CoreTrustManager {
     ): CoreTrustResult {
         val policy = loadVerifiedPolicy(context)
 
-        val features = node.serverFeaturesDirect(host, port)
+        val snapshot = node.coreEvidenceDirect(
+            host = host,
+            port = port,
+            checkpointHeight = CoreTrustEvaluator.DEFAULT_CHECKPOINT_HEIGHT
+        )
+        val features = snapshot.features
         val capability = CoreTrustEvaluator.capabilityAdvertised(features)
 
         // Direct probe: the capability block in server.features is the
         // documented advertisement, but some deployments register the RPC
         // without the features entry, so the probe is authoritative for
         // "does this server answer the method at all".
-        val backendOutcome = node.ravencoinBackendDirect(host, port)
+        val backendOutcome = snapshot.backendOutcome
         val backendResponse = when (backendOutcome) {
             is io.raventag.app.wallet.RavencoinPublicNode.BackendInfoOutcome.Response ->
                 backendOutcome.result
@@ -233,7 +259,11 @@ object CoreTrustManager {
 
         val checkpointHeight = CoreTrustEvaluator.checkpointHeightFromFeatures(features)
         val ownHeader = if (backendResponse != null) {
-            node.blockHeaderDirect(host, port, checkpointHeight)
+            if (checkpointHeight == CoreTrustEvaluator.DEFAULT_CHECKPOINT_HEIGHT) {
+                snapshot.checkpointHeader
+            } else {
+                node.blockHeaderDirect(host, port, checkpointHeight)
+            }
         } else null
 
         // Independent corroboration: fetch the same checkpoint header from
@@ -241,32 +271,35 @@ object CoreTrustManager {
         // standard header method fine).
         val currentGroup = CoreTrustEvaluator.operatorGroup(host)
         val corroborated = mutableMapOf<String, String>()
-        for ((otherHost, otherPort) in node.poolHosts) {
-            if (CoreTrustEvaluator.operatorGroup(otherHost) == currentGroup) continue
-            if (corroborated.size >= 2) break
-            val header = node.blockHeaderDirect(otherHost, otherPort, checkpointHeight)
-            if (header != null) corroborated[otherHost] = header
-        }
-
-        // RT108-SEC-102: the static checkpoint header is public data, so also
-        // corroborate the server's LIVE tip: an independent operator must serve
-        // the exact same header at the server's own tip height.
-        val ownTip = if (backendResponse != null) node.tipHeaderDirect(host, port) else null
-        var tipEvidence: CoreTrustEvaluator.TipEvidence? = null
+        val ownTip = if (backendResponse != null) snapshot.tipHeader else null
+        val headerAtTipByHost = mutableMapOf<String, String>()
         if (ownTip != null) {
-            val headerAtTipByHost = mutableMapOf<String, String>()
+            var attemptedGroups = 0
+            val seenGroups = mutableSetOf<String>()
             for ((otherHost, otherPort) in node.poolHosts) {
-                if (CoreTrustEvaluator.operatorGroup(otherHost) == currentGroup) continue
-                if (headerAtTipByHost.size >= 2) break
-                val otherTip = node.tipHeaderDirect(otherHost, otherPort) ?: continue
-                // A corroborator far behind our tip cannot attest to it.
-                if (otherTip.first + 6 < ownTip.first) continue
-                val headerAtOurTip = node.blockHeaderDirect(otherHost, otherPort, ownTip.first)
-                if (headerAtOurTip != null) headerAtTipByHost[otherHost] = headerAtOurTip
+                val group = CoreTrustEvaluator.operatorGroup(otherHost)
+                if (group == currentGroup || !seenGroups.add(group)) continue
+                // Bound a mobile refresh even when fallback operators are down.
+                if (attemptedGroups++ >= 2) break
+                val other = node.coreCorroborationDirect(
+                    otherHost,
+                    otherPort,
+                    checkpointHeight,
+                    ownTip.first
+                ) ?: continue
+                other.checkpointHeader?.let { corroborated[otherHost] = it }
+                if ((other.serverTipHeight ?: 0L) + 6 >= ownTip.first) {
+                    other.headerAtRequestedTip?.let { headerAtTipByHost[otherHost] = it }
+                }
+                if (corroborated[otherHost] == ownHeader &&
+                    headerAtTipByHost[otherHost] == ownTip.second
+                ) break
             }
-            tipEvidence = CoreTrustEvaluator.TipEvidence(
-                tipHeight = ownTip.first,
-                tipHeaderHex = ownTip.second,
+        }
+        val tipEvidence = ownTip?.let {
+            CoreTrustEvaluator.TipEvidence(
+                tipHeight = it.first,
+                tipHeaderHex = it.second,
                 corroboratedHeaderAtTipByHost = headerAtTipByHost
             )
         }
@@ -307,6 +340,10 @@ object CoreTrustManager {
                             "level" to result.level.name,
                             "reason" to result.reason.name,
                             "coreVersion" to result.coreVersion,
+                            "identityRepository" to result.identityRepository,
+                            "identityCommit" to result.identityCommit,
+                            "identityEvidence" to result.identityEvidence,
+                            "corroboratedBy" to result.corroboratedBy,
                             "serverHost" to result.serverHost,
                             "evaluatedAt" to result.evaluatedAt
                         )
@@ -315,6 +352,39 @@ object CoreTrustManager {
                 .apply()
         } catch (_: Exception) {
             // Diagnostics only; never affects the trust decision.
+        }
+    }
+
+    /** Restore the last completed result so process restarts never show an endless check. */
+    private fun loadPersistedResult(context: Context): CoreTrustResult? {
+        return try {
+            val json = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .getString(KEY_LAST_RESULT_JSON, null)
+                ?: return null
+            val obj = com.google.gson.JsonParser.parseString(json).asJsonObject
+            val level = CoreTrustLevel.valueOf(obj.get("level").asString)
+            val reason = CoreTrustReason.valueOf(obj.get("reason").asString)
+            val evaluatedAt = obj.get("evaluatedAt")?.asLong ?: return null
+            fun optionalString(name: String): String? = obj.get(name)
+                ?.takeUnless { it.isJsonNull }
+                ?.asString
+            val corroborated = obj.getAsJsonArray("corroboratedBy")
+                ?.mapNotNull { value -> runCatching { value.asString }.getOrNull() }
+                .orEmpty()
+            CoreTrustResult(
+                level = level,
+                reason = reason,
+                coreVersion = optionalString("coreVersion"),
+                identityRepository = optionalString("identityRepository"),
+                identityCommit = optionalString("identityCommit"),
+                identityEvidence = optionalString("identityEvidence"),
+                corroboratedBy = corroborated,
+                serverHost = optionalString("serverHost"),
+                evaluatedAt = evaluatedAt
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "Persisted Core trust result rejected: ${e.message}")
+            null
         }
     }
 

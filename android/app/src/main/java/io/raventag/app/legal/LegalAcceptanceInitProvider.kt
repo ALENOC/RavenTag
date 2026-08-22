@@ -97,15 +97,30 @@ class LegalAcceptanceInitProvider : ContentProvider() {
     ): Int = 0
 
     companion object {
-        private const val PREFS_NAME = "raventag_app"
+        const val PREFS_NAME = "raventag_app"
 
-        private const val CURRENT_TERMS_VERSION = "1.2"
-        private const val CURRENT_PRIVACY_VERSION = "1.2"
+        const val CURRENT_TERMS_VERSION = "1.2"
+        const val CURRENT_PRIVACY_VERSION = "1.2"
 
-        private const val KEY_ONBOARDING_DONE = "onboarding_done"
-        private const val KEY_TERMS_VERSION = "accepted_terms_version"
-        private const val KEY_PRIVACY_VERSION = "accepted_privacy_version"
-        private const val KEY_SPECIFIC_APPROVAL_VERSION = "accepted_specific_clauses_version"
-        private const val KEY_PENDING_LEGAL_VERSION = "pending_legal_acceptance_version"
+        const val KEY_ONBOARDING_DONE = "onboarding_done"
+        const val KEY_TERMS_VERSION = "accepted_terms_version"
+        const val KEY_PRIVACY_VERSION = "accepted_privacy_version"
+        const val KEY_SPECIFIC_APPROVAL_VERSION = "accepted_specific_clauses_version"
+        const val KEY_PENDING_LEGAL_VERSION = "pending_legal_acceptance_version"
+
+        /** Persist legal evidence atomically with onboarding completion. */
+        fun recordAcceptance(prefs: SharedPreferences) {
+            val editor = prefs.edit()
+                .putString(KEY_TERMS_VERSION, CURRENT_TERMS_VERSION)
+                .putString(KEY_PRIVACY_VERSION, CURRENT_PRIVACY_VERSION)
+                .remove(KEY_PENDING_LEGAL_VERSION)
+                .putBoolean(KEY_ONBOARDING_DONE, true)
+            if (BuildConfig.IS_BRAND) {
+                editor.putString(KEY_SPECIFIC_APPROVAL_VERSION, CURRENT_TERMS_VERSION)
+            } else {
+                editor.remove(KEY_SPECIFIC_APPROVAL_VERSION)
+            }
+            check(editor.commit()) { "Unable to persist legal acceptance" }
+        }
     }
 }

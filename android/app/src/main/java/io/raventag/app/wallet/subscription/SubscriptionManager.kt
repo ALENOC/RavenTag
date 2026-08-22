@@ -117,23 +117,26 @@ class SubscriptionManager(
             synchronized(lifecycleLock) { scope?.cancel(); scope = null }
             return@withContext
         }
+        val active = opened
 
-        // Handshake. RT108-SEC-105: until the reader loop below is running,
-        // nothing completes sendAndAwait's deferred — a silent server would
-        // suspend start() forever and leave a zombie session published. Every
-        // startup await is timeout-bounded and the session is only published
-        // after the handshake succeeds; failures close the socket and scope.
+        // The reader must run before the first request: it is what completes
+        // sendAndAwait. Keep the session private until the handshake succeeds.
+        val readerJob = scope?.launch { readLoop(active) }
+
+        // Every startup await is timeout-bounded; a silent server must not leave
+        // a zombie subscription session behind.
         try {
             withTimeout(15_000L) {
-                sendAndAwait(opened, "server.version", listOf("RavenTag/1.0", "1.4"))
+                sendAndAwait(active, "server.version", listOf("RavenTag/1.0", "1.4"))
             }
         } catch (_: Exception) {
-            try { opened.socket.close() } catch (_: Exception) {}
+            readerJob?.cancel()
+            try { active.socket.close() } catch (_: Exception) {}
             synchronized(lifecycleLock) { scope?.cancel(); scope = null }
             events.emit(ScripthashEvent.ConnectionLost)
             return@withContext
         }
-        synchronized(lifecycleLock) { session = opened }
+        synchronized(lifecycleLock) { session = active }
 
         // Subscribe per address
         val node = RavencoinPublicNode(context)
@@ -141,17 +144,15 @@ class SubscriptionManager(
             val sh = node.addressToScripthash(addr)
             try {
                 withTimeout(15_000L) {
-                    sendAndAwait(opened, "blockchain.scripthash.subscribe", listOf(sh))
+                    sendAndAwait(active, "blockchain.scripthash.subscribe", listOf(sh))
                 }
             } catch (_: Exception) {
                 Log.w(TAG, "subscribe failed for $sh, readLoop may deliver status anyway")
             }
         }
 
-        // Reader loop
-        scope?.launch { readLoop(opened) }
         // Heartbeat loop
-        scope?.launch { heartbeatLoop(opened) }
+        scope?.launch { heartbeatLoop(active) }
     }
 
     /**
@@ -285,7 +286,14 @@ class SubscriptionManager(
         val deferred = kotlinx.coroutines.CompletableDeferred<com.google.gson.JsonElement?>()
         pending[id] = { deferred.complete(it) }
         val payload = gson.toJson(mapOf("id" to id, "method" to method, "params" to params))
-        withContext(Dispatchers.IO) { s.writer.println(payload) }
-        return deferred.await()
+        return try {
+            withContext(Dispatchers.IO) {
+                s.writer.println(payload)
+                check(!s.writer.checkError()) { "ElectrumX socket write failed" }
+            }
+            deferred.await()
+        } finally {
+            pending.remove(id)
+        }
     }
 }

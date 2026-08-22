@@ -54,4 +54,23 @@ class FeeSafetyPolicyTest {
             fail("expected overflow")
         } catch (_: ArithmeticException) { }
     }
+
+    @Test
+    fun fragmentedWalletMaintenanceCanExceedNormalSendCap() {
+        val fee = FeeSafetyPolicy.calculateMaintenanceFee(60_000L, 500L)
+        assertEquals(30_000_000L, fee)
+    }
+
+    @Test
+    fun walletMaintenanceStillRejectsHostileRateAndOverflow() {
+        try {
+            FeeSafetyPolicy.calculateMaintenanceFee(1_000L, FeeSafetyPolicy.MAX_SAT_PER_BYTE + 1L)
+            fail("expected hostile maintenance rate rejection")
+        } catch (_: IllegalArgumentException) { }
+
+        try {
+            FeeSafetyPolicy.calculateMaintenanceFee(Long.MAX_VALUE, FeeSafetyPolicy.MIN_SAT_PER_BYTE)
+            fail("expected maintenance fee overflow")
+        } catch (_: ArithmeticException) { }
+    }
 }

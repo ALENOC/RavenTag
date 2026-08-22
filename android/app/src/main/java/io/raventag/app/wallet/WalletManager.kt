@@ -915,7 +915,7 @@ class WalletManager(private val context: Context) {
         // If no assets at all (only RVN), just send RVN to targetAddr
         if (primaryName.isEmpty() && otherInputs.isEmpty()) {
             return try {
-                val feeEstimate = FeeSafetyPolicy.calculateFee(500L, maxOf(satPerByte, 200L))
+                val feeEstimate = FeeSafetyPolicy.calculateMaintenanceFee(500L, maxOf(satPerByte, 200L))
                 val sendAmount = totalRvnIn - feeEstimate
                 if (sendAmount <= 546) return null
                 val tx = signAndBroadcastReserved(
@@ -941,7 +941,7 @@ class WalletManager(private val context: Context) {
 
         val totalInputs = rvnKeyed.size + primaryInputs.size + otherInputs.values.sumOf { it.size }
         val totalAssetOuts = (if (primaryTotalRaw > 0) 1 else 0) + otherInputs.size
-        val feeSat = FeeSafetyPolicy.calculateFee((10L + 148L * totalInputs + 70L * totalAssetOuts + 34L), maxOf(satPerByte, 200L))
+        val feeSat = FeeSafetyPolicy.calculateMaintenanceFee((10L + 148L * totalInputs + 70L * totalAssetOuts + 34L), maxOf(satPerByte, 200L))
 
         if (totalRvnIn < feeSat + 600L * totalAssetOuts) {
             android.util.Log.w("WalletManager", "sweepSingleAddr: insufficient RVN (have ${totalRvnIn / 1e8}, need ${(feeSat + 600L * totalAssetOuts) / 1e8})")
@@ -1081,7 +1081,7 @@ class WalletManager(private val context: Context) {
                     val assetTypes = r.third.keys.size
                     val totalInputs = r.first.size + r.third.values.sumOf { it.size }
                     val estimatedBytes = 10 + 148 * totalInputs + 70 * (1 + assetTypes) + 34
-                    val feeSat = FeeSafetyPolicy.calculateFee(estimatedBytes, satPerByte)
+                    val feeSat = FeeSafetyPolicy.calculateMaintenanceFee(estimatedBytes, satPerByte)
                     val dustSat = assetTypes * 546L
                     val totalNeeded = feeSat + dustSat + 546L // +546 for RVN change dust floor
 
@@ -1117,7 +1117,7 @@ class WalletManager(private val context: Context) {
                             val assetTypes = assetUtxosMap.keys.size
                             val totalInputs = pureRvnUtxos.size + assetUtxosMap.values.sumOf { it.size }
                             val estimatedBytes = 10 + 148 * totalInputs + 70 * (1 + assetTypes) + 34
-                            val feeSat = FeeSafetyPolicy.calculateFee(estimatedBytes, satPerByte)
+                            val feeSat = FeeSafetyPolicy.calculateMaintenanceFee(estimatedBytes, satPerByte)
 
                             val tx = signAndBroadcastReserved(
                                 inputs = (pureRvnUtxos) + (assetUtxosMap).values.flatten().map { it.utxo },
@@ -1138,7 +1138,7 @@ class WalletManager(private val context: Context) {
                         } else if (pureRvnUtxos.isNotEmpty()) {
                             val totalSat = pureRvnUtxos.sumOf { it.satoshis }
                             val estimatedBytes = 10 + 148 * pureRvnUtxos.size + 34
-                            val feeSat = FeeSafetyPolicy.calculateFee(estimatedBytes, satPerByte)
+                            val feeSat = FeeSafetyPolicy.calculateMaintenanceFee(estimatedBytes, satPerByte)
                             val sendAmount = totalSat - feeSat
                             if (sendAmount > 546) {
                                 val tx = signAndBroadcastReserved(
@@ -1210,7 +1210,7 @@ class WalletManager(private val context: Context) {
                     val totalSat = rvnUtxos.sumOf { it.satoshis }
                     val satPerByte = node.getMinRelayFeeRateSatPerByte()
                     val estimatedBytes = 10 + 148 * rvnUtxos.size + 34
-                    val feeSat = FeeSafetyPolicy.calculateFee(estimatedBytes, satPerByte)
+                    val feeSat = FeeSafetyPolicy.calculateMaintenanceFee(estimatedBytes, satPerByte)
                     val sendAmount = totalSat - feeSat
 
                     if (sendAmount > 546) {
@@ -2620,7 +2620,7 @@ class WalletManager(private val context: Context) {
                     try {
                         // RT108-SEC-107: raw-tx-verified classification for signing inputs.
                         val currentUtxos = node.getUtxosAndAllAssetUtxosBatch(currentAddr).first
-                        val fundFee = FeeSafetyPolicy.calculateFee(10L + 148L * currentUtxos.size + 34L * 2, satPerByte)
+                        val fundFee = FeeSafetyPolicy.calculateMaintenanceFee(10L + 148L * currentUtxos.size + 34L * 2, satPerByte)
                         val tx = signAndBroadcastReserved(
                             inputs = (currentUtxos),
                             broadcaster = { raw -> node.broadcastWithAllServers(raw) }
@@ -2646,7 +2646,7 @@ class WalletManager(private val context: Context) {
                 val targetAddr = getAddress(0, currentIndex) ?: return@withContext
                 val sweepResult = node.getUtxosAndAllAssetUtxosBatch(addr)
                 val totalSweepInputs = sweepResult.first.size + sweepResult.third.values.sumOf { it.size }
-                val sweepFee = FeeSafetyPolicy.calculateFee(10L + 148L * totalSweepInputs + 34L * (1 + sweepResult.third.size), satPerByte)
+                val sweepFee = FeeSafetyPolicy.calculateMaintenanceFee(10L + 148L * totalSweepInputs + 34L * (1 + sweepResult.third.size), satPerByte)
                 val tx = signAndBroadcastReserved(
                     inputs = (sweepResult.first) + (sweepResult.third).values.flatten().map { it.utxo },
                     broadcaster = { raw -> node.broadcastWithAllServers(raw) }
@@ -2921,7 +2921,7 @@ suspend fun consolidateAllFundsToFreshAddress(): String? = withContext(Dispatche
         val oldAssetInputs = oldFundsOnly.sumOf { it.assetUtxos.values.sumOf { it.size } }
         val oldRvnInputs = oldFundsOnly.sumOf { it.rvnUtxos.size }
         val estimatedBytes = 10 + 148 * (oldRvnInputs + oldAssetInputs) + 70 * (1 + oldAssetTypes) + 34
-        val feeSatEst = FeeSafetyPolicy.calculateFee(estimatedBytes, satPerByte)
+        val feeSatEst = FeeSafetyPolicy.calculateMaintenanceFee(estimatedBytes, satPerByte)
         val dustEst = oldAssetTypes * 546L
         val needed = feeSatEst + dustEst + 546L
         canSelfPay = oldRvn >= needed
@@ -3014,7 +3014,7 @@ suspend fun consolidateAllFundsToFreshAddress(): String? = withContext(Dispatche
     // Tight byte estimate: ~150 bytes per signed P2PKH input, ~34 bytes per RVN output,
     // ~85 bytes per asset output (extra OP_RVN_ASSET payload). +10 bytes header.
     val estimatedBytes = 10L + 150L * totalInputs + 34L + 85L * totalAssetOutputs
-    val feeSat = FeeSafetyPolicy.calculateFee(estimatedBytes, satPerByte)
+    val feeSat = FeeSafetyPolicy.calculateMaintenanceFee(estimatedBytes, satPerByte)
 
     android.util.Log.i("WalletManager", "consolid: fee estimate : ${estimatedBytes} bytes at ${satPerByte} sat/byte = ${feeSat} sat (raw relay fee was ${rawSatPerByte})")
 

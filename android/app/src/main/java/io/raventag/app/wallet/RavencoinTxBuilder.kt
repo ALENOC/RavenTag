@@ -40,6 +40,13 @@ import java.security.MessageDigest
  */
 object RavencoinTxBuilder {
 
+    /** Fee policy is enforced by WalletManager, which can distinguish a normal
+     * payment from v1.0.7-compatible self-wallet maintenance. The serializer
+     * only rejects nonsensical non-positive fees. */
+    private fun requirePositiveFee(feeSat: Long) {
+        require(feeSat > 0L) { "Invalid network fee" }
+    }
+
     /** SIGHASH_ALL: the entire transaction is committed to by the signature. */
     private const val SIGHASH_ALL = 1
 
@@ -158,7 +165,7 @@ object RavencoinTxBuilder {
         privKeyBytes: ByteArray,
         pubKeyBytes: ByteArray
     ): SignedTx {
-        FeeSafetyPolicy.requireSafeAbsoluteFee(feeSat)
+        requirePositiveFee(feeSat)
         val totalIn = utxos.sumOf { it.satoshis }
         require(amountSat > 546) { "Amount below dust limit" }
         require(totalIn >= amountSat + feeSat) {
@@ -226,7 +233,7 @@ object RavencoinTxBuilder {
         privKeyBytes: ByteArray,
         pubKeyBytes: ByteArray
     ): SignedTx {
-        FeeSafetyPolicy.requireSafeAbsoluteFee(feeSat)
+        requirePositiveFee(feeSat)
         // Asset UTXOs from issuance may have 0 satoshis (dustOut = 0 in buildAndSignAssetIssue).
         // To avoid consensus error "bad-txns-asset-transfer-amount-isn't-zero", we must preserve
         // the satoshi value from input to output for each asset UTXO.
@@ -323,7 +330,7 @@ object RavencoinTxBuilder {
         privKeyBytes: ByteArray,
         pubKeyBytes: ByteArray
     ): SignedTx {
-        FeeSafetyPolicy.requireSafeAbsoluteFee(feeSat)
+        requirePositiveFee(feeSat)
         // Calculate input dust for each asset type to preserve value balance
         val primaryAssetDustIn = primaryAssetUtxos.sumOf { it.satoshis }
 
@@ -430,7 +437,7 @@ object RavencoinTxBuilder {
         changeAddress: String,
         secondaryAssetsToToAddress: Map<String, List<KeyedAssetUtxo>> = emptyMap()
     ): SignedTx {
-        FeeSafetyPolicy.requireSafeAbsoluteFee(feeSat)
+        requirePositiveFee(feeSat)
         val primaryDustIn = primaryAssetInputs.sumOf { it.assetUtxo.utxo.satoshis }
         val dustForPrimaryOut    = if (primaryDustIn > 0) 600L else 0L
         val dustForPrimaryChange = if (primaryAssetChange > 0 && primaryDustIn > 0) 600L else 0L
@@ -541,7 +548,7 @@ object RavencoinTxBuilder {
         privKeyBytes: ByteArray,
         pubKeyBytes: ByteArray
     ): SignedTx {
-        FeeSafetyPolicy.requireSafeAbsoluteFee(feeSat)
+        requirePositiveFee(feeSat)
         // Calculate dust for all asset outputs
         var dustForAssets = 0L
         val assetOutputs = mutableListOf<AssetOutput>()
@@ -631,7 +638,7 @@ object RavencoinTxBuilder {
         feeSat: Long,
         changeAddress: String
     ): SignedTx {
-        FeeSafetyPolicy.requireSafeAbsoluteFee(feeSat)
+        requirePositiveFee(feeSat)
         // Dust for asset outputs: 0 if input had 0 sat (issued with dustOut=0), else 600
         val assetOutputs = mutableListOf<AssetOutput>()
         var dustForAssets = 0L
@@ -890,7 +897,7 @@ object RavencoinTxBuilder {
         privKeyBytes: ByteArray,
         pubKeyBytes: ByteArray
     ): SignedTx {
-        FeeSafetyPolicy.requireSafeAbsoluteFee(feeSat)
+        requirePositiveFee(feeSat)
         // Unique tokens (containing '#') don't mint a new owner output.
         // Sub-assets and unique tokens still spend the parent owner token as an input,
         // then return it to the issuer as an rvnt transfer of "PARENT!" with raw amount 100_000_000.
@@ -1022,7 +1029,7 @@ object RavencoinTxBuilder {
         privKeyBytes: ByteArray,
         pubKeyBytes: ByteArray
     ): SignedTx {
-        FeeSafetyPolicy.requireSafeAbsoluteFee(feeSat)
+        requirePositiveFee(feeSat)
         val isUnique = assetName.contains('#')
 
         val preservedOwnerAssetName = when {
@@ -1167,7 +1174,7 @@ object RavencoinTxBuilder {
         privKeyBytes: ByteArray,
         pubKeyBytes: ByteArray
     ): SignedTx {
-        FeeSafetyPolicy.requireSafeAbsoluteFee(feeSat)
+        requirePositiveFee(feeSat)
         // Calculate dust for all asset outputs
         var dustForAssets = 0L
         val assetOutputs = mutableListOf<AssetOutput>()
@@ -1328,7 +1335,7 @@ object RavencoinTxBuilder {
         pubKeyBytes: ByteArray,
         otherAssetUtxos: Map<String, List<AssetUtxo>> = emptyMap()
     ): SignedTx {
-        FeeSafetyPolicy.requireSafeAbsoluteFee(feeSat)
+        requirePositiveFee(feeSat)
         require(ownerAssetUtxos.isNotEmpty()) {
             "Missing owner-token UTXO for $assetName! - cannot reissue"
         }

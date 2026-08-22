@@ -24,6 +24,26 @@ import javax.net.ssl.SSLSocket
  */
 class FeeUnavailableException : Exception("Fee unavailable")
 
+/**
+ * ElectrumX-RVN has returned both of these asset-aware balance shapes in the
+ * wild: plain RVN fields at the top level (legacy) and a nested `rvn`/`RVN`
+ * object (1.13). Accept both without double-counting when a server includes
+ * compatibility fields alongside the nested object.
+ */
+internal fun assetAwareRvnBalanceSat(response: JsonObject): Long {
+    fun sum(balance: JsonObject): Long =
+        (runCatching { balance.get("confirmed")?.asLong ?: 0L }.getOrDefault(0L)) +
+            (runCatching { balance.get("unconfirmed")?.asLong ?: 0L }.getOrDefault(0L))
+
+    if (response.has("confirmed") || response.has("unconfirmed")) {
+        return sum(response)
+    }
+    val nested = sequenceOf("rvn", "RVN")
+        .mapNotNull { key -> response.get(key)?.takeIf { it.isJsonObject }?.asJsonObject }
+        .firstOrNull()
+    return nested?.let(::sum) ?: 0L
+}
+
 // Data models (public API unchanged for WalletManager compatibility) ──────────
 
 /**
@@ -191,7 +211,7 @@ class RavencoinPublicNode(private val context: Context) {
         private const val READ_TIMEOUT_MS = 15_000
 
         /** Maximum number of pipelined requests per [callBatch] TLS connection. */
-        private const val BATCH_CHUNK_SIZE = 20
+        private const val BATCH_CHUNK_SIZE = 50
         private const val MAX_RESPONSE_LINE_CHARS = 1_048_576
 
         /**
@@ -330,6 +350,107 @@ class RavencoinPublicNode(private val context: Context) {
         object Failure : BackendInfoOutcome()
     }
 
+    /** Batched Core evidence from one TLS session to the current server. */
+    data class CoreEvidenceSnapshot(
+        val features: JsonObject?,
+        val backendOutcome: BackendInfoOutcome,
+        val checkpointHeader: String?,
+        val tipHeader: Pair<Long, String>?
+    )
+
+    /** Batched checkpoint/live-tip corroboration from one independent server. */
+    data class CoreCorroborationSnapshot(
+        val checkpointHeader: String?,
+        val serverTipHeight: Long?,
+        val headerAtRequestedTip: String?
+    )
+
+    /**
+     * Collect the four Core-trust inputs in one pipelined TLS connection. The
+     * previous implementation opened four serial connections and competed with
+     * wallet refresh traffic for the per-host handshake gate.
+     */
+    fun coreEvidenceDirect(host: String, port: Int, checkpointHeight: Long): CoreEvidenceSnapshot {
+        val results = try {
+            callBatch(
+                ElectrumServer(host, port),
+                listOf(
+                    "server.features" to emptyList(),
+                    "server.ravencoin_backend" to emptyList(),
+                    "blockchain.block.header" to listOf(checkpointHeight),
+                    "blockchain.headers.subscribe" to emptyList()
+                )
+            )
+        } catch (e: Exception) {
+            val timedOut = e is java.net.SocketTimeoutException ||
+                e.cause is java.net.SocketTimeoutException
+            return CoreEvidenceSnapshot(
+                features = null,
+                backendOutcome = if (timedOut) BackendInfoOutcome.Timeout else BackendInfoOutcome.Failure,
+                checkpointHeader = null,
+                tipHeader = null
+            )
+        }
+
+        val features = results.getOrNull(0)?.takeIf { it.isJsonObject }?.asJsonObject
+        val backend = results.getOrNull(1)?.takeIf { it.isJsonObject }?.asJsonObject
+        val backendOutcome = when {
+            backend != null -> BackendInfoOutcome.Response(backend)
+            CoreTrustCapability.isExplicitlyUnsupported(features) -> BackendInfoOutcome.NotSupported
+            else -> BackendInfoOutcome.Failure
+        }
+        return CoreEvidenceSnapshot(
+            features = features,
+            backendOutcome = backendOutcome,
+            checkpointHeader = results.getOrNull(2)?.takeIf { it.isJsonPrimitive }?.asString,
+            tipHeader = parseTipHeader(results.getOrNull(3))
+        )
+    }
+
+    /** Query all corroboration inputs in one TLS session to a fallback server. */
+    fun coreCorroborationDirect(
+        host: String,
+        port: Int,
+        checkpointHeight: Long,
+        requestedTipHeight: Long
+    ): CoreCorroborationSnapshot? {
+        val results = try {
+            callBatch(
+                ElectrumServer(host, port),
+                listOf(
+                    "blockchain.block.header" to listOf(checkpointHeight),
+                    "blockchain.headers.subscribe" to emptyList(),
+                    "blockchain.block.header" to listOf(requestedTipHeight)
+                )
+            )
+        } catch (_: Exception) {
+            return null
+        }
+        return CoreCorroborationSnapshot(
+            checkpointHeader = results.getOrNull(0)?.takeIf { it.isJsonPrimitive }?.asString,
+            serverTipHeight = parseTipHeader(results.getOrNull(1))?.first,
+            headerAtRequestedTip = results.getOrNull(2)?.takeIf { it.isJsonPrimitive }?.asString
+        )
+    }
+
+    private fun parseTipHeader(element: JsonElement?): Pair<Long, String>? {
+        val obj = element?.takeIf { it.isJsonObject }?.asJsonObject ?: return null
+        val height = obj.get("height")?.takeIf { it.isJsonPrimitive }?.asLong ?: return null
+        val hex = obj.get("hex")?.takeIf { it.isJsonPrimitive }?.asString ?: return null
+        return if (height > 0 && hex.isNotEmpty()) height to hex else null
+    }
+
+    /** Avoid a dependency from the wallet transport into the evaluator package. */
+    private object CoreTrustCapability {
+        fun isExplicitlyUnsupported(features: JsonObject?): Boolean {
+            val ravencoin = features?.getAsJsonObject("ravencoin") ?: return false
+            val advertised = ravencoin.get("backend_info")
+                ?: ravencoin.get("backendInfo")
+                ?: return false
+            return advertised.isJsonPrimitive && advertised.asBoolean == false
+        }
+    }
+
     /**
      * Fetches `server.features` from one specific server, or null on failure.
      * Used for capability detection (`ravencoin.backend_info`) and the
@@ -436,6 +557,12 @@ class RavencoinPublicNode(private val context: Context) {
         return getBalanceAndAssets(addresses).second
     }
 
+    data class BalanceAssetsSnapshot(
+        val totalRvn: Double,
+        val assetBalances: Map<String, Double>,
+        val fundedAddresses: Set<String>
+    )
+
     /**
      * Single-batch combined fetch: aggregates RVN balance and per-asset balances
      * across [addresses] in one pipelined `blockchain.scripthash.get_balance(asset=true)`
@@ -446,34 +573,63 @@ class RavencoinPublicNode(private val context: Context) {
      *         (divided by 10^8). Owner-token "!" assets are included in assetMap.
      */
     fun getBalanceAndAssets(addresses: List<String>): Pair<Double, Map<String, Double>> {
-        if (addresses.isEmpty()) return 0.0 to emptyMap()
+        val snapshot = getBalanceAssetsSnapshot(addresses)
+        return snapshot.totalRvn to snapshot.assetBalances
+    }
+
+    /** Combined balances plus per-address funding flags from the same RPC rows. */
+    fun getBalanceAssetsSnapshot(addresses: List<String>): BalanceAssetsSnapshot {
+        if (addresses.isEmpty()) return BalanceAssetsSnapshot(0.0, emptyMap(), emptySet())
         val requests = addresses.map { addr ->
             "blockchain.scripthash.get_balance" to listOf(addressToScripthash(addr), true) as List<Any>
         }
-        val responses = callWithFailoverBatch(requests)
+        var responses = callWithAssetBalanceFailoverBatch(requests)
+        val assetAwareComplete = responses.size == addresses.size &&
+            responses.all { it != null && it.isJsonObject }
+        if (!assetAwareComplete) {
+            Log.w(TAG, "No complete asset-aware balance batch; preserving RVN balance with standard RPC")
+            val plainRequests = addresses.map { addr ->
+                "blockchain.scripthash.get_balance" to listOf(addressToScripthash(addr)) as List<Any>
+            }
+            responses = callWithFailoverBatch(plainRequests)
+        }
         var rvnTotal = 0L
+        var usableResponses = 0
         val totals = mutableMapOf<String, Long>()
-        addresses.forEachIndexed { i, _ ->
+        val funded = mutableSetOf<String>()
+        addresses.forEachIndexed { i, address ->
             val resp = responses.getOrNull(i) ?: return@forEachIndexed
-            if (resp == null || !resp.isJsonObject) return@forEachIndexed
+            if (!resp.isJsonObject) return@forEachIndexed
+            usableResponses++
             val obj = resp.asJsonObject
             // Top-level confirmed/unconfirmed = RVN balance
-            try {
-                rvnTotal += (obj.get("confirmed")?.asLong ?: 0L) +
-                            (obj.get("unconfirmed")?.asLong ?: 0L)
-            } catch (_: Exception) {}
+            val addressRvn: Long
+            var addressHasAsset = false
+            addressRvn = assetAwareRvnBalanceSat(obj)
+            rvnTotal += addressRvn
             for ((name, value) in obj.entrySet()) {
                 if (name == "confirmed" || name == "unconfirmed" || name == "rvn" || name == "RVN") continue
                 try {
                     val a = value.asJsonObject
                     val sat = (a.get("confirmed")?.asLong ?: 0L) + (a.get("unconfirmed")?.asLong ?: 0L)
                     if (sat > 0) {
+                        addressHasAsset = true
                         totals[name] = (totals[name] ?: 0L) + sat
                     }
                 } catch (_: Exception) {}
             }
+            if (addressRvn > 0L || addressHasAsset) funded += address
         }
-        return (rvnTotal / 1e8) to totals.mapValues { (_, sat) -> sat / 1e8 }
+        if (usableResponses != addresses.size) {
+            throw java.io.IOException(
+                "Incomplete portfolio response: $usableResponses/${addresses.size} addresses"
+            )
+        }
+        return BalanceAssetsSnapshot(
+            totalRvn = rvnTotal / 1e8,
+            assetBalances = totals.mapValues { (_, sat) -> sat / 1e8 },
+            fundedAddresses = funded
+        )
     }
 
     /**
@@ -500,12 +656,13 @@ class RavencoinPublicNode(private val context: Context) {
         val requests = addresses.map { addr ->
             "blockchain.scripthash.get_balance" to listOf(addressToScripthash(addr), true) as List<Any>
         }
-        val responses = callWithFailoverBatch(requests)
+        val responses = callWithAssetBalanceFailoverBatch(requests)
 
         // If every response is null the node rejected the `true` asset param with a
         // JSON-RPC error (callBatch silently stores null for per-request errors).
         // Fall back to plain get_balance so at least RVN-bearing addresses are found.
-        val allNull = responses.all { it == null || !it.isJsonObject }
+        val allNull = responses.size != addresses.size ||
+            responses.any { it == null || !it.isJsonObject }
         val effectiveResponses: List<JsonElement?>
         val hasAssetData: Boolean
         if (allNull) {
@@ -523,14 +680,14 @@ class RavencoinPublicNode(private val context: Context) {
         val result = mutableSetOf<String>()
         addresses.forEachIndexed { i, addr ->
             val resp = effectiveResponses.getOrNull(i) ?: return@forEachIndexed
-            if (resp == null || !resp.isJsonObject) return@forEachIndexed
+            if (!resp.isJsonObject) return@forEachIndexed
             val obj = resp.asJsonObject
-            val rvnSat = (try { obj.get("confirmed")?.asLong ?: 0L } catch (_: Exception) { 0L }) +
-                         (try { obj.get("unconfirmed")?.asLong ?: 0L } catch (_: Exception) { 0L })
+            val rvnSat = assetAwareRvnBalanceSat(obj)
             if (rvnSat >= minRvnSat) { result.add(addr); return@forEachIndexed }
             if (hasAssetData) {
                 for ((key, value) in obj.entrySet()) {
-                    if (key == "confirmed" || key == "unconfirmed") continue
+                    if (key == "confirmed" || key == "unconfirmed" ||
+                        key.equals("rvn", ignoreCase = true)) continue
                     try {
                         val assetObj = value.asJsonObject
                         val sat = (assetObj.get("confirmed")?.asLong ?: 0L) +
@@ -1543,6 +1700,39 @@ class RavencoinPublicNode(private val context: Context) {
     }
 
     /**
+     * Returns only the addresses that currently have transaction history.
+     *
+     * Wallets rotate addresses, so a mature wallet can have well over one hundred
+     * derived addresses while only a handful have ever been used.  Prefiltering in
+     * one pipelined request prevents callers from opening one TLS connection per
+     * empty address (which previously starved Core Trust and metadata traffic).
+     *
+     * @throws IOException when the batch produced no usable response at all.  A
+     * network failure must not be interpreted as "every address is empty".
+     */
+    fun getAddressesWithHistory(addresses: List<String>): List<String> {
+        if (addresses.isEmpty()) return emptyList()
+        val requests = addresses.map { address ->
+            "blockchain.scripthash.get_history" to
+                (listOf(addressToScripthash(address)) as List<Any>)
+        }
+        val responses = callWithFailoverBatch(requests)
+        var usableResponses = 0
+        val active = ArrayList<String>()
+        responses.forEachIndexed { index, response ->
+            if (response == null || response.isJsonNull || !response.isJsonArray) {
+                return@forEachIndexed
+            }
+            usableResponses++
+            if (response.asJsonArray.size() > 0) active += addresses[index]
+        }
+        if (usableResponses == 0) {
+            throw java.io.IOException("All address-history queries failed")
+        }
+        return active
+    }
+
+    /**
      * D-23 lightweight paged history fetch used by the WalletScreen "Load more" button.
      *
      * Returns `TxHistoryEntry` shells (amount/sent fields = 0) so the UI can insert
@@ -1688,19 +1878,19 @@ class RavencoinPublicNode(private val context: Context) {
         val balReqs = needsUtxo.map { i ->
             "blockchain.scripthash.get_balance" to listOf(scripthashes[i], true) as List<Any>
         }
-        val balResps = callWithFailoverBatch(balReqs)
+        val balResps = callWithAssetBalanceFailoverBatch(balReqs)
 
         needsUtxo.forEachIndexed { j, i ->
             val addr = addresses[i]
             val resp = balResps.getOrNull(j)
             val hasFunds = if (resp != null && resp.isJsonObject) {
                 val obj = resp.asJsonObject
-                val rvnSat = (try { obj.get("confirmed")?.asLong ?: 0L } catch (_: Exception) { 0L }) +
-                             (try { obj.get("unconfirmed")?.asLong ?: 0L } catch (_: Exception) { 0L })
+                val rvnSat = assetAwareRvnBalanceSat(obj)
                 var funds = rvnSat > 0
                 if (!funds) {
                     for ((k, v) in obj.entrySet()) {
-                        if (k == "confirmed" || k == "unconfirmed") continue
+                        if (k == "confirmed" || k == "unconfirmed" ||
+                            k.equals("rvn", ignoreCase = true)) continue
                         try {
                             val a = v.asJsonObject
                             val sat = (a.get("confirmed")?.asLong ?: 0L) + (a.get("unconfirmed")?.asLong ?: 0L)
@@ -2157,13 +2347,12 @@ class RavencoinPublicNode(private val context: Context) {
         repeat(SERVERS.size) {
             val candidate = io.raventag.app.wallet.health.NodeHealthMonitor.nextHealthyNode()
                 ?: run {
-                    Log.w(TAG, "All nodes quarantined for batch of ${requests.size} — falling back to per-request singles")
-                    // Sequential single-RPC fallback: slower but resilient when batch
-                    // pipelining fails on every server (common on flaky mobile networks
-                    // where the first batch hits a TLS race that closes the socket).
-                    return requests.map { (method, params) ->
-                        try { callWithFailover(method, params) } catch (_: Exception) { null }
-                    }
+                    // Never explode one failed batch into N individual TLS calls.
+                    // On mobile this amplified a 126-address refresh into a retry
+                    // storm and starved Core Trust. Callers retain their cache and
+                    // the next scheduled refresh retries the batch normally.
+                    Log.w(TAG, "No healthy node available for batch of ${requests.size}; keeping cached data")
+                    return List(requests.size) { null }
                 }
             val (host, portStr) = candidate.split(":", limit = 2)
             val server = ElectrumServer(host, portStr.toInt())
@@ -2203,6 +2392,48 @@ class RavencoinPublicNode(private val context: Context) {
                 Log.w(TAG, "Asset metadata server ${server.host} failed for batch(${requests.size}): ${e.message}")
                 if (isTofuMismatch(e)) {
                     io.raventag.app.wallet.health.NodeHealthMonitor.reportTofuMismatch(key)
+                }
+            }
+        }
+        return List(requests.size) { null }
+    }
+
+    /**
+     * Asset-aware balance is an ElectrumX-RVN extension, not part of standard
+     * Electrum. A server can be perfectly healthy while rejecting the boolean
+     * `asset` parameter. Try the configured pool until every requested address
+     * has an object response; do not let one extension-incompatible server turn
+     * the v1.0.7 wallet balance into zero.
+     */
+    private fun callWithAssetBalanceFailoverBatch(
+        requests: List<Pair<String, List<Any>>>
+    ): List<JsonElement?> {
+        if (requests.isEmpty()) return emptyList()
+        io.raventag.app.wallet.health.NodeHealthMonitor.init(context)
+        val now = System.currentTimeMillis()
+        val quarantined = io.raventag.app.wallet.health.NodeHealthMonitor.diagnostics()
+            .filter { (it.quarantinedUntil ?: 0L) > now }
+            .mapTo(mutableSetOf()) { it.host }
+
+        for (server in SERVERS) {
+            val key = "${server.host}:${server.port}"
+            if (key in quarantined) continue
+            try {
+                val result = callBatch(server, requests)
+                if (result.size == requests.size && result.all { it != null && it.isJsonObject }) {
+                    io.raventag.app.wallet.health.NodeHealthMonitor.reportSuccess(key)
+                    return result
+                }
+                Log.w(TAG, "Server ${server.host} does not provide a complete asset-aware balance batch")
+            } catch (e: Exception) {
+                Log.w(TAG, "Server ${server.host} failed for asset-aware balance batch: ${e.message}")
+                if (isTofuMismatch(e)) {
+                    io.raventag.app.wallet.health.NodeHealthMonitor.reportTofuMismatch(key)
+                } else {
+                    io.raventag.app.wallet.health.NodeHealthMonitor.reportFailure(
+                        key,
+                        e.javaClass.simpleName
+                    )
                 }
             }
         }

@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
-    <base-config cleartextTrafficPermitted="false">
+    <!-- Kubo RPC is user-configurable and commonly runs over HTTP on a LAN.
+         Keep the v1.0.7 transport policy; backend/tag URLs are validated in code. -->
+    <base-config cleartextTrafficPermitted="true">
         <trust-anchors>
             <certificates src="system" />
         </trust-anchors>

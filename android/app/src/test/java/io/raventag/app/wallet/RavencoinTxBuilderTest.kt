@@ -731,4 +731,27 @@ class RavencoinTxBuilderTest {
         } catch (_: IllegalArgumentException) { }
     }
 
+    @Test
+    fun fragmentedVersion107MaintenanceFeeReachesSerializer() {
+        val utxo = Utxo(
+            txid = "33".repeat(32),
+            outputIndex = 0,
+            satoshis = 100_000_000L,
+            script = senderScript,
+            height = 100
+        )
+
+        val result = RavencoinTxBuilder.buildAndSign(
+            utxos = listOf(utxo),
+            toAddress = senderAddress,
+            amountSat = 50_000_000L,
+            feeSat = 30_000_000L,
+            changeAddress = senderAddress,
+            privKeyBytes = testPrivKey,
+            pubKeyBytes = testPubKey
+        )
+
+        assertNotNull(result)
+    }
+
 }
