@@ -1423,6 +1423,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             walletInfo = walletInfo?.copy(isLoading = false)
         }
         startHealthHeartbeat()
+        if (hasWallet) {
+            io.raventag.app.wallet.subscription.WalletSubscriptionCoordinator.onAppForeground(getApplication())
+        }
     }
 
     fun refreshWalletAfterVisible() {
@@ -1994,6 +1997,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     withContext(Dispatchers.Main) {
                         walletInfo = walletInfo?.copy(address = newAddress)
                     }
+                    if (newAddress.isNotEmpty()) {
+                        io.raventag.app.wallet.subscription.WalletSubscriptionCoordinator.onAddressRotated(
+                            getApplication(),
+                            newAddress
+                        )
+                    }
                 }
 
                 // Portfolio refresh already returns RVN + assets from the same
@@ -2164,6 +2173,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 needsConsolidation = detectedNeedsConsolidation
                 if (refreshedBalance != null) {
                     walletInfo = walletInfo?.copy(balanceRvn = refreshedBalance)
+                    try {
+                        io.raventag.app.wallet.cache.WalletCacheDao.writeBalanceSat(
+                            (refreshedBalance * 1e8).toLong()
+                        )
+                    } catch (_: Throwable) {}
                 }
             }
 
@@ -4089,6 +4103,16 @@ class MainActivity : FragmentActivity() {
                 )
                 securePrefsReady = true
                 scheduleWalletPollingAfterFirstFrames()
+                val bgMonitoring = prefs.getBoolean("background_monitoring_enabled", false)
+                if (bgMonitoring && initializedWalletManager.hasWallet()) {
+                    io.raventag.app.service.WalletMonitoringService.start(applicationContext)
+                }
+            }
+        }
+
+        lifecycleScope.launch {
+            io.raventag.app.wallet.subscription.WalletSubscriptionCoordinator.incomingEvents.collect {
+                viewModel.refreshBalance()
             }
         }
 
@@ -4169,6 +4193,7 @@ class MainActivity : FragmentActivity() {
             }
 
             var notificationsEnabled by remember { mutableStateOf(prefs.getBoolean("notifications_enabled", true)) }
+            var backgroundMonitoringEnabled by remember { mutableStateOf(prefs.getBoolean("background_monitoring_enabled", false)) }
             var authPassed by remember { mutableStateOf(false) }
 
             // Pre-compute whether biometric/device-credential authentication is available
@@ -4325,6 +4350,21 @@ class MainActivity : FragmentActivity() {
                                         onNotificationsEnabledChange = { enabled ->
                                             notificationsEnabled = enabled
                                             prefs.edit().putBoolean("notifications_enabled", enabled).apply()
+                                            if (!enabled) {
+                                                backgroundMonitoringEnabled = false
+                                                prefs.edit().putBoolean("background_monitoring_enabled", false).apply()
+                                                io.raventag.app.service.WalletMonitoringService.stop(this@MainActivity)
+                                            }
+                                        },
+                                        backgroundMonitoringEnabled = backgroundMonitoringEnabled,
+                                        onBackgroundMonitoringEnabledChange = { enabled ->
+                                            backgroundMonitoringEnabled = enabled
+                                            prefs.edit().putBoolean("background_monitoring_enabled", enabled).apply()
+                                            if (enabled) {
+                                                io.raventag.app.service.WalletMonitoringService.start(this@MainActivity)
+                                            } else {
+                                                io.raventag.app.service.WalletMonitoringService.stop(this@MainActivity)
+                                            }
                                         }
                                     )
                                 }
@@ -4404,6 +4444,7 @@ class MainActivity : FragmentActivity() {
      *  Enabled if on Scan tab OR if the tag-write flow is waiting for a tap. */
     override fun onResume() {
         super.onResume()
+        io.raventag.app.wallet.subscription.WalletSubscriptionCoordinator.onAppForeground(applicationContext)
         if (viewModel.isScanTabActive || viewModel.writeTagStep == WriteTagStep.WAIT_TAG) {
             enableNfcDispatch()
         }
@@ -4424,9 +4465,15 @@ class MainActivity : FragmentActivity() {
      */
     override fun onPause() {
         super.onPause()
+        io.raventag.app.wallet.subscription.WalletSubscriptionCoordinator.onAppBackground(applicationContext)
         nfcAdapter?.disableForegroundDispatch(this)
         Log.d("NFC", "Foreground dispatch disabled")
         resumeRefreshNeeded = true
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        io.raventag.app.wallet.subscription.WalletSubscriptionCoordinator.onAppBackground(applicationContext)
     }
 
     /**
@@ -4564,7 +4611,9 @@ fun RavenTagApp(
     allowScreenshots: Boolean = false,
     onAllowScreenshotsChange: (Boolean) -> Unit = {},
     notificationsEnabled: Boolean = true,
-    onNotificationsEnabledChange: (Boolean) -> Unit = {}
+    onNotificationsEnabledChange: (Boolean) -> Unit = {},
+    backgroundMonitoringEnabled: Boolean = false,
+    onBackgroundMonitoringEnabledChange: (Boolean) -> Unit = {}
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val activity = context as? MainActivity
@@ -5057,7 +5106,9 @@ fun RavenTagApp(
                         allowScreenshots = allowScreenshots,
                         onAllowScreenshotsChange = onAllowScreenshotsChange,
                         notificationsEnabled = notificationsEnabled,
-                        onNotificationsEnabledChange = onNotificationsEnabledChange
+                        onNotificationsEnabledChange = onNotificationsEnabledChange,
+                        backgroundMonitoringEnabled = backgroundMonitoringEnabled,
+                        onBackgroundMonitoringEnabledChange = onBackgroundMonitoringEnabledChange
                     )
                 }
             }

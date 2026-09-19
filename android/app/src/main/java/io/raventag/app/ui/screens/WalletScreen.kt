@@ -316,40 +316,27 @@ fun WalletScreen(
         }
     }
 
-    // D-05, D-07: SubscriptionManager scripthash events -> re-fetch + incoming snackbar on positive delta.
-    val subscriptionManager = remember { SubscriptionManager(context) }
+    // Real-time incoming transfer event listener -> updates UI and shows in-app snackbar
     val strings = s
-    LaunchedEffect(active, walletInfo?.address) {
-        if (!active) {
-            try { subscriptionManager.stop() } catch (_: Exception) {}
-            return@LaunchedEffect
-        }
-        val addr = walletInfo?.address
-        if (!addr.isNullOrBlank()) {
-            kotlinx.coroutines.delay(1_200L)
-            try { subscriptionManager.start(listOf(addr)) } catch (_: Exception) {}
-        }
-        subscriptionManager.eventsFlow().collect { ev ->
-            when (ev) {
-                is ScripthashEvent.StatusChanged -> withContext(Dispatchers.Default) {
-                    val beforeSat = withContext(Dispatchers.IO) { WalletCacheDao.readState()?.balanceSat ?: 0L }
-                    onRefreshBalance()
-                    val afterSat = withContext(Dispatchers.IO) { WalletCacheDao.readState()?.balanceSat ?: 0L }
-                    val deltaSat = afterSat - beforeSat
-                    val timestamp = withContext(Dispatchers.IO) { WalletCacheDao.getLastRefreshedAt() }
-                    if (deltaSat > 0L) {
-                        val rvn = String.format(java.util.Locale.ROOT, "%.8f", deltaSat / 1e8)
-                        scope.launch {
-                            snackbarHostState.showSnackbar(
-                                String.format(strings.incomingTxSnackbar, rvn)
-                            )
-                        }
-                    }
-                    cachedLastRefreshedAt = timestamp
-                    cachedBannerVisible = false
+    LaunchedEffect(Unit) {
+        io.raventag.app.wallet.subscription.WalletSubscriptionCoordinator.incomingEvents.collect { ev ->
+            if (ev.rvnAmount > 0.0) {
+                val rvn = String.format(java.util.Locale.ROOT, "%.8f", ev.rvnAmount).trimEnd('0').let {
+                    if (it.endsWith('.')) it + "0" else it
                 }
-                else -> {}
+                snackbarHostState.showSnackbar(
+                    String.format(strings.incomingTxSnackbar, rvn)
+                )
+            } else if (!ev.assetName.isNullOrBlank()) {
+                val amt = if (ev.assetAmount % 1.0 == 0.0) {
+                    String.format(java.util.Locale.ROOT, "%.0f", ev.assetAmount)
+                } else {
+                    String.format(java.util.Locale.ROOT, "%.8f", ev.assetAmount).trimEnd('0').trimEnd('.')
+                }
+                snackbarHostState.showSnackbar("+$amt ${ev.assetName}")
             }
+            cachedLastRefreshedAt = System.currentTimeMillis()
+            cachedBannerVisible = false
         }
     }
 
@@ -1127,6 +1114,9 @@ private fun AssetCard(
     }
 }
 
+private val rtpResolvedCache = java.util.concurrent.ConcurrentHashMap<String, List<String>>()
+private val winningImageUrls = java.util.concurrent.ConcurrentHashMap<String, String>()
+
 @Composable
 internal fun IpfsPreviewImage(
     urls: List<String>,
@@ -1141,15 +1131,19 @@ internal fun IpfsPreviewImage(
     val imageLoader = remember(context) { NetworkModule.getImageLoader(context) }
     val sourceKey = remember(urls) { urls.joinToString("|") }
     var effectiveUrls by remember(sourceKey, metadataFirst) {
-        mutableStateOf(if (metadataFirst) null else urls)
+        mutableStateOf(rtpResolvedCache[sourceKey] ?: if (metadataFirst) null else urls)
     }
     LaunchedEffect(sourceKey, metadataFirst) {
-        effectiveUrls = if (metadataFirst) {
-            val resolved = resolveRtpImageCandidates(context, urls)
-            Log.i("IpfsPreviewImage", "metadataFirst=${resolved != null} candidates=${urls.size} resolved=${resolved?.firstOrNull().orEmpty()}")
-            resolved ?: urls
-        } else {
-            urls
+        if (effectiveUrls == null) {
+            val resolved = if (metadataFirst) {
+                val r = resolveRtpImageCandidates(context, urls)
+                Log.i("IpfsPreviewImage", "metadataFirst=${r != null} candidates=${urls.size} resolved=${r?.firstOrNull().orEmpty()}")
+                if (r != null) rtpResolvedCache[sourceKey] = r
+                r
+            } else {
+                urls
+            }
+            effectiveUrls = resolved ?: urls
         }
     }
     val renderUrls = effectiveUrls
@@ -1163,8 +1157,9 @@ internal fun IpfsPreviewImage(
     // object resets retry state and refires the network race condition that
     // makes the preview look "intermittent" — sometimes works, sometimes not.
     val key = renderUrls.firstOrNull() ?: ""
+    val initialResolvedUrl = winningImageUrls[key] ?: renderUrls.firstOrNull()
     var urlIndex by remember(key) { mutableStateOf(0) }
-    var resolvedUrl by remember(key) { mutableStateOf<String?>(renderUrls.firstOrNull()) }
+    var resolvedUrl by remember(key) { mutableStateOf<String?>(initialResolvedUrl) }
     var resolveFailed by remember(key) { mutableStateOf(false) }
 
     if (resolvedUrl != null && !resolveFailed) {
@@ -1179,6 +1174,9 @@ internal fun IpfsPreviewImage(
                 .memoryCacheKey(requestUrl)
                 .allowHardware(false)
                 .listener(
+                    onSuccess = { _, _ ->
+                        winningImageUrls[key] = requestUrl
+                    },
                     onError = { _, result ->
                         Log.w("IpfsPreviewImage", "load failed url=$requestUrl: ${result.throwable.message}", result.throwable)
                     }
@@ -1234,6 +1232,7 @@ internal fun IpfsPreviewImage(
                         }
                     }
                     if (result != null && result != resolvedUrl) {
+                        winningImageUrls[key] = result
                         urlIndex = 0
                         resolvedUrl = result
                     } else {

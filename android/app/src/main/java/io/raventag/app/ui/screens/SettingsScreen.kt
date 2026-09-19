@@ -99,6 +99,8 @@ fun SettingsScreen(
     onAllowScreenshotsChange: (Boolean) -> Unit = {},
     notificationsEnabled: Boolean = true,
     onNotificationsEnabledChange: (Boolean) -> Unit = {},
+    backgroundMonitoringEnabled: Boolean = false,
+    onBackgroundMonitoringEnabledChange: (Boolean) -> Unit = {},
     currentAdminKey: String = "",
     onAdminKeySave: (String) -> Unit = {},
     adminKeyStatus: MainViewModel.AdminKeyStatus = MainViewModel.AdminKeyStatus.UNKNOWN,
@@ -314,21 +316,21 @@ fun SettingsScreen(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        "${pinnedCertificates.size} pin memorizzati",
+                        String.format(s.settingsTlsPinsCount, pinnedCertificates.size),
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.SemiBold,
                         color = Color.White
                     )
                     if (certificateMismatches.isNotEmpty()) {
                         Text(
-                            "${certificateMismatches.size} cambio certificato rilevato!",
+                            String.format(s.settingsTlsMismatchCount, certificateMismatches.size),
                             style = MaterialTheme.typography.labelSmall,
                             color = NotAuthenticRed,
                             fontWeight = FontWeight.Bold
                         )
                     } else {
                         Text(
-                            if (pinsExpanded) "Tocca per richiudere" else "Tocca per visualizzare i pin TLS",
+                            if (pinsExpanded) s.settingsTapToCollapse else s.settingsTlsTapToView,
                             style = MaterialTheme.typography.labelSmall,
                             color = RavenMuted
                         )
@@ -411,13 +413,13 @@ fun SettingsScreen(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        "${activeServers.size + customServers.size} server configurati",
+                        String.format(s.settingsServersConfiguredCount, activeServers.size + customServers.size),
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.SemiBold,
                         color = Color.White
                     )
                     Text(
-                        if (serversExpanded) "Tocca per richiudere" else "Tocca per visualizzare e gestire i server",
+                        if (serversExpanded) s.settingsTapToCollapse else s.settingsServersTapToManage,
                         style = MaterialTheme.typography.labelSmall,
                         color = RavenMuted
                     )
@@ -857,6 +859,41 @@ fun SettingsScreen(
                             uncheckedTrackColor = RavenBorder
                         )
                     )
+                }
+
+                // Real-time background monitoring toggle (Foreground Service)
+                if (notificationsEnabled) {
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                            Text(
+                                s.settingsBackgroundMonitoring,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Color.White
+                            )
+                            Text(
+                                s.settingsBackgroundMonitoringDesc,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = RavenMuted,
+                                modifier = Modifier.padding(top = 2.dp)
+                            )
+                        }
+                        Switch(
+                            checked = backgroundMonitoringEnabled,
+                            onCheckedChange = onBackgroundMonitoringEnabledChange,
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color.White,
+                                checkedTrackColor = RavenOrange,
+                                uncheckedThumbColor = RavenMuted,
+                                uncheckedTrackColor = RavenBorder
+                            )
+                        )
+                    }
                 }
             }
             Spacer(modifier = Modifier.height(24.dp))

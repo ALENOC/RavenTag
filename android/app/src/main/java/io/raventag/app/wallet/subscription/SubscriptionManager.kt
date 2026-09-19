@@ -83,77 +83,90 @@ class SubscriptionManager(
      * On all servers failing, emits [ScripthashEvent.AllNodesDown] and returns.
      * Caller decides whether to retry later.
      */
+    private val subscribedScripthashes = ConcurrentHashMap.newKeySet<String>()
+
     suspend fun start(addresses: List<String>): Unit = withContext(Dispatchers.IO) {
+        var active: Session? = null
         synchronized(lifecycleLock) {
-            if (session != null) return@withContext // already running
-            scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            if (session != null) {
+                active = session
+            } else {
+                scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            }
         }
 
-        io.raventag.app.wallet.health.NodeHealthMonitor.init(context)
-        var opened: Session? = null
-        val poolSize = io.raventag.app.wallet.server.ServerRegistryManager.queryServers().size
-        for (attempt in 0 until poolSize) {
-            if (opened != null) break
-            val candidate = io.raventag.app.wallet.health.NodeHealthMonitor.nextHealthyNode()
-                ?: break
-            val (host, portStr) = candidate.split(":", limit = 2)
-            val port = portStr.toInt()
-            try {
-                opened = openSession(host, port)
-                io.raventag.app.wallet.health.NodeHealthMonitor.reportSuccess(candidate)
-            } catch (e: Exception) {
-                if (isTofuMismatch(e)) {
-                    io.raventag.app.wallet.health.NodeHealthMonitor.reportTofuMismatch(candidate)
-                } else {
-                    io.raventag.app.wallet.health.NodeHealthMonitor.reportFailure(
-                        candidate,
-                        e.javaClass.simpleName
-                    )
+        if (active == null) {
+            io.raventag.app.wallet.health.NodeHealthMonitor.init(context)
+            var opened: Session? = null
+            val poolSize = io.raventag.app.wallet.server.ServerRegistryManager.queryServers().size
+            for (attempt in 0 until poolSize) {
+                if (opened != null) break
+                val candidate = io.raventag.app.wallet.health.NodeHealthMonitor.nextHealthyNode()
+                    ?: break
+                val (host, portStr) = candidate.split(":", limit = 2)
+                val port = portStr.toInt()
+                try {
+                    opened = openSession(host, port)
+                    io.raventag.app.wallet.health.NodeHealthMonitor.reportSuccess(candidate)
+                } catch (e: Exception) {
+                    if (isTofuMismatch(e)) {
+                        io.raventag.app.wallet.health.NodeHealthMonitor.reportTofuMismatch(candidate)
+                    } else {
+                        io.raventag.app.wallet.health.NodeHealthMonitor.reportFailure(
+                            candidate,
+                            e.javaClass.simpleName
+                        )
+                    }
                 }
             }
-        }
-        if (opened == null) {
-            events.emit(ScripthashEvent.AllNodesDown)
-            synchronized(lifecycleLock) { scope?.cancel(); scope = null }
-            return@withContext
-        }
-        val active = opened
-
-        // The reader must run before the first request: it is what completes
-        // sendAndAwait. Keep the session private until the handshake succeeds.
-        val readerJob = scope?.launch { readLoop(active) }
-
-        // Every startup await is timeout-bounded; a silent server must not leave
-        // a zombie subscription session behind.
-        try {
-            withTimeout(15_000L) {
-                sendAndAwait(active, "server.version", listOf("RavenTag/1.0", "1.4"))
+            if (opened == null) {
+                events.emit(ScripthashEvent.AllNodesDown)
+                synchronized(lifecycleLock) { scope?.cancel(); scope = null }
+                return@withContext
             }
-        } catch (_: Exception) {
-            readerJob?.cancel()
-            try { active.socket.close() } catch (_: Exception) {}
-            synchronized(lifecycleLock) { scope?.cancel(); scope = null }
-            events.emit(ScripthashEvent.ConnectionLost)
-            return@withContext
+            active = opened
+
+            // The reader must run before the first request: it is what completes
+            // sendAndAwait. Keep the session private until the handshake succeeds.
+            val readerJob = scope?.launch { readLoop(active!!) }
+
+            // Every startup await is timeout-bounded; a silent server must not leave
+            // a zombie subscription session behind.
+            try {
+                withTimeout(15_000L) {
+                    sendAndAwait(active!!, "server.version", listOf("RavenTag/1.0", "1.4"))
+                }
+            } catch (_: Exception) {
+                readerJob?.cancel()
+                try { active!!.socket.close() } catch (_: Exception) {}
+                synchronized(lifecycleLock) { scope?.cancel(); scope = null }
+                events.emit(ScripthashEvent.ConnectionLost)
+                return@withContext
+            }
+            synchronized(lifecycleLock) { session = active }
+
+            // Heartbeat loop
+            scope?.launch { heartbeatLoop(active!!) }
         }
-        synchronized(lifecycleLock) { session = active }
 
         // Subscribe per address
+        val currentSession = active ?: return@withContext
         val node = RavencoinPublicNode(context)
         for (addr in addresses) {
             val sh = node.addressToScripthash(addr)
-            try {
-                withTimeout(15_000L) {
-                    sendAndAwait(active, "blockchain.scripthash.subscribe", listOf(sh))
+            if (subscribedScripthashes.add(sh)) {
+                try {
+                    withTimeout(15_000L) {
+                        sendAndAwait(currentSession, "blockchain.scripthash.subscribe", listOf(sh))
+                    }
+                } catch (_: Exception) {
+                    Log.w(TAG, "subscribe failed for $sh, readLoop may deliver status anyway")
                 }
-            } catch (_: Exception) {
-                Log.w(TAG, "subscribe failed for $sh, readLoop may deliver status anyway")
             }
         }
-
-        // Heartbeat loop
-        scope?.launch { heartbeatLoop(active) }
     }
+
+    suspend fun subscribeAddresses(addresses: List<String>) = start(addresses)
 
     /**
      * Cancels the session scope, closes the socket, and clears all pending callbacks.
@@ -165,6 +178,7 @@ class SubscriptionManager(
             try { session?.socket?.close() } catch (_: Exception) {}
             session = null
             pending.clear()
+            subscribedScripthashes.clear()
         }
     }
 
