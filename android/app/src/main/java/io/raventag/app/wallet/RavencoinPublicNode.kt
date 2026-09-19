@@ -183,6 +183,10 @@ private data class ElectrumServer(val host: String, val port: Int)
  */
 class RavencoinPublicNode(private val context: Context) {
 
+    init {
+        io.raventag.app.wallet.server.ServerRegistryManager.init(context)
+    }
+
     companion object {
         private const val TAG = "ElectrumX"
 
@@ -218,13 +222,12 @@ class RavencoinPublicNode(private val context: Context) {
          * List of public Ravencoin ElectrumX servers, tried in order.
          * All use the standard TLS port 50002.
          *
-         * Sourced from [io.raventag.app.config.AppConfig.ELECTRUM_SERVERS] so
-         * that [io.raventag.app.wallet.health.NodeHealthMonitor] and this
-         * class iterate the same pool. Evaluated once at class init; adding
-         * hosts requires editing AppConfig (see KDoc there for provenance).
+         * Sourced from the verified runtime registry, with AppConfig as the
+         * embedded fallback and user endpoints appended for wallet queries.
          */
-        private val SERVERS: List<ElectrumServer> =
-            io.raventag.app.config.AppConfig.ELECTRUM_SERVERS.map { (host, port) ->
+        private val SERVERS: List<ElectrumServer>
+            get() = io.raventag.app.wallet.server.ServerRegistryManager.queryServers()
+                .map { (host, port) ->
                 ElectrumServer(host, port)
             }
 
@@ -233,8 +236,8 @@ class RavencoinPublicNode(private val context: Context) {
          * "unknown method" for blockchain.asset.get_meta. Asset preview metadata
          * must bypass them or every cached asset row loses its IPFS CID.
          */
-        private val ASSET_META_SERVERS: List<ElectrumServer> =
-            SERVERS.filterNot { it.host.contains("cipig", ignoreCase = true) }
+        private val ASSET_META_SERVERS: List<ElectrumServer>
+            get() = SERVERS.filterNot { it.host.contains("cipig", ignoreCase = true) }
                 .ifEmpty { SERVERS }
 
         /**
@@ -255,8 +258,8 @@ class RavencoinPublicNode(private val context: Context) {
         private val lastConnectAt = java.util.concurrent.ConcurrentHashMap<String, Long>()
 
         /** Hosts that get [PRIMARY_CONNECT_RETRIES] extra attempts on timeout. */
-        private val primaryKey: String? =
-            SERVERS.firstOrNull()?.let { "${it.host}:${it.port}" }
+        private val primaryKey: String?
+            get() = SERVERS.firstOrNull()?.let { "${it.host}:${it.port}" }
 
         /**
          * Opens a TCP socket to [server], serializing and spacing the handshake

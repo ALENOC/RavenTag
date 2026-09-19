@@ -104,13 +104,27 @@ class CoreTrustEvaluatorTest {
             corroboratedHeadersByHost: Map<String, String> =
                 mapOf("electrum1.cipig.net" to CHECKPOINT_HEADER),
             serverHost: String = HOST,
+            signedOperatorGroupsByHost: Map<String, String> = mapOf(
+                HOST to "ALENOC",
+                "electrum1.cipig.net" to "cipig",
+                "electrum2.cipig.net" to "cipig",
+                "electrum3.cipig.net" to "cipig"
+            ),
             nowMs: Long = NOW,
             checkpointHeight: Long = CoreTrustEvaluator.DEFAULT_CHECKPOINT_HEIGHT,
             tipEvidence: CoreTrustEvaluator.TipEvidence? = defaultTipEvidence()
         ) = CoreTrustEvaluator.evaluate(
-            backendResponse, capabilityAdvertised, rpcSupported, policy,
-            checkpointHeaderHex, corroboratedHeadersByHost, serverHost, nowMs,
-            checkpointHeight, tipEvidence
+            backendResponse = backendResponse,
+            capabilityAdvertised = capabilityAdvertised,
+            rpcSupported = rpcSupported,
+            policy = policy,
+            checkpointHeaderHex = checkpointHeaderHex,
+            corroboratedHeadersByHost = corroboratedHeadersByHost,
+            serverHost = serverHost,
+            signedOperatorGroupsByHost = signedOperatorGroupsByHost,
+            nowMs = nowMs,
+            checkpointHeight = checkpointHeight,
+            tipEvidence = tipEvidence
         )
     }
 
@@ -468,16 +482,43 @@ class CoreTrustEvaluatorTest {
     }
 
     @Test
-    fun `operator grouping merges cipig mirrors and separates hosts`() {
-        assertEquals("cipig", CoreTrustEvaluator.operatorGroup("electrum2.cipig.net"))
+    fun `operator grouping uses only signed assignments`() {
+        val groups = mapOf(
+            "electrum1.cipig.net" to "cipig",
+            "electrum2.cipig.net" to "cipig",
+            "electrumx.raventag.com" to "ALENOC"
+        )
+        assertEquals("cipig", CoreTrustEvaluator.operatorGroup("electrum2.cipig.net", groups))
         assertEquals(
-            CoreTrustEvaluator.operatorGroup("electrumx.raventag.com"),
-            CoreTrustEvaluator.operatorGroup("electrumx.raventag.com")
+            CoreTrustEvaluator.operatorGroup("electrumx.raventag.com", groups),
+            CoreTrustEvaluator.operatorGroup("electrumx.raventag.com", groups)
         )
-        assertTrue(
-            CoreTrustEvaluator.operatorGroup("electrumx.raventag.com") !=
-                CoreTrustEvaluator.operatorGroup("rvn4lyfe.com")
+        assertEquals(null, CoreTrustEvaluator.operatorGroup("user.example", groups))
+    }
+
+    @Test
+    fun `user server cannot act as a corroborator`() {
+        val result = evaluate(
+            corroboratedHeadersByHost = mapOf("user.example" to CHECKPOINT_HEADER),
+            tipEvidence = defaultTipEvidence().copy(
+                corroboratedHeaderAtTipByHost = mapOf("user.example" to TIP_HEADER)
+            )
         )
+        assertEquals(CoreTrustLevel.UNKNOWN, result.level)
+        assertEquals(CoreTrustReason.NO_CHAIN_CORROBORATION, result.reason)
+    }
+
+    @Test
+    fun `user server cannot become trusted as the evaluated operator`() {
+        val result = evaluate(
+            serverHost = "user.example",
+            corroboratedHeadersByHost = mapOf(HOST to CHECKPOINT_HEADER),
+            tipEvidence = defaultTipEvidence().copy(
+                corroboratedHeaderAtTipByHost = mapOf(HOST to TIP_HEADER)
+            )
+        )
+        assertEquals(CoreTrustLevel.UNKNOWN, result.level)
+        assertEquals(CoreTrustReason.NO_CHAIN_CORROBORATION, result.reason)
     }
 
     @Test

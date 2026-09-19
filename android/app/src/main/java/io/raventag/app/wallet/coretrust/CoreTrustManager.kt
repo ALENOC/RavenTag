@@ -269,16 +269,20 @@ object CoreTrustManager {
         // Independent corroboration: fetch the same checkpoint header from
         // servers in other operator groups (legacy servers answer the
         // standard header method fine).
-        val currentGroup = CoreTrustEvaluator.operatorGroup(host)
+        val signedGroups = io.raventag.app.wallet.server.ServerRegistryManager.servers()
+            .filter { it.canCorroborate }
+            .associate { it.host.lowercase() to requireNotNull(it.operatorGroup) }
+        val currentGroup = CoreTrustEvaluator.operatorGroup(host, signedGroups)
         val corroborated = mutableMapOf<String, String>()
         val ownTip = if (backendResponse != null) snapshot.tipHeader else null
         val headerAtTipByHost = mutableMapOf<String, String>()
         if (ownTip != null) {
             var attemptedGroups = 0
             val seenGroups = mutableSetOf<String>()
-            for ((otherHost, otherPort) in node.poolHosts) {
-                val group = CoreTrustEvaluator.operatorGroup(otherHost)
-                if (group == currentGroup || !seenGroups.add(group)) continue
+            for ((otherHost, otherPort) in
+                io.raventag.app.wallet.server.ServerRegistryManager.corroborationServers()) {
+                val group = CoreTrustEvaluator.operatorGroup(otherHost, signedGroups) ?: continue
+                if (currentGroup == null || group == currentGroup || !seenGroups.add(group)) continue
                 // Bound a mobile refresh even when fallback operators are down.
                 if (attemptedGroups++ >= 2) break
                 val other = node.coreCorroborationDirect(
@@ -313,6 +317,7 @@ object CoreTrustManager {
             checkpointHeaderHex = ownHeader,
             corroboratedHeadersByHost = corroborated,
             serverHost = host,
+            signedOperatorGroupsByHost = signedGroups,
             nowMs = now,
             checkpointHeight = checkpointHeight,
             tipEvidence = tipEvidence
@@ -402,7 +407,7 @@ object CoreTrustManager {
     /** Port lookup for a pool host, so a malformed node key still resolves. */
     private object AppConfigHolder {
         fun portFor(@Suppress("UNUSED_PARAMETER") context: Context, host: String): Int =
-            io.raventag.app.config.AppConfig.ELECTRUM_SERVERS
+            io.raventag.app.wallet.server.ServerRegistryManager.queryServers()
                 .firstOrNull { it.first == host }?.second ?: 50002
     }
 }
