@@ -92,4 +92,79 @@ class ServerRegistryTest {
             )
         }
     }
+
+    @Test
+    fun `v3 signed registry with cipig verifies`() {
+        val v3 = """
+{
+  "registry": {
+    "expiresAt": "2027-09-19T19:28:48+00:00",
+    "generatedAt": "2026-09-19T19:28:48+00:00",
+    "registryVersion": 3,
+    "schemaVersion": 1,
+    "servers": {
+      "aq7vuqykup2voklcrpqljf6jnjkzrouowsjfrmybdou5kdhrpr6sjjid.onion": {
+        "backend_policy": "discovery-only; live capability required",
+        "pruning": "-",
+        "s": "50002",
+        "t": "50001",
+        "version": "1.11"
+      },
+      "electrum1.cipig.net": {
+        "backend_policy": "discovery-only; operator-confirmed Ravencoin Core 4.8.0; hardened server.ravencoin_backend capability pending; live capability required",
+        "pruning": "-",
+        "s": "20051",
+        "t": "10051",
+        "version": "1.11"
+      },
+      "electrum2.cipig.net": {
+        "backend_policy": "discovery-only; operator-confirmed Ravencoin Core 4.8.0; hardened server.ravencoin_backend capability pending; live capability required",
+        "pruning": "-",
+        "s": "20051",
+        "t": "10051",
+        "version": "1.11"
+      },
+      "electrum3.cipig.net": {
+        "backend_policy": "discovery-only; operator-confirmed Ravencoin Core 4.8.0; hardened server.ravencoin_backend capability pending; live capability required",
+        "pruning": "-",
+        "s": "20051",
+        "t": "10051",
+        "version": "1.11"
+      },
+      "electrumx.raventag.com": {
+        "backend_policy": "operator-controlled anchor; Ravencoin Core >=4.8.0 and ElectrumX-RVN >=1.13.0; newer Core releases require signed safety-policy certification; live capability required",
+        "operatorGroup": "ALENOC",
+        "pruning": "-",
+        "s": "50002",
+        "version": "1.11"
+      },
+      "rvn4lyfe.com": {
+        "backend_policy": "discovery-only; live capability required",
+        "pruning": "-",
+        "s": "50002",
+        "t": "50001",
+        "version": "1.11"
+      }
+    }
+  },
+  "signature": {
+    "algorithm": "ed25519",
+    "keyId": "d7a50f481a496f3e",
+    "value": "DkAKwChVADmAaZUmozJEsm10GTDN2dUE94JHoqkuGPSsck7WW0v4lkOQcvoyfwoAAJUnz+7Nf85bEYqMlqpMCA=="
+  }
+}
+        """.trimIndent()
+        val verified = ServerRegistry.verify(v3, nowMs = 1_787_000_000_000L)
+        assertEquals(3L, verified.registryVersion)
+        assertEquals(
+            listOf(
+                "electrum1.cipig.net",
+                "electrum2.cipig.net",
+                "electrum3.cipig.net",
+                "electrumx.raventag.com",
+                "rvn4lyfe.com"
+            ),
+            verified.servers.map { it.host }
+        )
+    }
 }
