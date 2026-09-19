@@ -1136,34 +1136,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         txHistoryLoading = true
         viewModelScope.launch {
             try {
-                // One Keystore decrypt for all addresses, then parallel ElectrumX queries.
-                // Include currentIndex+1 (change address) in the owned set so cycled outputs
-                // are correctly classified as "back to wallet" instead of "sent to others".
-                val allHistory = withContext(Dispatchers.IO) {
+                val result = withContext(Dispatchers.IO) {
                     val currentIndex = wm.getCurrentAddressIndex()
                     val node = io.raventag.app.wallet.RavencoinPublicNode(getApplication())
                     val addresses = wm.getAddressBatch(0, 0..(currentIndex + 1))
                     val ownedSet = addresses.values.toSet()
-                    fetchHistoryForAddresses(node, addresses.values, ownedSet)
-                }
-
-                // Deduplicate by txid (same tx may appear in multiple address histories)
-                val deduped = allHistory.distinctBy { it.txid }
-                    .sortedWith(
-                        compareByDescending<io.raventag.app.wallet.TxHistoryEntry> {
-                            if (it.height <= 0) Int.MAX_VALUE else it.height
-                        }.thenByDescending { it.timestamp }
+                    node.getWalletTransactionHistoryWithTotal(
+                        addresses = addresses.values.toList(),
+                        limit = txHistoryPageSize,
+                        offset = 0,
+                        ownedAddresses = ownedSet
                     )
-
-                // Avoid wiping the visible list when a transient network error
-                // returns an empty result during a refresh. Initial display caps
-                // at txHistoryPageSize (Load more pulls successive pages).
-                if (deduped.isNotEmpty() || txHistory.isEmpty()) {
-                    val firstPage = deduped.take(txHistoryPageSize)
-                    txHistory = firstPage
-                    txHistoryTotal = deduped.size
-                    txHistoryLoadedCount = firstPage.size
                 }
+
+                val deduped = result.entries
+                if (deduped.isNotEmpty() || txHistory.isEmpty()) {
+                    txHistory = deduped
+                    txHistoryTotal = result.totalCount
+                    txHistoryLoadedCount = deduped.size
+                }
+                txHistoryLoading = false
+
                 // Persist so the next cold start renders the list instantly
                 // from cache instead of waiting for the network round-trip.
                 if (deduped.isNotEmpty()) {
@@ -1201,37 +1194,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Prefilter unused rotating addresses in one batch, then resolve the small
-     * active subset with bounded concurrency.  This keeps ElectrumX, Core Trust
-     * and asset metadata from competing with hundreds of simultaneous sockets.
+     * Pipelined history query across all addresses in one pass.
      */
     private suspend fun fetchHistoryForAddresses(
         node: io.raventag.app.wallet.RavencoinPublicNode,
         addresses: Collection<String>,
         ownedSet: Set<String>
-    ): List<io.raventag.app.wallet.TxHistoryEntry> = coroutineScope {
-        val active = try {
-            node.getAddressesWithHistory(addresses.toList())
+    ): List<io.raventag.app.wallet.TxHistoryEntry> = withContext(Dispatchers.IO) {
+        try {
+            node.getWalletTransactionHistory(
+                addresses = addresses.toList(),
+                limit = txHistoryPageSize,
+                offset = 0,
+                ownedAddresses = ownedSet
+            )
         } catch (e: Exception) {
-            Log.w("MainActivity", "Address-history prefilter failed", e)
-            return@coroutineScope emptyList()
+            Log.w("MainActivity", "fetchHistoryForAddresses failed", e)
+            emptyList()
         }
-        val semaphore = Semaphore(2)
-        active.map { address ->
-            async(Dispatchers.IO) {
-                semaphore.withPermit {
-                    try {
-                        node.getTransactionHistory(
-                            address,
-                            limit = txHistoryPageSize,
-                            ownedAddresses = ownedSet
-                        )
-                    } catch (_: Throwable) {
-                        emptyList()
-                    }
-                }
-            }
-        }.awaitAll().flatten()
     }
 
     /**
@@ -1288,13 +1268,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val addresses = wm.getAddressBatch(0, 0..(currentIndex + 1))
                 val ownedSet = addresses.values.toSet()
                 fetchHistoryForAddresses(node, addresses.values, ownedSet)
-                    .distinctBy { it.txid }
-                    .sortedWith(
-                        compareByDescending<io.raventag.app.wallet.TxHistoryEntry> {
-                            if (it.height <= 0) Int.MAX_VALUE else it.height
-                        }.thenByDescending { it.timestamp }
-                    )
-                    .take(txHistoryPageSize)
             }
         } catch (_: Throwable) { emptyList() }
     }
@@ -1302,25 +1275,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (txHistoryLoadedCount >= txHistoryTotal) return
 
         val wm = walletManager ?: return
-        val address = wm.getCurrentAddress() ?: return
 
         viewModelScope.launch {
             try {
                 val currentIndex = wm.getCurrentAddressIndex()
-                val ownedSet = withContext(Dispatchers.IO) {
-                    wm.getAddressBatch(0, 0..(currentIndex + 1)).values.toSet()
+                val node = io.raventag.app.wallet.RavencoinPublicNode(getApplication())
+                val addresses = withContext(Dispatchers.IO) {
+                    wm.getAddressBatch(0, 0..(currentIndex + 1)).values.toList()
                 }
-                val history = withContext(Dispatchers.IO) {
-                    io.raventag.app.wallet.RavencoinPublicNode(getApplication()).getTransactionHistory(
-                        address,
+                val ownedSet = addresses.toSet()
+                val result = withContext(Dispatchers.IO) {
+                    node.getWalletTransactionHistoryWithTotal(
+                        addresses = addresses,
                         limit = txHistoryPageSize,
                         offset = txHistoryLoadedCount,
                         ownedAddresses = ownedSet
                     )
                 }
 
-                txHistory = txHistory + history
-                txHistoryLoadedCount += history.size
+                if (result.entries.isNotEmpty()) {
+                    val combined = (txHistory + result.entries).distinctBy { it.txid }
+                    txHistory = combined
+                    txHistoryTotal = result.totalCount
+                    txHistoryLoadedCount = combined.size
+                }
             } catch (_: Throwable) {
             }
         }
@@ -2282,29 +2260,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         try {
             // One Keystore decrypt for all addresses, then parallel ElectrumX queries.
             // Include currentIndex+1 in the owned set so change outputs are classified correctly.
-            val allHistory = withContext(Dispatchers.IO) {
+            val result = withContext(Dispatchers.IO) {
                 val currentIndex = wm.getCurrentAddressIndex()
                 val node = io.raventag.app.wallet.RavencoinPublicNode(getApplication())
                 val addresses = wm.getAddressBatch(0, 0..(currentIndex + 1))
                 val ownedSet = addresses.values.toSet()
-                fetchHistoryForAddresses(node, addresses.values, ownedSet)
+                node.getWalletTransactionHistoryWithTotal(
+                    addresses = addresses.values.toList(),
+                    limit = txHistoryPageSize,
+                    offset = 0,
+                    ownedAddresses = ownedSet
+                )
             }
 
-            // Deduplicate by txid (same tx may appear in multiple address histories)
-            val deduped = allHistory.distinctBy { it.txid }
-                .sortedWith(
-                    compareByDescending<io.raventag.app.wallet.TxHistoryEntry> {
-                        if (it.height <= 0) Int.MAX_VALUE else it.height
-                    }.thenByDescending { it.timestamp }
-                )
-
+            val deduped = result.entries
             withContext(Dispatchers.Main) {
                 // Keep prior list visible if this refresh returned empty (network blip).
                 // Show only the first page (txHistoryPageSize); Load more appends the rest.
                 if (deduped.isNotEmpty() || txHistory.isEmpty()) {
                     val firstPage = deduped.take(txHistoryPageSize)
                     txHistory = firstPage
-                    txHistoryTotal = deduped.size
+                    txHistoryTotal = result.totalCount
                     txHistoryLoadedCount = firstPage.size
                 }
                 txHistoryLoading = false

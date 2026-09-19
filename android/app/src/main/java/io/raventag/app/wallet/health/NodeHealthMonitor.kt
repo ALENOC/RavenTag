@@ -119,8 +119,10 @@ object NodeHealthMonitor {
             return null
         }
 
-        val (primaryHost, primaryPort) = configured.first()
-        val primary = "$primaryHost:$primaryPort"
+        val primaryConfig = configured.firstOrNull { (host, _) ->
+            host.equals("electrumx.raventag.com", ignoreCase = true)
+        } ?: configured.first()
+        val primary = "${primaryConfig.first}:${primaryConfig.second}"
         val primaryFailedAt = lastFailureAt[primary]
         val primaryCoolingDown = primaryFailedAt != null &&
             (now - primaryFailedAt) <= PRIMARY_RETRY_COOLDOWN_MS
@@ -147,7 +149,9 @@ object NodeHealthMonitor {
 
         // Standard fallback rotation. The primary is intentionally excluded here:
         // it will become eligible again only when its retry cooldown expires.
-        val candidate = configured.drop(1).firstOrNull { (host, port) ->
+        val candidate = configured.filterNot { (host, port) ->
+            "$host:$port" == primary
+        }.firstOrNull { (host, port) ->
             val key = "$host:$port"
             if (key in quarantinedHosts) return@firstOrNull false
             val failedAt = lastFailureAt[key]
@@ -206,10 +210,13 @@ object NodeHealthMonitor {
     fun currentNode(): String? {
         val configured = ServerRegistryManager.queryServers()
         val keys = configured.mapTo(mutableSetOf()) { (host, port) -> "$host:$port" }
+        val primary = configured.firstOrNull { (host, _) ->
+            host.equals("electrumx.raventag.com", ignoreCase = true)
+        } ?: configured.firstOrNull()
         return lastSuccessAt.entries
             .filter { it.key in keys }
             .maxByOrNull { it.value }?.key
-            ?: configured.firstOrNull()?.let { (host, port) -> "$host:$port" }
+            ?: primary?.let { (host, port) -> "$host:$port" }
             ?: getPreferredHost()?.takeIf { it in keys }
     }
 

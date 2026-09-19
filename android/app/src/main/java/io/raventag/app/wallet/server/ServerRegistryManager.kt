@@ -73,13 +73,22 @@ object ServerRegistryManager {
     }
 
     /** Signed registry when valid, otherwise the compiled AppConfig baseline, plus user endpoints. */
+    /** Signed registry when valid, otherwise the compiled AppConfig baseline, plus user endpoints. */
     fun servers(): List<ServerRegistry.Server> {
         val baseline = AppConfig.ELECTRUM_SERVERS.map { (host, port) ->
             ServerRegistry.Server(host.lowercase(), port, null, ServerRegistry.Source.BASELINE)
         }
         val authoritative = activeSignedRegistry()?.servers ?: baseline
         val seen = authoritative.mapTo(mutableSetOf()) { it.host.lowercase() to it.port }
-        return authoritative + userServers.filter { seen.add(it.host.lowercase() to it.port) }
+        val all = authoritative + userServers.filter { seen.add(it.host.lowercase() to it.port) }
+        val primaryHost = AppConfig.ELECTRUM_SERVERS.first().first.lowercase()
+        val primaryPort = AppConfig.ELECTRUM_SERVERS.first().second
+        val primary = all.firstOrNull { it.host == primaryHost && it.port == primaryPort }
+        return if (primary != null) {
+            listOf(primary) + all.filterNot { it.host == primaryHost && it.port == primaryPort }
+        } else {
+            all
+        }
     }
 
     fun queryServers(): List<Pair<String, Int>> = servers().map { it.host to it.port }

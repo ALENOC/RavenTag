@@ -48,6 +48,7 @@ internal class TofuTrustManager(private val context: Context, private val host: 
             // merely because an in-memory value differs or is absent.
             if (persisted != null) {
                 if (fingerprint != persisted) {
+                    recordMismatchOccurred(host)
                     recordMismatch(chain, persisted, fingerprint)
                     Log.e(TAG, "TOFU: certificate mismatch for $host; refusing changed fingerprint")
                     throw CertificateException(
@@ -61,6 +62,7 @@ internal class TofuTrustManager(private val context: Context, private val host: 
             // No persistent pin yet. If this process already saw the host, require consistency
             // with that first observation before persisting it.
             if (inMemory != null && fingerprint != inMemory) {
+                recordMismatchOccurred(host)
                 recordMismatch(chain, inMemory, fingerprint)
                 Log.e(TAG, "TOFU: first-use race/mismatch for $host; refusing changed fingerprint")
                 throw CertificateException(
@@ -134,6 +136,17 @@ internal class TofuTrustManager(private val context: Context, private val host: 
         private const val TAG = "ElectrumX"
         internal val certCache = ConcurrentHashMap<String, String>()
         private val hostLocks = ConcurrentHashMap<String, Any>()
+        private val recentMismatches = ConcurrentHashMap<String, Long>()
+
+        fun recordMismatchOccurred(host: String) {
+            recentMismatches[host] = System.currentTimeMillis()
+        }
+
+        fun consumeRecentMismatch(host: String): Boolean {
+            val ts = recentMismatches.remove(host) ?: return false
+            return (System.currentTimeMillis() - ts) < 30_000L
+        }
+
         private val systemTrustManager: X509TrustManager by lazy {
             val factory = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm())
             factory.init(null as java.security.KeyStore?)
