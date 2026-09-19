@@ -1,11 +1,15 @@
 package io.raventag.app.wallet
 
 import android.content.Context
+import android.net.http.X509TrustManagerExtensions
 import android.util.Log
 import io.raventag.app.security.TofuFingerprintDao
+import io.raventag.app.security.TofuPinRotationPolicy
+import io.raventag.app.security.TlsHostnameVerifier
 import java.security.MessageDigest
 import java.security.cert.CertificateException
 import java.security.cert.X509Certificate
+import javax.net.ssl.TrustManagerFactory
 import javax.net.ssl.X509TrustManager
 import java.util.concurrent.ConcurrentHashMap
 
@@ -44,6 +48,8 @@ internal class TofuTrustManager(private val context: Context, private val host: 
             // merely because an in-memory value differs or is absent.
             if (persisted != null) {
                 if (fingerprint != persisted) {
+                    recordMismatchOccurred(host)
+                    recordMismatch(chain, persisted, fingerprint)
                     Log.e(TAG, "TOFU: certificate mismatch for $host; refusing changed fingerprint")
                     throw CertificateException(
                         "Certificate mismatch for $host: expected $persisted, got $fingerprint"
@@ -56,6 +62,8 @@ internal class TofuTrustManager(private val context: Context, private val host: 
             // No persistent pin yet. If this process already saw the host, require consistency
             // with that first observation before persisting it.
             if (inMemory != null && fingerprint != inMemory) {
+                recordMismatchOccurred(host)
+                recordMismatch(chain, inMemory, fingerprint)
                 Log.e(TAG, "TOFU: first-use race/mismatch for $host; refusing changed fingerprint")
                 throw CertificateException(
                     "Certificate mismatch for $host: expected $inMemory, got $fingerprint"
@@ -70,9 +78,80 @@ internal class TofuTrustManager(private val context: Context, private val host: 
         }
     }
 
+    internal fun rotatePin(
+        host: String,
+        expectedFingerprint: String,
+        observedFingerprint: String,
+        explicitConfirmation: Boolean,
+        allowUntrusted: Boolean
+    ) {
+        val lock = hostLocks.computeIfAbsent(host) { Any() }
+        synchronized(lock) {
+            val mismatch = TofuFingerprintDao.getMismatch(host)
+                ?: throw IllegalStateException("No certificate mismatch recorded for $host")
+            require(TofuPinRotationPolicy.isAuthorized(
+                mismatch,
+                expectedFingerprint,
+                observedFingerprint,
+                explicitConfirmation,
+                allowUntrusted
+            )) {
+                "Certificate rotation was not explicitly authorized for the recorded change"
+            }
+            check(
+                TofuFingerprintDao.conditionalRotateFingerprint(
+                    host,
+                    expectedFingerprint,
+                    observedFingerprint
+                )
+            ) { "Certificate pin changed before rotation for $host" }
+            certCache[host] = observedFingerprint
+        }
+    }
+
+    private fun recordMismatch(
+        chain: Array<out X509Certificate>,
+        expectedFingerprint: String,
+        observedFingerprint: String
+    ) {
+        val systemTrusted = try {
+            X509TrustManagerExtensions(systemTrustManager).checkServerTrusted(
+                Array(chain.size) { chain[it] },
+                chain.first().publicKey.algorithm,
+                host
+            )
+            TlsHostnameVerifier.verify(host, chain.first())
+        } catch (_: Exception) {
+            false
+        }
+        TofuFingerprintDao.recordMismatch(
+            host,
+            expectedFingerprint,
+            observedFingerprint,
+            systemTrusted
+        )
+    }
+
     companion object {
         private const val TAG = "ElectrumX"
         internal val certCache = ConcurrentHashMap<String, String>()
         private val hostLocks = ConcurrentHashMap<String, Any>()
+        private val recentMismatches = ConcurrentHashMap<String, Long>()
+
+        fun recordMismatchOccurred(host: String) {
+            recentMismatches[host] = System.currentTimeMillis()
+        }
+
+        fun consumeRecentMismatch(host: String): Boolean {
+            val ts = recentMismatches.remove(host) ?: return false
+            return (System.currentTimeMillis() - ts) < 30_000L
+        }
+
+        private val systemTrustManager: X509TrustManager by lazy {
+            val factory = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm())
+            factory.init(null as java.security.KeyStore?)
+            factory.trustManagers.filterIsInstance<X509TrustManager>().firstOrNull()
+                ?: throw IllegalStateException("Default system X509TrustManager unavailable")
+        }
     }
 }

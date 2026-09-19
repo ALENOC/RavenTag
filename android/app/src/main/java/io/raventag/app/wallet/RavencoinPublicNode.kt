@@ -183,6 +183,10 @@ private data class ElectrumServer(val host: String, val port: Int)
  */
 class RavencoinPublicNode(private val context: Context) {
 
+    init {
+        io.raventag.app.wallet.server.ServerRegistryManager.init(context)
+    }
+
     companion object {
         private const val TAG = "ElectrumX"
 
@@ -218,13 +222,12 @@ class RavencoinPublicNode(private val context: Context) {
          * List of public Ravencoin ElectrumX servers, tried in order.
          * All use the standard TLS port 50002.
          *
-         * Sourced from [io.raventag.app.config.AppConfig.ELECTRUM_SERVERS] so
-         * that [io.raventag.app.wallet.health.NodeHealthMonitor] and this
-         * class iterate the same pool. Evaluated once at class init; adding
-         * hosts requires editing AppConfig (see KDoc there for provenance).
+         * Sourced from the verified runtime registry, with AppConfig as the
+         * embedded fallback and user endpoints appended for wallet queries.
          */
-        private val SERVERS: List<ElectrumServer> =
-            io.raventag.app.config.AppConfig.ELECTRUM_SERVERS.map { (host, port) ->
+        private val SERVERS: List<ElectrumServer>
+            get() = io.raventag.app.wallet.server.ServerRegistryManager.queryServers()
+                .map { (host, port) ->
                 ElectrumServer(host, port)
             }
 
@@ -233,8 +236,8 @@ class RavencoinPublicNode(private val context: Context) {
          * "unknown method" for blockchain.asset.get_meta. Asset preview metadata
          * must bypass them or every cached asset row loses its IPFS CID.
          */
-        private val ASSET_META_SERVERS: List<ElectrumServer> =
-            SERVERS.filterNot { it.host.contains("cipig", ignoreCase = true) }
+        private val ASSET_META_SERVERS: List<ElectrumServer>
+            get() = SERVERS.filterNot { it.host.contains("cipig", ignoreCase = true) }
                 .ifEmpty { SERVERS }
 
         /**
@@ -255,8 +258,8 @@ class RavencoinPublicNode(private val context: Context) {
         private val lastConnectAt = java.util.concurrent.ConcurrentHashMap<String, Long>()
 
         /** Hosts that get [PRIMARY_CONNECT_RETRIES] extra attempts on timeout. */
-        private val primaryKey: String? =
-            SERVERS.firstOrNull()?.let { "${it.host}:${it.port}" }
+        private val primaryKey: String?
+            get() = SERVERS.firstOrNull()?.let { "${it.host}:${it.port}" }
 
         /**
          * Opens a TCP socket to [server], serializing and spacing the handshake
@@ -1459,56 +1462,232 @@ class RavencoinPublicNode(private val context: Context) {
      * @param offset  Number of entries to skip for pagination (default 0).
      * @return List of [TxHistoryEntry] sorted newest-first, empty on failure.
      */
-    fun getTransactionHistory(
-        address: String,
-        limit: Int = 15,
-        offset: Int = 0,
-        ownedAddresses: Set<String> = setOf(address)
-    ): List<TxHistoryEntry> {
-        val scripthash = addressToScripthash(address)
-        val owned = if (ownedAddresses.isEmpty()) setOf(address) else ownedAddresses
-        // Hash160 of each owned address (lowercase hex). Asset outputs wrap a P2PKH
-        // payload inside an OP_RVN_ASSET script; some ElectrumX servers do not expose
-        // the inner address in `scriptPubKey.addresses`, so we fall back to hex match.
-        val ownedHashes: Set<String> = owned.mapNotNull { addr ->
-            try {
-                val decoded = base58Decode(addr)
-                if (decoded.size < 21) null
-                else decoded.copyOfRange(1, 21).joinToString("") { "%02x".format(it) }
-            } catch (_: Exception) { null }
-        }.toSet()
+    data class WalletTxHistoryResult(
+        val entries: List<TxHistoryEntry>,
+        val totalCount: Int
+    )
 
-        // Batch step 1: fetch block height + address history in a single TLS connection
-        val step1 = callWithFailoverBatch(listOf(
-            "blockchain.headers.subscribe" to emptyList<Any>(),
-            "blockchain.scripthash.get_history" to listOf(scripthash)
-        ))
-        val currentHeight = try { step1[0]?.asJsonObject?.get("height")?.asInt ?: 0 } catch (_: Exception) { 0 }
-        val history = try {
-            step1[1]?.asJsonArray
-                ?.mapNotNull { try { it.asJsonObject } catch (_: Exception) { null } }
-                ?.sortedWith(compareByDescending {
-                    val h = it.get("height")?.asInt ?: 0
-                    if (h <= 0) Int.MAX_VALUE else h
-                })
-                ?.drop(offset)
-                ?.take(limit)
-                ?: emptyList()
-        } catch (_: Exception) { return emptyList() }
-
-        if (history.isEmpty()) return emptyList()
-
-        val txHashes = history.mapNotNull { it.get("tx_hash")?.asString }.distinct()
-
-        // Batch step 2: fetch all current-tx bodies in a single TLS connection
-        val txBatch = callWithFailoverBatch(
-            txHashes.map { "blockchain.transaction.get" to listOf(it, true) }
+    /**
+     * Decodes a single transaction into a [TxHistoryEntry], resolving ownership,
+     * amounts, fees, and asset transfers.
+     */
+    private fun decodeTransactionEntry(
+        tx: JsonObject,
+        txHash: String,
+        height: Int,
+        currentHeight: Int,
+        txMap: Map<String, JsonObject>,
+        prevTxMap: Map<String, JsonObject>,
+        owned: Set<String>,
+        ownedHashes: Set<String>
+    ): TxHistoryEntry? {
+        var toUs = 0L
+        var toOthers = 0L
+        var totalVout = 0L
+        var incomingAssetName: String? = null
+        var incomingAssetAmount: Long = 0L
+        var outgoingAssetName: String? = null
+        var outgoingAssetAmount: Long = 0L
+        val incomingAssetNamesSet = LinkedHashSet<String>()
+        val outgoingAssetNamesSet = LinkedHashSet<String>()
+        val issuanceBurnAddresses = setOf(
+            RavencoinTxBuilder.BURN_ADDRESS_ROOT,
+            RavencoinTxBuilder.BURN_ADDRESS_SUB,
+            RavencoinTxBuilder.BURN_ADDRESS_UNIQUE
         )
-        val txMap = txHashes.zip(txBatch)
-            .mapNotNull { (txId, result) -> result?.let { txId to it.asJsonObject } }
+        var isIssuance = false
+        var issuanceBurnSat = 0L
+        var lastIssuedAssetName: String? = null
+        var lastIssuedAssetAmount: Long = 0L
+
+        tx.getAsJsonArray("vout")?.forEach { vout ->
+            try {
+                val obj = vout.asJsonObject
+                val valueSat = ((obj.get("value")?.asDouble ?: 0.0) * 1e8).toLong()
+                totalVout += valueSat
+                val spk = obj.getAsJsonObject("scriptPubKey")
+                val addresses = spk?.getAsJsonArray("addresses")
+                val hex = spk?.get("hex")?.asString?.lowercase() ?: ""
+                val byAddr = addresses?.any { it.asString in owned } == true
+                val byHex = !byAddr && hex.isNotEmpty() && ownedHashes.any { hex.contains(it) }
+                val vaultAddrMatch = addresses?.any { it.asString in issuanceBurnAddresses } == true
+                if (vaultAddrMatch) {
+                    isIssuance = true
+                    issuanceBurnSat += valueSat
+                }
+                val ours = byAddr || byHex
+                if (ours) toUs += valueSat else if (!vaultAddrMatch) toOthers += valueSat
+
+                if (hex.contains("72766e")) {
+                    parseAssetPayload(hex)?.let { (name, amount) ->
+                        if (ours) {
+                            incomingAssetNamesSet.add(name)
+                            if (incomingAssetName == null) {
+                                incomingAssetName = name; incomingAssetAmount = amount
+                            }
+                            if (!name.endsWith("!")) {
+                                lastIssuedAssetName = name
+                                lastIssuedAssetAmount = amount
+                            }
+                        } else {
+                            outgoingAssetNamesSet.add(name)
+                            if (outgoingAssetName == null) {
+                                outgoingAssetName = name; outgoingAssetAmount = amount
+                            }
+                        }
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+
+        var fromUs = 0L
+        var totalVin = 0L
+        tx.getAsJsonArray("vin")?.forEach { vin ->
+            try {
+                val vinObj = vin.asJsonObject
+                val prevTxId = vinObj.get("txid")?.asString ?: return@forEach
+                val prevVoutIdx = vinObj.get("vout")?.asInt ?: return@forEach
+                val prevTx = txMap[prevTxId] ?: prevTxMap[prevTxId] ?: return@forEach
+                val prevVoutObj = prevTx.getAsJsonArray("vout")
+                    ?.mapNotNull { try { it.asJsonObject } catch (_: Exception) { null } }
+                    ?.getOrNull(prevVoutIdx) ?: return@forEach
+                val prevValueSat = ((prevVoutObj.get("value")?.asDouble ?: 0.0) * 1e8).toLong()
+                totalVin += prevValueSat
+                val prevSpk = prevVoutObj.getAsJsonObject("scriptPubKey")
+                val prevAddresses = prevSpk?.getAsJsonArray("addresses")
+                val prevByAddr = prevAddresses?.any { it.asString in owned } == true
+                val prevByHex = if (!prevByAddr) {
+                    val hex = prevSpk?.get("hex")?.asString?.lowercase() ?: ""
+                    hex.isNotEmpty() && ownedHashes.any { hex.contains(it) }
+                } else false
+                if (prevByAddr || prevByHex) fromUs += prevValueSat
+            } catch (_: Exception) {}
+        }
+
+        val netSat = toUs - fromUs
+        val confs = when {
+            height <= 0 -> 0
+            currentHeight >= height -> currentHeight - height + 1
+            else -> 0
+        }
+        val timestamp = tx.get("blocktime")?.asLong ?: tx.get("time")?.asLong ?: 0L
+        val feeSat = if (fromUs > 0L && totalVin > totalVout) totalVin - totalVout else 0L
+        val isOutgoing = fromUs > 0L && (toOthers > 0L || outgoingAssetName != null)
+        val isSelfTransfer = fromUs > 0L && !isOutgoing && toUs > 0L
+        val isHiddenIncoming = !isOutgoing && !isSelfTransfer && fromUs == 0L && toUs == 0L
+        val effectiveAssetName = if (isIssuance && lastIssuedAssetName != null)
+            lastIssuedAssetName else when {
+            isOutgoing && outgoingAssetName != null -> outgoingAssetName
+            isOutgoing -> null
+            incomingAssetName != null -> incomingAssetName
+            else -> null
+        }
+        val effectiveAssetAmount = if (isIssuance && lastIssuedAssetName != null)
+            lastIssuedAssetAmount else when {
+            isOutgoing && outgoingAssetName != null -> outgoingAssetAmount
+            isOutgoing -> 0L
+            incomingAssetName != null -> incomingAssetAmount
+            else -> 0L
+        }
+
+        return TxHistoryEntry(
+            txid = txHash,
+            height = height,
+            confirmations = confs,
+            amountSat = if (netSat > 0) netSat else 0L,
+            sentSat = if (isOutgoing) toOthers else 0L,
+            cycledSat = if (isOutgoing || isSelfTransfer) toUs else 0L,
+            feeSat = feeSat,
+            isIncoming = (netSat > 0 && !isOutgoing) || isHiddenIncoming,
+            isSelfTransfer = if (isIssuance) false else isSelfTransfer,
+            timestamp = timestamp,
+            assetName = effectiveAssetName,
+            assetAmount = effectiveAssetAmount,
+            incomingAssetNames = incomingAssetNamesSet.toList(),
+            outgoingAssetNames = outgoingAssetNamesSet.toList(),
+            isIssuance = isIssuance,
+            issuanceBurnSat = issuanceBurnSat
+        )
+    }
+
+    /**
+     * Efficient, pipelined transaction history query across multiple wallet addresses.
+     *
+     * In a single batch pass, queries "blockchain.scripthash.get_history" for all addresses,
+     * sorts unique transactions newest-first (mempool at the top, then block height DESC),
+     * and only retrieves full transaction bodies and input prev-txs for the requested page
+     * `[offset, offset + limit)`.
+     */
+    fun getWalletTransactionHistoryWithTotal(
+        addresses: List<String>,
+        limit: Int = 20,
+        offset: Int = 0,
+        ownedAddresses: Set<String> = addresses.toSet()
+    ): WalletTxHistoryResult {
+        if (addresses.isEmpty()) return WalletTxHistoryResult(emptyList(), 0)
+
+        // 1. Fetch current block height and scripthash history for all addresses in pipelined batches.
+        val requests = ArrayList<Pair<String, List<Any>>>(addresses.size + 1)
+        requests.add("blockchain.headers.subscribe" to emptyList())
+        for (addr in addresses) {
+            requests.add("blockchain.scripthash.get_history" to listOf(addressToScripthash(addr)))
+        }
+
+        val responses = callWithFailoverBatch(requests)
+        if (responses.isEmpty()) return WalletTxHistoryResult(emptyList(), 0)
+
+        val currentHeight = try {
+            responses[0]?.asJsonObject?.get("height")?.asInt ?: 0
+        } catch (_: Exception) { 0 }
+
+        // Collect all distinct (txid -> height) pairs across all addresses
+        val txHeightMap = mutableMapOf<String, Int>()
+        for (i in 1 until responses.size) {
+            val resp = responses[i] ?: continue
+            if (!resp.isJsonArray) continue
+            val arr = resp.asJsonArray
+            for (j in 0 until arr.size()) {
+                val elem = arr[j]
+                val obj = try { elem.asJsonObject } catch (_: Exception) { null } ?: continue
+                val txHash = obj.get("tx_hash")?.asString ?: continue
+                val h = obj.get("height")?.asInt ?: 0
+                val existing = txHeightMap[txHash]
+                if (existing == null || (existing <= 0 && h > 0) || (h > 0 && h > existing)) {
+                    txHeightMap[txHash] = h
+                }
+            }
+        }
+
+        val totalCount = txHeightMap.size
+        if (totalCount == 0) return WalletTxHistoryResult(emptyList(), 0)
+
+        // Sort distinct txids: mempool first (height <= 0), then confirmed by height DESC
+        val sortedTxIds = txHeightMap.entries
+            .sortedWith(Comparator { a, b ->
+                val ha = a.value
+                val hb = b.value
+                val ka = if (ha <= 0) Int.MAX_VALUE else ha
+                val kb = if (hb <= 0) Int.MAX_VALUE else hb
+                kb.compareTo(ka)
+            })
+            .map { it.key }
+
+        val pageTxIds = sortedTxIds.drop(offset.coerceAtLeast(0)).take(limit.coerceAtLeast(0))
+        if (pageTxIds.isEmpty()) return WalletTxHistoryResult(emptyList(), totalCount)
+
+        // 2. Fetch full decoded transaction objects for ONLY the target page of transactions
+        val txBatch = callWithFailoverBatch(
+            pageTxIds.map { "blockchain.transaction.get" to listOf(it, true) }
+        )
+        val txMap = pageTxIds.zip(txBatch)
+            .mapNotNull { (txId, result) ->
+                result?.let {
+                    try { txId to it.asJsonObject } catch (_: Exception) { null }
+                }
+            }
             .toMap()
 
-        // Collect prev-TX IDs from inputs (needed to compute fromUs for outgoing detection)
+        // 3. Collect prev-TX IDs from inputs of these transactions (needed to compute fromUs)
         val prevTxIds = txMap.values
             .flatMap { tx ->
                 tx.getAsJsonArray("vin")
@@ -1520,168 +1699,56 @@ class RavencoinPublicNode(private val context: Context) {
             .distinct()
             .filterNot { txMap.containsKey(it) }
 
-        // Batch step 3: fetch all prev-tx bodies in a single TLS connection
         val prevTxMap: Map<String, JsonObject> = if (prevTxIds.isNotEmpty()) {
             val prevBatch = callWithFailoverBatch(
                 prevTxIds.map { "blockchain.transaction.get" to listOf(it, true) }
             )
             prevTxIds.zip(prevBatch)
-                .mapNotNull { (txId, result) -> result?.let { txId to it.asJsonObject } }
+                .mapNotNull { (txId, result) ->
+                    result?.let {
+                        try { txId to it.asJsonObject } catch (_: Exception) { null }
+                    }
+                }
                 .toMap()
         } else emptyMap()
 
-        return history.mapNotNull { item ->
-            val txHash = item.get("tx_hash")?.asString ?: return@mapNotNull null
-            val height = item.get("height")?.asInt ?: 0
+        // 4. Decode each transaction in the page
+        val owned = if (ownedAddresses.isEmpty()) addresses.toSet() else ownedAddresses
+        val ownedHashes: Set<String> = owned.mapNotNull { addr ->
+            try {
+                val decoded = base58Decode(addr)
+                if (decoded.size < 21) null
+                else decoded.copyOfRange(1, 21).joinToString("") { "%02x".format(it) }
+            } catch (_: Exception) { null }
+        }.toSet()
+
+        val entries = pageTxIds.mapNotNull { txHash ->
+            val height = txHeightMap[txHash] ?: 0
             val tx = txMap[txHash] ?: return@mapNotNull null
-
-            // Classify vout per wallet ownership across ALL owned addresses so
-            // "cycled" (change back to wallet) is not mis-classified as "sent".
-            var toUs = 0L        // vout back to any owned address (incl. change at currentIndex+1)
-            var toOthers = 0L    // vout to external addresses (true external send)
-            var totalVout = 0L
-            var incomingAssetName: String? = null
-            var incomingAssetAmount: Long = 0L
-            var outgoingAssetName: String? = null
-            var outgoingAssetAmount: Long = 0L
-            val incomingAssetNamesSet = LinkedHashSet<String>()
-            val outgoingAssetNamesSet = LinkedHashSet<String>()
-            // Issuance detection: track burn to canonical issuance addresses.
-            val issuanceBurnAddresses = setOf(
-                RavencoinTxBuilder.BURN_ADDRESS_ROOT,
-                RavencoinTxBuilder.BURN_ADDRESS_SUB,
-                RavencoinTxBuilder.BURN_ADDRESS_UNIQUE
-            )
-            var isIssuance = false
-            var issuanceBurnSat = 0L
-            // Track the LAST non-owner-token incoming asset (issuance output is always
-            // last in vout order, and owner tokens end with "!").
-            var lastIssuedAssetName: String? = null
-            var lastIssuedAssetAmount: Long = 0L
-            tx.getAsJsonArray("vout")?.forEach { vout ->
-                try {
-                    val obj = vout.asJsonObject
-                    val valueSat = ((obj.get("value")?.asDouble ?: 0.0) * 1e8).toLong()
-                    totalVout += valueSat
-                    val spk = obj.getAsJsonObject("scriptPubKey")
-                    val addresses = spk?.getAsJsonArray("addresses")
-                    val hex = spk?.get("hex")?.asString?.lowercase() ?: ""
-                    val byAddr = addresses?.any { it.asString in owned } == true
-                    val byHex = !byAddr && hex.isNotEmpty() && ownedHashes.any { hex.contains(it) }
-                    // Check for issuance burn addresses
-                    val vaultAddrMatch = addresses?.any { it.asString in issuanceBurnAddresses } == true
-                    if (vaultAddrMatch) {
-                        isIssuance = true
-                        issuanceBurnSat += valueSat
-                    }
-                    val ours = byAddr || byHex
-                    if (ours) toUs += valueSat else if (!vaultAddrMatch) toOthers += valueSat
-
-                    // Detect asset payload (OP_RVN_ASSET) and tag it as incoming or
-                    // outgoing depending on whether the output is to one of our addresses.
-                    if (hex.contains("72766e")) {
-                        parseAssetPayload(hex)?.let { (name, amount) ->
-                            if (ours) {
-                                incomingAssetNamesSet.add(name)
-                                if (incomingAssetName == null) {
-                                    incomingAssetName = name; incomingAssetAmount = amount
-                                }
-                                // Track last non-owner-token asset (issuance output)
-                                if (!name.endsWith("!")) {
-                                    lastIssuedAssetName = name
-                                    lastIssuedAssetAmount = amount
-                                }
-                            } else {
-                                outgoingAssetNamesSet.add(name)
-                                if (outgoingAssetName == null) {
-                                    outgoingAssetName = name; outgoingAssetAmount = amount
-                                }
-                            }
-                        }
-                    }
-                } catch (_: Exception) {}
-            }
-
-            var fromUs = 0L      // prev-vout value consumed from our inputs
-            var totalVin = 0L    // total input value (all vin, regardless of ownership)
-            tx.getAsJsonArray("vin")?.forEach { vin ->
-                try {
-                    val vinObj = vin.asJsonObject
-                    val prevTxId = vinObj.get("txid")?.asString ?: return@forEach
-                    val prevVoutIdx = vinObj.get("vout")?.asInt ?: return@forEach
-                    val prevTx = txMap[prevTxId] ?: prevTxMap[prevTxId] ?: return@forEach
-                    val prevVoutObj = prevTx.getAsJsonArray("vout")
-                        ?.mapNotNull { try { it.asJsonObject } catch (_: Exception) { null } }
-                        ?.getOrNull(prevVoutIdx) ?: return@forEach
-                    val prevValueSat = ((prevVoutObj.get("value")?.asDouble ?: 0.0) * 1e8).toLong()
-                    totalVin += prevValueSat
-                    val prevSpk = prevVoutObj.getAsJsonObject("scriptPubKey")
-                    val prevAddresses = prevSpk?.getAsJsonArray("addresses")
-                    val prevByAddr = prevAddresses?.any { it.asString in owned } == true
-                    val prevByHex = if (!prevByAddr) {
-                        val hex = prevSpk?.get("hex")?.asString?.lowercase() ?: ""
-                        hex.isNotEmpty() && ownedHashes.any { hex.contains(it) }
-                    } else false
-                    if (prevByAddr || prevByHex) fromUs += prevValueSat
-                } catch (_: Exception) {}
-            }
-
-            val netSat = toUs - fromUs
-            val confs = when {
-                height <= 0 -> 0
-                currentHeight >= height -> currentHeight - height + 1
-                else -> 0
-            }
-            val timestamp = tx.get("blocktime")?.asLong ?: tx.get("time")?.asLong ?: 0L
-            // Fee only attributable to us when we contributed inputs.
-            val feeSat = if (fromUs > 0L && totalVin > totalVout) totalVin - totalVout else 0L
-            // Asset transfers can ride on a 0-sat dust output (Ravencoin allows this when
-            // the receiving address is also paid via a separate RVN output in the same tx).
-            // Include "asset to non-owned address" as outgoing even when toOthers == 0.
-            val isOutgoing = fromUs > 0L && (toOthers > 0L || outgoingAssetName != null)
-            val isSelfTransfer = fromUs > 0L && !isOutgoing && toUs > 0L
-            // The scripthash query returned this tx, so our address is involved in
-            // some way the parser may have missed (asset OP_RVN_ASSET script with
-            // no addresses[] and no inner hash160 hex match — happens on some
-            // ElectrumX server variants). Treat as incoming when nothing else
-            // tagged it as outgoing or self.
-            val isHiddenIncoming = !isOutgoing && !isSelfTransfer && fromUs == 0L && toUs == 0L
-            // Issuance: use the last non-owner-token asset (consensus: issuance output is
-            // always last in vout). This is the NEW token, not a cycled/returned one.
-            val effectiveAssetName = if (isIssuance && lastIssuedAssetName != null)
-                lastIssuedAssetName else when {
-                isOutgoing && outgoingAssetName != null -> outgoingAssetName
-                isOutgoing -> null // RVN send (assets cycled to self, not sent out)
-                incomingAssetName != null -> incomingAssetName
-                else -> null
-            }
-            val effectiveAssetAmount = if (isIssuance && lastIssuedAssetName != null)
-                lastIssuedAssetAmount else when {
-                isOutgoing && outgoingAssetName != null -> outgoingAssetAmount
-                isOutgoing -> 0L // RVN send
-                incomingAssetName != null -> incomingAssetAmount
-                else -> 0L
-            }
-            TxHistoryEntry(
-                txid = txHash,
-                height = height,
-                confirmations = confs,
-                amountSat = if (netSat > 0) netSat else 0L,
-                sentSat = if (isOutgoing) toOthers else 0L,
-                cycledSat = if (isOutgoing || isSelfTransfer) toUs else 0L,
-                feeSat = feeSat,
-                isIncoming = (netSat > 0 && !isOutgoing) || isHiddenIncoming,
-                isSelfTransfer = if (isIssuance) false else isSelfTransfer,
-                timestamp = timestamp,
-                assetName = effectiveAssetName,
-                assetAmount = effectiveAssetAmount,
-                incomingAssetNames = incomingAssetNamesSet.toList(),
-                outgoingAssetNames = outgoingAssetNamesSet.toList(),
-                isIssuance = isIssuance,
-                issuanceBurnSat = issuanceBurnSat
-            )
+            decodeTransactionEntry(tx, txHash, height, currentHeight, txMap, prevTxMap, owned, ownedHashes)
         }
+
+        return WalletTxHistoryResult(entries, totalCount)
     }
+
+    fun getWalletTransactionHistory(
+        addresses: List<String>,
+        limit: Int = 20,
+        offset: Int = 0,
+        ownedAddresses: Set<String> = addresses.toSet()
+    ): List<TxHistoryEntry> =
+        getWalletTransactionHistoryWithTotal(addresses, limit, offset, ownedAddresses).entries
+
+    /**
+     * Returns up to [limit] transactions for [address], sorted newest-first.
+     */
+    fun getTransactionHistory(
+        address: String,
+        limit: Int = 15,
+        offset: Int = 0,
+        ownedAddresses: Set<String> = setOf(address)
+    ): List<TxHistoryEntry> =
+        getWalletTransactionHistory(listOf(address), limit, offset, ownedAddresses)
 
     /**
      * Returns the total number of transactions for an address.
@@ -2211,7 +2278,7 @@ class RavencoinPublicNode(private val context: Context) {
                 lastError = e
                 Log.w(TAG, "Server ${server.host} failed for $method: ${e.message}")
                 errors.add("${server.host}: ${e.message}")
-                if (isTofuMismatch(e)) {
+                if (isTofuMismatch(server.host, e)) {
                     io.raventag.app.wallet.health.NodeHealthMonitor.reportTofuMismatch(candidate)
                 } else {
                     io.raventag.app.wallet.health.NodeHealthMonitor.reportFailure(
@@ -2244,7 +2311,7 @@ class RavencoinPublicNode(private val context: Context) {
                 lastError = e
                 Log.w(TAG, "Asset metadata server ${server.host} failed for $method: ${e.message}")
                 errors.add("${server.host}: ${e.message}")
-                if (isTofuMismatch(e)) {
+                if (isTofuMismatch(server.host, e)) {
                     io.raventag.app.wallet.health.NodeHealthMonitor.reportTofuMismatch(key)
                 }
             }
@@ -2258,15 +2325,24 @@ class RavencoinPublicNode(private val context: Context) {
      *
      * TofuTrustManager throws a plain Exception with message
      * "Certificate mismatch for <host>: expected <a>, got <b>" on a pinned
-     * cert change. Some TLS stacks wrap this in a CertificateException. We
-     * match both so NodeHealthMonitor can write the 1h quarantine row.
+     * cert change. Some TLS stacks wrap this in a CertificateException or
+     * close the raw socket. We check both recent recorded mismatches and
+     * the exception cause chain so NodeHealthMonitor can write the 1h quarantine row.
      */
-    private fun isTofuMismatch(e: Throwable): Boolean {
-        if (e is java.security.cert.CertificateException) return true
-        val m = e.message ?: return false
-        return m.contains("Certificate mismatch", ignoreCase = true) ||
-            m.contains("fingerprint mismatch", ignoreCase = true) ||
-            m.contains("TOFU", ignoreCase = true)
+    private fun isTofuMismatch(serverHost: String, e: Throwable): Boolean {
+        if (TofuTrustManager.consumeRecentMismatch(serverHost)) return true
+        var current: Throwable? = e
+        while (current != null) {
+            if (current is java.security.cert.CertificateException) return true
+            val m = current.message
+            if (m != null && (
+                m.contains("Certificate mismatch", ignoreCase = true) ||
+                m.contains("fingerprint mismatch", ignoreCase = true) ||
+                m.contains("TOFU", ignoreCase = true)
+            )) return true
+            current = current.cause
+        }
+        return false
     }
 
     /**
@@ -2362,7 +2438,7 @@ class RavencoinPublicNode(private val context: Context) {
                 return result
             } catch (e: Exception) {
                 Log.w(TAG, "Server ${server.host} failed for batch(${requests.size}): ${e.message}")
-                if (isTofuMismatch(e)) {
+                if (isTofuMismatch(server.host, e)) {
                     io.raventag.app.wallet.health.NodeHealthMonitor.reportTofuMismatch(candidate)
                 } else {
                     io.raventag.app.wallet.health.NodeHealthMonitor.reportFailure(
@@ -2390,7 +2466,7 @@ class RavencoinPublicNode(private val context: Context) {
                 Log.w(TAG, "Asset metadata server ${server.host} returned no usable rows for batch(${requests.size})")
             } catch (e: Exception) {
                 Log.w(TAG, "Asset metadata server ${server.host} failed for batch(${requests.size}): ${e.message}")
-                if (isTofuMismatch(e)) {
+                if (isTofuMismatch(server.host, e)) {
                     io.raventag.app.wallet.health.NodeHealthMonitor.reportTofuMismatch(key)
                 }
             }
@@ -2427,7 +2503,7 @@ class RavencoinPublicNode(private val context: Context) {
                 Log.w(TAG, "Server ${server.host} does not provide a complete asset-aware balance batch")
             } catch (e: Exception) {
                 Log.w(TAG, "Server ${server.host} failed for asset-aware balance batch: ${e.message}")
-                if (isTofuMismatch(e)) {
+                if (isTofuMismatch(server.host, e)) {
                     io.raventag.app.wallet.health.NodeHealthMonitor.reportTofuMismatch(key)
                 } else {
                     io.raventag.app.wallet.health.NodeHealthMonitor.reportFailure(

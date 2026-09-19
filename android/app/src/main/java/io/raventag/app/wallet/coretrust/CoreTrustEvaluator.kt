@@ -73,17 +73,9 @@ object CoreTrustEvaluator {
     /** Sanity bounds for any checkpoint height accepted from server.features. */
     private val CHECKPOINT_HEIGHT_RANGE = 4_000_000L..10_000_000L
 
-    /**
-     * Operator grouping for chain corroboration. Multiple endpoints of the
-     * same operator are not independent consensus, so only a server in a
-     * different group can corroborate. The Cipig mirrors share one group;
-     * every other host is its own group (an attacker can mint hostnames for
-     * free, so unknown hostnames never merge into one group).
-     */
-    fun operatorGroup(host: String): String = when {
-        host.endsWith(".cipig.net", ignoreCase = true) -> "cipig"
-        else -> host.lowercase()
-    }
+    /** Returns only a signed registry operator assignment. Unknown hosts are untrusted. */
+    fun operatorGroup(host: String, signedGroupsByHost: Map<String, String>): String? =
+        signedGroupsByHost[host.lowercase()]
 
     /**
      * Decodes Core's integer client version (e.g. 4080000 → [4,8,0,0]) using
@@ -145,6 +137,7 @@ object CoreTrustEvaluator {
         checkpointHeaderHex: String?,
         corroboratedHeadersByHost: Map<String, String>,
         serverHost: String,
+        signedOperatorGroupsByHost: Map<String, String> = emptyMap(),
         nowMs: Long = System.currentTimeMillis(),
         checkpointHeight: Long = DEFAULT_CHECKPOINT_HEIGHT,
         tipEvidence: TipEvidence? = null
@@ -234,10 +227,12 @@ object CoreTrustEvaluator {
         if (checkpointHeaderHex.isNullOrEmpty()) {
             return base.copy(reason = CoreTrustReason.NO_CHAIN_CORROBORATION)
         }
-        val currentGroup = operatorGroup(serverHost)
+        val currentGroup = operatorGroup(serverHost, signedOperatorGroupsByHost)
+            ?: return base.copy(reason = CoreTrustReason.NO_CHAIN_CORROBORATION)
         val checkpointCorroborators = corroboratedHeadersByHost.entries
             .filter { (host, header) ->
-                header == checkpointHeaderHex && operatorGroup(host) != currentGroup
+                val group = operatorGroup(host, signedOperatorGroupsByHost)
+                header == checkpointHeaderHex && group != null && group != currentGroup
             }
             .map { it.key }
             .sorted()
@@ -255,7 +250,8 @@ object CoreTrustEvaluator {
         }
         val liveCorroborators = tip.corroboratedHeaderAtTipByHost.entries
             .filter { (host, header) ->
-                header == tip.tipHeaderHex && operatorGroup(host) != currentGroup
+                val group = operatorGroup(host, signedOperatorGroupsByHost)
+                header == tip.tipHeaderHex && group != null && group != currentGroup
             }
             .map { it.key }
             .sorted()

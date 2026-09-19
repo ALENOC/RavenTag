@@ -91,7 +91,7 @@ class SubscriptionManager(
 
         io.raventag.app.wallet.health.NodeHealthMonitor.init(context)
         var opened: Session? = null
-        val poolSize = io.raventag.app.config.AppConfig.ELECTRUM_SERVERS.size
+        val poolSize = io.raventag.app.wallet.server.ServerRegistryManager.queryServers().size
         for (attempt in 0 until poolSize) {
             if (opened != null) break
             val candidate = io.raventag.app.wallet.health.NodeHealthMonitor.nextHealthyNode()

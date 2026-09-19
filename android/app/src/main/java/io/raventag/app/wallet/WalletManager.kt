@@ -1835,7 +1835,7 @@ class WalletManager(private val context: Context) {
                 val totalInputs      = rvnUtxos.size + extraRvnKeyed.size + assetKeyed.values.sumOf { it.size }
                 val totalAssetOutputs = assetKeyed.size
                 val estimatedBytes   = 10 + 148 * totalInputs + 70 * (2 + totalAssetOutputs) + 34
-                feeSatActual = FeeSafetyPolicy.calculateFee(estimatedBytes, satPerByte)
+                feeSatActual = FeeSafetyPolicy.calculateMaintenanceFee(estimatedBytes, satPerByte)
                 val totalRvnIn = currentRvnKeyed.sumOf { it.utxo.satoshis } +
                     extraRvnKeyed.sumOf { it.utxo.satoshis } +
                     assetKeyed.values.flatten().sumOf { it.assetUtxo.utxo.satoshis }
@@ -1845,7 +1845,7 @@ class WalletManager(private val context: Context) {
                 recipientAmountSat = if (explicitMax) {
                     totalRvnIn - feeSatActual - dustForAssets
                 } else {
-                    FeeSafetyPolicy.requireSafeNormalSendFee(feeSatActual, amountSat)
+                    require(amountSat > 0L) { "Invalid send amount" }
                     amountSat
                 }
                 require(recipientAmountSat > 546L) { "Insufficient balance after safe fee and asset dust" }
@@ -2130,7 +2130,7 @@ class WalletManager(private val context: Context) {
             val primaryAssetChangeOutputs = if (assetChangeRaw > 0) 1 else 0
             val totalAssetOutputs = 1 + primaryAssetChangeOutputs + otherKeyed.size + secondaryKeyed.size
             val totalInputs = primaryKeyed.size + otherKeyed.values.sumOf { it.size } + secondaryKeyed.values.sumOf { it.size } + rvnKeyed.size
-            val feeSat = FeeSafetyPolicy.calculateFee((10L + 148L * totalInputs + 70L * totalAssetOutputs + 34L), maxOf(satPerByte, 200L))
+            val feeSat = FeeSafetyPolicy.calculateMaintenanceFee((10L + 148L * totalInputs + 70L * totalAssetOutputs + 34L), maxOf(satPerByte, 200L))
             val dustEstimate = 600L * totalAssetOutputs
 
             val totalRvnIn = rvnKeyed.sumOf { it.utxo.satoshis } +
@@ -2270,7 +2270,7 @@ class WalletManager(private val context: Context) {
             assetName.contains('/') -> 5
             else -> 4
         }
-        val feeSat = FeeSafetyPolicy.calculateFee((10 + 148 * totalInputs + 70 * (outputCountForIssuance + totalAssetSweepOutputs) + 34).toLong(), satPerByte)
+        val feeSat = FeeSafetyPolicy.calculateMaintenanceFee((10 + 148 * totalInputs + 70 * (outputCountForIssuance + totalAssetSweepOutputs) + 34).toLong(), satPerByte)
 
         val qtyRaw = if (assetName.contains('#')) {
             RavencoinTxBuilder.ASSET_UNIT_RAW
@@ -2400,7 +2400,7 @@ class WalletManager(private val context: Context) {
         val totalAssetSweepOutputs = otherAssetUtxos.size
         val totalInputs = rvnUtxos.size + ownerAssetUtxos.size + otherAssetUtxos.values.sumOf { it.size }
         val outputCount = 4 + totalAssetSweepOutputs // burn + change + owner + reissue + sweep
-        val feeSat = FeeSafetyPolicy.calculateFee((10L + 148L * totalInputs + 70L * outputCount + 34L), maxOf(satPerByte, 200L))
+        val feeSat = FeeSafetyPolicy.calculateMaintenanceFee((10L + 148L * totalInputs + 70L * outputCount + 34L), maxOf(satPerByte, 200L))
 
         val addQtyRaw = (addQty * RavencoinTxBuilder.ASSET_UNIT_RAW.toDouble()).toLong()
 

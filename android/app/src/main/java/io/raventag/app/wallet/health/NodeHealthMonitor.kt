@@ -1,7 +1,7 @@
 package io.raventag.app.wallet.health
 
 import android.content.Context
-import io.raventag.app.config.AppConfig
+import io.raventag.app.wallet.server.ServerRegistryManager
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -30,7 +30,7 @@ enum class ConnectionHealth { GREEN, YELLOW, RED }
  * [reportFailure] / [reportTofuMismatch] after the attempt.
  *
  * Selection policy:
- * - the first entry in [AppConfig.ELECTRUM_SERVERS] is the authoritative primary;
+ * - the first runtime registry entry is the authoritative primary;
  * - the primary is always tried before a persisted `last_good_host` when healthy;
  * - after a transient primary failure, fallbacks are allowed for a short window;
  * - after that window expires, the primary is automatically tried again;
@@ -93,6 +93,7 @@ object NodeHealthMonitor {
             if (initialized) return
             appContext = context.applicationContext
             QuarantineDao.init(context)
+            ServerRegistryManager.init(context)
             initialized = true
         }
     }
@@ -100,7 +101,7 @@ object NodeHealthMonitor {
     /**
      * Returns the next host in "host:port" form.
      *
-     * The configured primary (the first entry in [AppConfig.ELECTRUM_SERVERS])
+     * The configured primary (the first runtime registry entry)
      * always has priority over a previously persisted `last_good_host`. Fallbacks
      * are considered only when the primary is currently quarantined or has failed
      * within [PRIMARY_RETRY_COOLDOWN_MS].
@@ -111,14 +112,17 @@ object NodeHealthMonitor {
     fun nextHealthyNode(): String? {
         val now = System.currentTimeMillis()
         val quarantinedHosts = activeQuarantineHosts(now)
-        val configured = AppConfig.ELECTRUM_SERVERS
+        val configured = ServerRegistryManager.queryServers()
+        val configuredKeys = configured.mapTo(mutableSetOf()) { (host, port) -> "$host:$port" }
         if (configured.isEmpty()) {
             recomputeState()
             return null
         }
 
-        val (primaryHost, primaryPort) = configured.first()
-        val primary = "$primaryHost:$primaryPort"
+        val primaryConfig = configured.firstOrNull { (host, _) ->
+            host.equals("electrumx.raventag.com", ignoreCase = true)
+        } ?: configured.first()
+        val primary = "${primaryConfig.first}:${primaryConfig.second}"
         val primaryFailedAt = lastFailureAt[primary]
         val primaryCoolingDown = primaryFailedAt != null &&
             (now - primaryFailedAt) <= PRIMARY_RETRY_COOLDOWN_MS
@@ -133,7 +137,9 @@ object NodeHealthMonitor {
         // The primary is temporarily unavailable. Prefer the previously working
         // fallback to avoid needless rotation during the primary retry window.
         val preferred = getPreferredHost()
-        if (preferred != null && preferred != primary && preferred !in quarantinedHosts) {
+        if (preferred != null && preferred in configuredKeys &&
+            preferred != primary && preferred !in quarantinedHosts
+        ) {
             val failedAt = lastFailureAt[preferred]
             if (failedAt == null || (now - failedAt) > TRANSIENT_COOLDOWN_MS) {
                 recomputeState()
@@ -143,7 +149,9 @@ object NodeHealthMonitor {
 
         // Standard fallback rotation. The primary is intentionally excluded here:
         // it will become eligible again only when its retry cooldown expires.
-        val candidate = configured.drop(1).firstOrNull { (host, port) ->
+        val candidate = configured.filterNot { (host, port) ->
+            "$host:$port" == primary
+        }.firstOrNull { (host, port) ->
             val key = "$host:$port"
             if (key in quarantinedHosts) return@firstOrNull false
             val failedAt = lastFailureAt[key]
@@ -182,21 +190,42 @@ object NodeHealthMonitor {
         recomputeState()
     }
 
+    /** Clears the quarantine and transient failure state after an approved pin rotation. */
+    fun clearTofuMismatch(hostname: String) {
+        ServerRegistryManager.queryServers()
+            .filter { (host, _) -> host.equals(hostname, ignoreCase = true) }
+            .forEach { (host, port) ->
+                val key = "$host:$port"
+                QuarantineDao.clear(key)
+                lastFailureAt.remove(key)
+                lastError.remove(key)
+            }
+        recomputeState()
+    }
+
     /**
      * Host currently known to be connected. Before the first successful RPC,
      * report the configured primary rather than a stale persisted fallback.
      */
-    fun currentNode(): String? =
-        lastSuccessAt.maxByOrNull { it.value }?.key
-            ?: AppConfig.ELECTRUM_SERVERS.firstOrNull()?.let { (host, port) -> "$host:$port" }
-            ?: getPreferredHost()
+    fun currentNode(): String? {
+        val configured = ServerRegistryManager.queryServers()
+        val keys = configured.mapTo(mutableSetOf()) { (host, port) -> "$host:$port" }
+        val primary = configured.firstOrNull { (host, _) ->
+            host.equals("electrumx.raventag.com", ignoreCase = true)
+        } ?: configured.firstOrNull()
+        return lastSuccessAt.entries
+            .filter { it.key in keys }
+            .maxByOrNull { it.value }?.key
+            ?: primary?.let { (host, port) -> "$host:$port" }
+            ?: getPreferredHost()?.takeIf { it in keys }
+    }
 
     fun diagnostics(): List<NodeDiagnostic> {
         val now = System.currentTimeMillis()
         val active = QuarantineDao.all()
             .filter { it.quarantinedUntil > now }
             .associateBy { it.host }
-        return AppConfig.ELECTRUM_SERVERS.map { (host, port) ->
+        return ServerRegistryManager.queryServers().map { (host, port) ->
             val key = "$host:$port"
             NodeDiagnostic(
                 host = key,
@@ -240,8 +269,10 @@ object NodeHealthMonitor {
 
     private fun recomputeState() {
         val now = System.currentTimeMillis()
-        val total = AppConfig.ELECTRUM_SERVERS.size
-        val quarantined = activeQuarantineHosts(now).size
+        val total = ServerRegistryManager.queryServers().size
+        val configuredKeys = ServerRegistryManager.queryServers()
+            .mapTo(mutableSetOf()) { (host, port) -> "$host:$port" }
+        val quarantined = activeQuarantineHosts(now).count { it in configuredKeys }
         val hasAnyData = lastSuccessAt.isNotEmpty() || lastFailureAt.isNotEmpty()
         // GREEN takes precedence over YELLOW: once any host answers successfully in
         // the last 60s we are connected, regardless of transient failures on other hosts.

@@ -1,6 +1,8 @@
 package io.raventag.app.ui.screens
 
 import androidx.compose.animation.core.*
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -21,6 +23,7 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
@@ -28,6 +31,16 @@ import androidx.compose.ui.unit.sp
 import io.raventag.app.BuildConfig
 import io.raventag.app.MainViewModel
 import io.raventag.app.ui.theme.*
+import io.raventag.app.security.TofuFingerprint
+import io.raventag.app.security.TofuMismatch
+import io.raventag.app.security.TofuFingerprintDao
+import io.raventag.app.wallet.TofuTrustManager
+import io.raventag.app.wallet.server.ServerRegistry
+import io.raventag.app.wallet.server.ServerRegistryManager
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Settings screen for the RavenTag app.
@@ -118,6 +131,47 @@ fun SettingsScreen(
 
     var adminKeyInput by remember(currentAdminKey) { mutableStateOf(currentAdminKey) }
     var adminKeySaved by remember { mutableStateOf(false) }
+
+    val context = LocalContext.current
+    val settingsScope = rememberCoroutineScope()
+    var pinnedCertificates by remember { mutableStateOf<List<TofuFingerprint>>(emptyList()) }
+    var certificateMismatches by remember { mutableStateOf<List<TofuMismatch>>(emptyList()) }
+    var activeServers by remember { mutableStateOf<List<ServerRegistry.Server>>(emptyList()) }
+    var customServers by remember { mutableStateOf<List<ServerRegistry.Server>>(emptyList()) }
+    var serversExpanded by remember { mutableStateOf(false) }
+    var pinsExpanded by remember { mutableStateOf(false) }
+    var showAddServerDialog by remember { mutableStateOf(false) }
+    var rotationCandidate by remember { mutableStateOf<TofuMismatch?>(null) }
+    var allowUntrustedRotation by remember { mutableStateOf(false) }
+    var rotationError by remember { mutableStateOf<String?>(null) }
+    var customHost by remember { mutableStateOf("") }
+    var customPort by remember { mutableStateOf("50002") }
+    var customServerError by remember { mutableStateOf(false) }
+    var securityRefreshToken by remember { mutableIntStateOf(0) }
+
+    LaunchedEffect(securityRefreshToken) {
+        while (true) {
+            val pins = withContext(Dispatchers.IO) {
+                TofuFingerprintDao.init(context)
+                TofuFingerprintDao.getAllPins()
+            }
+            val mismatches = withContext(Dispatchers.IO) {
+                TofuFingerprintDao.getAllMismatches()
+            }
+            val active = withContext(Dispatchers.IO) {
+                ServerRegistryManager.init(context)
+                ServerRegistryManager.servers().filter { it.source != ServerRegistry.Source.USER }
+            }
+            val custom = withContext(Dispatchers.IO) {
+                ServerRegistryManager.userConfiguredServers()
+            }
+            pinnedCertificates = pins
+            certificateMismatches = mismatches
+            activeServers = active
+            customServers = custom
+            delay(3_000L)
+        }
+    }
 
     Column(
         modifier = modifier
@@ -247,6 +301,381 @@ fun SettingsScreen(
             }
             Spacer(modifier = Modifier.height(24.dp))
         }
+
+        SectionLabel(s.settingsTlsPinsTitle)
+        Spacer(modifier = Modifier.height(10.dp))
+        SettingsCard {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { pinsExpanded = !pinsExpanded },
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        "${pinnedCertificates.size} pin memorizzati",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color.White
+                    )
+                    if (certificateMismatches.isNotEmpty()) {
+                        Text(
+                            "${certificateMismatches.size} cambio certificato rilevato!",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = NotAuthenticRed,
+                            fontWeight = FontWeight.Bold
+                        )
+                    } else {
+                        Text(
+                            if (pinsExpanded) "Tocca per richiudere" else "Tocca per visualizzare i pin TLS",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = RavenMuted
+                        )
+                    }
+                }
+                IconButton(onClick = { pinsExpanded = !pinsExpanded }) {
+                    Icon(
+                        if (pinsExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                        contentDescription = null,
+                        tint = RavenOrange
+                    )
+                }
+            }
+
+            AnimatedVisibility(visible = pinsExpanded) {
+                Column(modifier = Modifier.padding(top = 12.dp)) {
+                    if (pinnedCertificates.isEmpty()) {
+                        Text(s.settingsTlsPinsEmpty, style = MaterialTheme.typography.bodySmall, color = RavenMuted)
+                    }
+                    pinnedCertificates.forEachIndexed { index, pin ->
+                        val mismatch = certificateMismatches.firstOrNull { it.host == pin.host }
+                        if (index > 0) HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp), color = RavenBorder)
+                        Text(pin.host, style = MaterialTheme.typography.bodyMedium, color = Color.White, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            pin.fingerprint,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = RavenMuted,
+                            fontFamily = FontFamily.Monospace,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                        if (mismatch != null) {
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Text(
+                                s.settingsTlsPinChanged,
+                                color = NotAuthenticRed,
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(s.settingsTlsExpected, color = RavenMuted, style = MaterialTheme.typography.labelSmall)
+                            Text(mismatch.expectedFingerprint, color = Color.White, style = MaterialTheme.typography.labelSmall, fontFamily = FontFamily.Monospace)
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(s.settingsTlsObserved, color = RavenMuted, style = MaterialTheme.typography.labelSmall)
+                            Text(mismatch.observedFingerprint, color = Color.White, style = MaterialTheme.typography.labelSmall, fontFamily = FontFamily.Monospace)
+                            Text(
+                                "${s.settingsTlsDetectedAt}: ${java.text.DateFormat.getDateTimeInstance().format(java.util.Date(mismatch.detectedAt))}",
+                                color = RavenMuted,
+                                style = MaterialTheme.typography.labelSmall,
+                                modifier = Modifier.padding(top = 6.dp)
+                            )
+                            Text(
+                                if (mismatch.systemTrusted) s.settingsTlsSystemTrusted else s.settingsTlsSystemUntrusted,
+                                color = if (mismatch.systemTrusted) AuthenticGreen else NotAuthenticRed,
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.padding(top = 8.dp)
+                            )
+                            OutlinedButton(
+                                onClick = {
+                                    rotationError = null
+                                    allowUntrustedRotation = false
+                                    rotationCandidate = mismatch
+                                },
+                                modifier = Modifier.padding(top = 10.dp)
+                            ) { Text(s.settingsTlsRotate) }
+                        }
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
+        SectionLabel(s.settingsElectrumServersTitle)
+        Spacer(modifier = Modifier.height(10.dp))
+        SettingsCard {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { serversExpanded = !serversExpanded },
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        "${activeServers.size + customServers.size} server configurati",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color.White
+                    )
+                    Text(
+                        if (serversExpanded) "Tocca per richiudere" else "Tocca per visualizzare e gestire i server",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = RavenMuted
+                    )
+                }
+                IconButton(onClick = { serversExpanded = !serversExpanded }) {
+                    Icon(
+                        if (serversExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                        contentDescription = null,
+                        tint = RavenOrange
+                    )
+                }
+            }
+
+            AnimatedVisibility(visible = serversExpanded) {
+                Column(modifier = Modifier.padding(top = 12.dp)) {
+                    Text(
+                        s.settingsElectrumServersDesc,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = RavenOrange
+                    )
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    Text(
+                        s.settingsElectrumActiveServers,
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    activeServers.forEachIndexed { index, server ->
+                        if (index > 0) HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = RavenBorder)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    "${server.host}:${server.port}",
+                                    color = Color.White,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                                Text(
+                                    if (server.canCorroborate) "${server.operatorGroup} · ${s.settingsElectrumCorroborator}"
+                                    else s.settingsElectrumQueryOnly,
+                                    color = if (server.canCorroborate) AuthenticGreen else RavenMuted,
+                                    style = MaterialTheme.typography.labelSmall
+                                )
+                            }
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = RavenBg,
+                                border = BorderStroke(1.dp, RavenBorder)
+                            ) {
+                                Text(
+                                    server.source.name,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = RavenOrange,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            s.settingsElectrumCustomServers,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                        OutlinedButton(
+                            onClick = {
+                                customHost = ""
+                                customPort = "50002"
+                                customServerError = false
+                                showAddServerDialog = true
+                            },
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                            border = BorderStroke(1.dp, RavenOrange),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = RavenOrange)
+                        ) {
+                            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(s.settingsElectrumAdd, style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
+                    if (customServers.isEmpty()) {
+                        Text(
+                            s.settingsElectrumNoCustom,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = RavenMuted,
+                            modifier = Modifier.padding(vertical = 4.dp)
+                        )
+                    } else {
+                        customServers.forEachIndexed { index, server ->
+                            if (index > 0) HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = RavenBorder)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        "${server.host}:${server.port}",
+                                        color = Color.White,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontFamily = FontFamily.Monospace
+                                    )
+                                    Text(s.settingsElectrumQueryOnly, color = RavenMuted, style = MaterialTheme.typography.labelSmall)
+                                }
+                                TextButton(onClick = {
+                                    settingsScope.launch {
+                                        withContext(Dispatchers.IO) {
+                                            ServerRegistryManager.removeUserServer(context, server.host, server.port)
+                                        }
+                                        securityRefreshToken++
+                                    }
+                                }) { Text(s.settingsElectrumRemove, color = NotAuthenticRed) }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (showAddServerDialog) {
+            AlertDialog(
+                onDismissRequest = { showAddServerDialog = false },
+                icon = { Icon(Icons.Default.Dns, contentDescription = null, tint = RavenOrange) },
+                title = { Text(s.settingsElectrumAddTitle, color = Color.White) },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text(
+                            s.settingsElectrumServersDesc,
+                            color = RavenMuted,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        OutlinedTextField(
+                            value = customHost,
+                            onValueChange = { customHost = it; customServerError = false },
+                            label = { Text(s.settingsElectrumHost) },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        OutlinedTextField(
+                            value = customPort,
+                            onValueChange = { customPort = it.filter(Char::isDigit); customServerError = false },
+                            label = { Text(s.settingsElectrumPort) },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        if (customServerError) {
+                            Text(
+                                s.settingsElectrumInvalid,
+                                color = NotAuthenticRed,
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            val port = customPort.toIntOrNull()
+                            val host = customHost
+                            if (port == null) {
+                                customServerError = true
+                            } else {
+                                settingsScope.launch {
+                                    val added = withContext(Dispatchers.IO) {
+                                        ServerRegistryManager.addUserServer(context, host, port)
+                                    }
+                                    if (added) {
+                                        showAddServerDialog = false
+                                        securityRefreshToken++
+                                    } else {
+                                        customServerError = true
+                                    }
+                                }
+                            }
+                        }
+                    ) { Text(s.settingsElectrumAdd) }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showAddServerDialog = false }) { Text(s.walletCancelBtn) }
+                },
+                containerColor = RavenCard
+            )
+        }
+
+        if (rotationCandidate != null) {
+            val mismatch = requireNotNull(rotationCandidate)
+            AlertDialog(
+                onDismissRequest = { rotationCandidate = null },
+                icon = { Icon(Icons.Default.Security, contentDescription = null, tint = RavenOrange) },
+                title = { Text(s.settingsTlsRotateTitle, color = Color.White) },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(s.settingsTlsRotateBody, color = RavenMuted, style = MaterialTheme.typography.bodySmall)
+                        Text(s.settingsTlsExpected, color = RavenMuted, style = MaterialTheme.typography.labelSmall)
+                        Text(mismatch.expectedFingerprint, color = Color.White, style = MaterialTheme.typography.labelSmall, fontFamily = FontFamily.Monospace)
+                        Text(s.settingsTlsObserved, color = RavenMuted, style = MaterialTheme.typography.labelSmall)
+                        Text(mismatch.observedFingerprint, color = Color.White, style = MaterialTheme.typography.labelSmall, fontFamily = FontFamily.Monospace)
+                        Text(
+                            if (mismatch.systemTrusted) s.settingsTlsSystemTrusted else s.settingsTlsSystemUntrusted,
+                            color = if (mismatch.systemTrusted) AuthenticGreen else NotAuthenticRed,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        if (!mismatch.systemTrusted) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Checkbox(checked = allowUntrustedRotation, onCheckedChange = { allowUntrustedRotation = it })
+                                Text(s.settingsTlsAllowUntrusted, color = Color.White, style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                        rotationError?.let { Text(it, color = NotAuthenticRed, style = MaterialTheme.typography.bodySmall) }
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        enabled = mismatch.systemTrusted || allowUntrustedRotation,
+                        onClick = {
+                            settingsScope.launch {
+                                try {
+                                    withContext(Dispatchers.IO) {
+                                        TofuTrustManager(context, mismatch.host).rotatePin(
+                                            host = mismatch.host,
+                                            expectedFingerprint = mismatch.expectedFingerprint,
+                                            observedFingerprint = mismatch.observedFingerprint,
+                                            explicitConfirmation = true,
+                                            allowUntrusted = allowUntrustedRotation
+                                        )
+                                        io.raventag.app.wallet.health.NodeHealthMonitor.clearTofuMismatch(mismatch.host)
+                                    }
+                                    rotationCandidate = null
+                                    securityRefreshToken++
+                                } catch (e: Exception) {
+                                    rotationError = e.message ?: "Certificate rotation failed"
+                                }
+                            }
+                        }
+                    ) { Text(s.settingsTlsRotate) }
+                },
+                dismissButton = {
+                    TextButton(onClick = { rotationCandidate = null }) { Text(s.walletCancelBtn) }
+                },
+                containerColor = RavenCard
+            )
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
 
         // Language picker: renders languages in a 3-column grid of tappable chips.
         // Immediately calls onLangChange so the UI hot-swaps strings without needing a restart.
