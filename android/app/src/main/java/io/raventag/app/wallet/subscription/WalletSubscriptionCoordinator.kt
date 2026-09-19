@@ -99,29 +99,31 @@ object WalletSubscriptionCoordinator {
 
             Log.i(TAG, "Starting subscription for ${addresses.size} addresses (indices $startIdx..$currentIndex)")
 
+            var currentAddresses = addresses
             while (isActive) {
                 try {
-                    sm.start(addresses)
-                    Log.i(TAG, "Subscription active, listening for events...")
+                    sm.start(currentAddresses)
+                    Log.i(TAG, "Subscription active, listening for events on ${currentAddresses.size} addresses...")
                     sm.eventsFlow().collect { ev ->
                         when (ev) {
                             is ScripthashEvent.StatusChanged -> {
                                 Log.i(TAG, "Received StatusChanged for sh=${ev.scripthash} status=${ev.newStatus}")
                                 handleStatusChanged(context, ev.scripthash, ev.newStatus)
                             }
-                            is ScripthashEvent.ConnectionLost, is ScripthashEvent.PingTimeout -> {
-                                Log.w(TAG, "Connection lost or ping timeout, reconnecting in 3s...")
-                                delay(3_000L)
-                                val currentIdx = wm.getCurrentAddressIndex()
-                                val recentAddrs = wm.getAddressBatch(0, maxOf(0, currentIdx - 4)..currentIdx).values.toList()
-                                sm.start(recentAddrs)
+                            is ScripthashEvent.ConnectionLost, is ScripthashEvent.PingTimeout, is ScripthashEvent.AllNodesDown -> {
+                                Log.w(TAG, "Connection lost or timeout: ${ev.javaClass.simpleName}, breaking collect to reconnect...")
+                                sm.stop()
+                                throw java.io.IOException("Subscription disconnected: ${ev.javaClass.simpleName}")
                             }
-                            else -> {}
                         }
                     }
                 } catch (e: Exception) {
-                    Log.w(TAG, "Subscription loop error", e)
-                    delay(5_000L)
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    Log.w(TAG, "Subscription loop error, reconnecting in 3s: ${e.message}")
+                    delay(3_000L)
+                    val currentIdx = wm.getCurrentAddressIndex()
+                    val startIdx = maxOf(0, currentIdx - 4)
+                    currentAddresses = wm.getAddressBatch(0, startIdx..currentIdx).values.toList()
                 }
             }
         }
@@ -185,6 +187,7 @@ object WalletSubscriptionCoordinator {
                 val rvnDeltaSat = if (lastRvnSat >= 0L) currentRvnSat - lastRvnSat else 0L
 
                 if (newestIncoming != null) {
+                    val isFreshOrUnconfirmed = lastNotifiedTxid != null || newestIncoming.confirmations < 6
                     val rvnAmount = if (newestIncoming.amountSat > 0L) {
                         newestIncoming.amountSat / 1e8
                     } else if (rvnDeltaSat > 0L) {
@@ -195,7 +198,7 @@ object WalletSubscriptionCoordinator {
                     val assetName = newestIncoming.assetName
                     val assetAmount = newestIncoming.assetAmount / 1e8
 
-                    if (notificationsEnabled) {
+                    if (notificationsEnabled && isFreshOrUnconfirmed) {
                         if (assetName != null) {
                             IncomingTxNotificationHelper.showIncomingAsset(
                                 context = context,

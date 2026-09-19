@@ -50,8 +50,8 @@ class SubscriptionManager(
     @Suppress("UNUSED_PARAMETER")
     private val servers: List<Pair<String, Int>> = DEFAULT_SERVERS,
     private val connectTimeoutMs: Int = 10_000,
-    private val readTimeoutMs: Int = 20_000,
-    private val pingIntervalMs: Long = 60_000L
+    private val readTimeoutMs: Int = 0,
+    private val pingIntervalMs: Long = 30_000L
 ) {
     private val events = MutableSharedFlow<ScripthashEvent>(extraBufferCapacity = 64)
     private val gson = Gson()
@@ -156,8 +156,13 @@ class SubscriptionManager(
             val sh = node.addressToScripthash(addr)
             if (subscribedScripthashes.add(sh)) {
                 try {
-                    withTimeout(15_000L) {
+                    val result = withTimeout(15_000L) {
                         sendAndAwait(currentSession, "blockchain.scripthash.subscribe", listOf(sh))
+                    }
+                    val status = if (result != null && !result.isJsonNull) result.asString else null
+                    if (status != null) {
+                        Log.i(TAG, "Initial subscribe status for $sh ($addr): $status")
+                        events.emit(ScripthashEvent.StatusChanged(sh, status))
                     }
                 } catch (_: Exception) {
                     Log.w(TAG, "subscribe failed for $sh, readLoop may deliver status anyway")
@@ -236,6 +241,14 @@ class SubscriptionManager(
                 )
             }
             events.emit(ScripthashEvent.ConnectionLost)
+        } finally {
+            try { s.socket.close() } catch (_: Exception) {}
+            synchronized(lifecycleLock) {
+                if (session == s) {
+                    session = null
+                    subscribedScripthashes.clear()
+                }
+            }
         }
     }
 

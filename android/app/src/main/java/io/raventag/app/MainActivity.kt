@@ -2299,6 +2299,48 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 txHistoryLoading = false
             }
+
+            // Check for new unnotified incoming transaction to guarantee notifications pop up
+            // even if the push socket was reconnecting or missed the event.
+            val newestIncoming = deduped.firstOrNull { it.isIncoming }
+            if (newestIncoming != null) {
+                try {
+                    val app = getApplication<android.app.Application>()
+                    val prefs = app.getSharedPreferences("wallet_polling", android.content.Context.MODE_PRIVATE)
+                    val appPrefs = app.getSharedPreferences("raventag_app", android.content.Context.MODE_PRIVATE)
+                    val notificationsEnabled = appPrefs.getBoolean("notifications_enabled", true)
+                    val lastNotifiedTxid = prefs.getString("last_notified_txid", null)
+
+                    if (newestIncoming.txid != lastNotifiedTxid) {
+                        val isFreshOrUnconfirmed = lastNotifiedTxid != null || newestIncoming.confirmations < 6
+                        if (notificationsEnabled && isFreshOrUnconfirmed) {
+                            val rvnAmount = newestIncoming.amountSat / 1e8
+                            val assetName = newestIncoming.assetName
+                            val assetAmount = newestIncoming.assetAmount / 1e8
+                            if (assetName != null) {
+                                io.raventag.app.worker.IncomingTxNotificationHelper.showIncomingAsset(
+                                    context = app,
+                                    txid = newestIncoming.txid,
+                                    assetName = assetName,
+                                    assetAmount = assetAmount,
+                                    confirmations = newestIncoming.confirmations
+                                )
+                            } else if (rvnAmount > 0.0) {
+                                io.raventag.app.worker.IncomingTxNotificationHelper.showIncoming(
+                                    context = app,
+                                    txid = newestIncoming.txid,
+                                    rvnAmount = rvnAmount,
+                                    confirmations = newestIncoming.confirmations
+                                )
+                            }
+                        }
+                        prefs.edit().putString("last_notified_txid", newestIncoming.txid).apply()
+                    }
+                } catch (e: Exception) {
+                    Log.w("MainActivity", "Failed to check/show incoming notification: ${e.message}")
+                }
+            }
+
             // Persist tx history rows so the next cold start can render the list
             // immediately from cache instead of waiting for the network.
             if (deduped.isNotEmpty()) {
